@@ -128,6 +128,7 @@ function MainTabs() {
         component={CalendarScreen}
         options={{
           title: 'Calendar',
+          headerShown: false,
           tabBarIcon: ({ color }) => (
             <MaterialCommunityIcons
               name="calendar-month"
