@@ -1,20 +1,23 @@
+import 'react-native-url-polyfill/auto';
 import { StatusBar } from 'expo-status-bar';
-import { StyleSheet, Text, View } from 'react-native';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
+
+import AppNavigator from './src/navigation/AppNavigator';
+import { AuthProvider } from './src/lib/AuthContext';
+import { TaskProvider } from './src/lib/TaskContext';
+import { FocusProvider } from './src/lib/FocusContext';
 
 export default function App() {
   return (
-    <View style={styles.container}>
-      <Text>Open up App.tsx to start working on your app!</Text>
-      <StatusBar style="auto" />
-    </View>
+    <SafeAreaProvider>
+      <AuthProvider>
+        <TaskProvider>
+          <FocusProvider>
+            <StatusBar style="dark" />
+            <AppNavigator />
+          </FocusProvider>
+        </TaskProvider>
+      </AuthProvider>
+    </SafeAreaProvider>
   );
 }
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#fff',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-});
