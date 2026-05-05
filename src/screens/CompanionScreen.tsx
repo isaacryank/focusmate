@@ -164,7 +164,7 @@ export default function CompanionScreen() {
   };
 
   const handleMoodPress = async (mood: MiloMood) => {
-    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Selection);
+    await Haptics.selectionAsync();
     setManualMood(mood);
     setCustomMessage(getMiloEncouragement(mood));
   };
