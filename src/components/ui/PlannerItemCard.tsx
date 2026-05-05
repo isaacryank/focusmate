@@ -4,6 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 
 import { theme } from '../../theme';
 import { Task } from '../../types/task';
+import { getTaskUrgency } from '../../lib/taskUrgency';
 
 type PlannerItemCardProps = {
   task: Task;
@@ -12,19 +13,33 @@ type PlannerItemCardProps = {
   compact?: boolean;
 };
 
-function getAccent(task: Task) {
+function getTypeAccent(task: Task) {
   if (task.plannerType === 'meeting') return theme.colors.purple;
   if (task.plannerType === 'date') return theme.colors.yellow;
+  return theme.colors.primary;
+}
+
+function getStatusAccent(task: Task) {
+  const urgency = getTaskUrgency(task);
+
+  if (urgency.level === 'overdue' || urgency.level === 'urgent') {
+    return theme.colors.danger;
+  }
+
+  if (urgency.level === 'high') {
+    return theme.colors.yellow;
+  }
+
+  if (urgency.level === 'medium') return theme.colors.blue;
+  if (urgency.level === 'done') return theme.colors.success;
   if (task.priority === 'high') return theme.colors.yellow;
   if (task.priority === 'low') return theme.colors.blue;
   return theme.colors.primary;
 }
 
-function getLabel(task: Task) {
-  if (task.status === 'completed') return 'Completed';
+function getTypeLabel(task: Task) {
   if (task.plannerType === 'meeting') return 'Meeting';
   if (task.plannerType === 'date') return 'Date';
-  if (task.priority === 'high') return 'Important';
   return 'Task';
 }
 
@@ -40,7 +55,9 @@ export default function PlannerItemCard({
   onToggle,
   compact = false,
 }: PlannerItemCardProps) {
-  const accent = getAccent(task);
+  const typeAccent = getTypeAccent(task);
+  const statusAccent = getStatusAccent(task);
+  const urgency = getTaskUrgency(task);
   const subtasks = task.subtasks || [];
   const completedSubtasks = subtasks.filter((item) => item.completed).length;
   const dueText = [task.dueDate, task.dueTime].filter(Boolean).join(' • ');
@@ -53,15 +70,15 @@ export default function PlannerItemCard({
       accessibilityRole="button"
       accessibilityLabel={`Open ${task.title}`}
     >
-      <View style={[styles.accentBar, { backgroundColor: accent }]} />
+      <View style={[styles.accentBar, { backgroundColor: statusAccent }]} />
 
       <TouchableOpacity
         activeOpacity={onToggle ? 0.7 : 1}
         style={[
           styles.checkCircle,
           task.status === 'completed' && {
-            backgroundColor: accent,
-            borderColor: accent,
+            backgroundColor: statusAccent,
+            borderColor: statusAccent,
           },
         ]}
         onPress={onToggle}
@@ -82,10 +99,24 @@ export default function PlannerItemCard({
         </Text>
 
         <View style={styles.metaRow}>
-          <View style={[styles.typePill, { backgroundColor: `${accent}20` }]}>
-            <Ionicons name={getIcon(task) as any} size={12} color={accent} />
-            <Text style={[styles.typeText, { color: accent }]}>
-              {getLabel(task)}
+          <View style={[styles.typePill, { backgroundColor: `${typeAccent}20` }]}>
+            <Ionicons name={getIcon(task) as any} size={12} color={typeAccent} />
+            <Text style={[styles.typeText, { color: typeAccent }]}>
+              {getTypeLabel(task)}
+            </Text>
+          </View>
+
+          <View
+            style={[
+              styles.urgencyPill,
+              {
+                backgroundColor: `${statusAccent}18`,
+                borderColor: `${statusAccent}40`,
+              },
+            ]}
+          >
+            <Text style={[styles.urgencyText, { color: statusAccent }]}>
+              {urgency.label}
             </Text>
           </View>
 
@@ -179,6 +210,17 @@ const styles = StyleSheet.create({
   },
   typeText: {
     marginLeft: 4,
+    fontSize: 10,
+    fontWeight: '900',
+  },
+  urgencyPill: {
+    borderWidth: 1,
+    borderRadius: theme.radius.pill,
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    marginRight: 7,
+  },
+  urgencyText: {
     fontSize: 10,
     fontWeight: '900',
   },

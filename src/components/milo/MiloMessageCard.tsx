@@ -17,6 +17,7 @@ type MiloMessageCardProps = {
   secondaryActionLabel?: string;
   onSecondaryActionPress?: () => void;
   compact?: boolean;
+  miloSize?: number;
 };
 
 export default function MiloMessageCard({
@@ -29,6 +30,7 @@ export default function MiloMessageCard({
   secondaryActionLabel,
   onSecondaryActionPress,
   compact = false,
+  miloSize,
 }: MiloMessageCardProps) {
   return (
     <LinearGradient
@@ -80,7 +82,11 @@ export default function MiloMessageCard({
         </View>
       </View>
 
-      <MiloMoodImage mood={mood} size={compact ? 118 : 150} style={styles.milo} />
+      <MiloMoodImage
+        mood={mood}
+        size={miloSize || (compact ? 118 : 150)}
+        style={styles.milo}
+      />
     </LinearGradient>
   );
 }

@@ -91,7 +91,7 @@ export default function LoginScreen() {
         <View style={styles.formCard}>
           <Text style={styles.welcomeTitle}>Welcome back</Text>
           <Text style={styles.welcomeText}>
-            Let’s organize your day before anything gets missed.
+            Let's organize your day.
           </Text>
 
           <View style={styles.inputGroup}>
@@ -137,7 +137,7 @@ export default function LoginScreen() {
         </View>
 
         <Text style={styles.demoNote}>
-          Demo login is active for now. Supabase authentication will be added later.
+          Demo sign-in is ready.
         </Text>
       </ScrollView>
     </KeyboardAvoidingView>

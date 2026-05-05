@@ -159,7 +159,7 @@ export default function SettingsScreen() {
   const handleClearPlanner = () => {
     Alert.alert(
       'Clear all planner items?',
-      'This will remove all tasks, dates, meetings, and reminder IDs from this prototype.',
+      'This will remove all planner items from this device.',
       [
         {
           text: 'Cancel',
@@ -185,7 +185,7 @@ export default function SettingsScreen() {
   const handleClearFocus = () => {
     Alert.alert(
       'Clear focus history?',
-      'This will reset the local focus analytics for your prototype.',
+      'This will reset your focus history.',
       [
         {
           text: 'Cancel',
@@ -223,7 +223,7 @@ export default function SettingsScreen() {
     }[] = [
       {
         title: 'Prepare FYP presentation slides',
-        description: 'Create introduction, problem statement, methodology, and prototype screenshots.',
+        description: 'Create introduction, problem statement, and slides.',
         dueDate: getTodayDate(),
         dueTime: '10:00 AM',
         location: 'Library',
@@ -233,7 +233,7 @@ export default function SettingsScreen() {
       },
       {
         title: 'Supervisor meeting',
-        description: 'Discuss FocusMate progress, Milo companion flow, and backend plan.',
+        description: 'Discuss FocusMate progress and Milo flow.',
         dueDate: getTodayDate(1),
         dueTime: '2:30 PM',
         location: 'Faculty office',
@@ -281,7 +281,7 @@ export default function SettingsScreen() {
     setNotice({
       type: 'success',
       title: 'Demo data created',
-      message: 'Milo added sample planner items for your FYP demonstration.',
+      message: 'Milo added sample planner items.',
     });
   };
 
@@ -300,7 +300,7 @@ export default function SettingsScreen() {
   };
 
   return (
-    <ScreenContainer topPadding={16} bottomPadding={124}>
+    <ScreenContainer topPadding={0} bottomPadding={168} includeTopInset={false}>
       {notice ? (
         <NoticeCard
           type={notice.type}
@@ -313,8 +313,9 @@ export default function SettingsScreen() {
         compact
         mood="happy"
         title={`Hi, ${userName}`}
-        message="This is your FocusMate profile and prototype control center. Milo keeps your planner, reminders, analytics, and FYP system plan easy to access."
-        tagline="Your friendly planning companion."
+        message="Your FocusMate profile is ready."
+        tagline="Milo is here to help."
+        miloSize={132}
         primaryActionLabel="View Analytics"
         onPrimaryActionPress={() => navigation.navigate('Analytics')}
         secondaryActionLabel="AI Plan"
@@ -323,7 +324,7 @@ export default function SettingsScreen() {
 
       <SectionHeader
         title="Profile Summary"
-        subtitle="Local prototype data stored on this device."
+        subtitle="Your planner at a glance."
       />
 
       <View style={styles.statsGrid}>
@@ -379,7 +380,7 @@ export default function SettingsScreen() {
       <SectionCard>
         <SettingsItem
           title="Productivity Analytics"
-          subtitle="View completed tasks and focus session progress."
+          subtitle="View progress."
           icon={
             <Ionicons
               name="stats-chart-outline"
@@ -392,7 +393,7 @@ export default function SettingsScreen() {
 
         <SettingsItem
           title="Reminder Center"
-          subtitle={`${stats.reminders} planner item(s) currently have reminders.`}
+          subtitle="Check reminders."
           icon={
             <Ionicons
               name="notifications-outline"
@@ -405,7 +406,7 @@ export default function SettingsScreen() {
 
         <SettingsItem
           title="AI & Backend Plan"
-          subtitle="Explain OpenAI, WhatsApp, Supabase, and backend architecture."
+          subtitle="Future integrations."
           icon={
             <Ionicons
               name="sparkles-outline"
@@ -418,7 +419,7 @@ export default function SettingsScreen() {
 
         <SettingsItem
           title="Milo Companion"
-          subtitle="Open Milo mood, voice, suggestions, and focus actions."
+          subtitle="Mood, voice, and focus."
           icon={
             <Ionicons
               name="heart-outline"
@@ -432,13 +433,13 @@ export default function SettingsScreen() {
 
       <SectionHeader
         title="Prototype Tools"
-        subtitle="Useful controls for testing and FYP demonstration."
+        subtitle="Tools for your demo."
       />
 
       <SectionCard>
         <SettingsItem
           title="Send Test Reminder"
-          subtitle="Check whether local phone notifications are working."
+          subtitle="Send a test alert."
           icon={
             <Ionicons
               name="alarm-outline"
@@ -451,7 +452,7 @@ export default function SettingsScreen() {
 
         <SettingsItem
           title="Create Demo Data"
-          subtitle="Reset planner and add clean sample items for presentation."
+          subtitle="Add sample items."
           icon={
             <Ionicons
               name="refresh-circle-outline"
@@ -464,7 +465,7 @@ export default function SettingsScreen() {
 
         <SettingsItem
           title="Clear Planner Items"
-          subtitle="Remove all local tasks, meetings, dates, and reminder IDs."
+          subtitle="Remove planner items."
           icon={
             <Ionicons
               name="trash-outline"
@@ -478,7 +479,7 @@ export default function SettingsScreen() {
 
         <SettingsItem
           title="Clear Focus History"
-          subtitle="Reset local focus minutes and analytics history."
+          subtitle="Reset focus history."
           icon={
             <MaterialCommunityIcons
               name="timer-remove-outline"
@@ -523,28 +524,28 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     justifyContent: 'space-between',
-    marginBottom: 18,
+    marginBottom: 14,
   },
   statCard: {
     width: '48%',
     backgroundColor: theme.colors.surface,
     borderRadius: theme.radius.lg,
-    padding: 14,
+    padding: 10,
     marginBottom: 10,
     borderWidth: 1,
     borderColor: theme.colors.border,
     ...theme.shadowSoft,
   },
   statIcon: {
-    width: 38,
-    height: 38,
-    borderRadius: 14,
+    width: 30,
+    height: 30,
+    borderRadius: 11,
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 8,
+    marginBottom: 4,
   },
   statValue: {
-    fontSize: 24,
+    fontSize: 22,
     fontWeight: '900',
   },
   statLabel: {
@@ -557,22 +558,22 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.surface,
     borderRadius: theme.radius.xl,
     padding: 8,
-    marginBottom: 20,
+    marginBottom: 16,
     borderWidth: 1,
     borderColor: theme.colors.border,
     ...theme.shadowSoft,
   },
   settingsItem: {
-    minHeight: 74,
+    minHeight: 66,
     borderRadius: theme.radius.lg,
     paddingHorizontal: 10,
     flexDirection: 'row',
     alignItems: 'center',
   },
   settingsIcon: {
-    width: 46,
-    height: 46,
-    borderRadius: 16,
+    width: 42,
+    height: 42,
+    borderRadius: 15,
     backgroundColor: theme.colors.primarySoft,
     justifyContent: 'center',
     alignItems: 'center',
@@ -633,6 +634,6 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   logoutArea: {
-    marginTop: 16,
+    marginTop: 14,
   },
 });

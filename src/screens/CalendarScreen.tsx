@@ -13,6 +13,8 @@ import { theme } from '../theme';
 import { useTasks } from '../lib/TaskContext';
 import { Task } from '../types/task';
 import { getTodayDate } from '../lib/miloPersonality';
+import { getMiloReaction } from '../lib/miloReaction';
+import { getTaskUrgency } from '../lib/taskUrgency';
 
 import ScreenContainer from '../components/ui/ScreenContainer';
 import SectionHeader from '../components/ui/SectionHeader';
@@ -80,47 +82,6 @@ function sortItems(items: Task[]) {
 
     return a.createdAt.localeCompare(b.createdAt);
   });
-}
-
-function getCalendarMood(items: Task[], selectedDate: string) {
-  const todayDate = getTodayDate();
-
-  if (selectedDate < todayDate) {
-    return {
-      mood: 'sleepy' as const,
-      title: 'Milo reviewed this day',
-      message:
-        items.length > 0
-          ? `There were ${items.length} planner item(s) on this day.`
-          : 'This day has no planner items.',
-      tagline: 'Past days help you reflect.',
-    };
-  }
-
-  if (items.some((item) => item.priority === 'high')) {
-    return {
-      mood: 'focused' as const,
-      title: 'Milo is focused',
-      message: 'This day has an important item. Milo suggests preparing early.',
-      tagline: 'Important days need a calm plan.',
-    };
-  }
-
-  if (items.length > 0) {
-    return {
-      mood: 'waving' as const,
-      title: 'Milo is ready',
-      message: `You have ${items.length} planner item(s) on this day.`,
-      tagline: 'Milo will help you stay on track.',
-    };
-  }
-
-  return {
-    mood: 'happy' as const,
-    title: 'Milo sees a calm day',
-    message: 'No planner items are scheduled for this day yet.',
-    tagline: 'You can add something anytime.',
-  };
 }
 
 function TypeSummaryCard({
@@ -213,9 +174,9 @@ export default function CalendarScreen() {
     return sortItems(tasks.filter((task) => task.dueDate === selectedDate));
   }, [tasks, selectedDate]);
 
-  const mood = useMemo(() => {
-    return getCalendarMood(selectedItems, selectedDate);
-  }, [selectedItems, selectedDate]);
+  const reaction = useMemo(() => {
+    return getMiloReaction(tasks, { date: selectedDate });
+  }, [tasks, selectedDate]);
 
   const selectedStats = useMemo(() => {
     return {
@@ -223,26 +184,38 @@ export default function CalendarScreen() {
       meetings: selectedItems.filter((item) => item.plannerType === 'meeting').length,
       dates: selectedItems.filter((item) => item.plannerType === 'date').length,
       completed: selectedItems.filter((item) => item.status === 'completed').length,
+      urgent: selectedItems.filter((item) =>
+        ['overdue', 'urgent', 'high'].includes(getTaskUrgency(item).level)
+      ).length,
     };
   }, [selectedItems]);
 
   return (
-    <ScreenContainer topPadding={8} bottomPadding={124}>
+    <ScreenContainer topPadding={0} bottomPadding={124} includeTopInset={false}>
       <MiloMessageCard
         compact
-        mood={mood.mood}
-        title={mood.title}
-        message={mood.message}
-        tagline={mood.tagline}
-        primaryActionLabel="Add Item"
-        onPrimaryActionPress={() => navigation.navigate('AddTask')}
+        mood={reaction.assetKey}
+        title={reaction.title}
+        message={reaction.message}
+        tagline={reaction.secondaryMessage}
+        primaryActionLabel={reaction.suggestedActionLabel}
+        onPrimaryActionPress={() =>
+          reaction.reason === 'high_priority_due_today'
+          || reaction.reason === 'dynamic_urgency_due_soon'
+            ? navigation.navigate('FocusSession')
+            : reaction.reason === 'all_target_day_items_completed'
+            ? navigation.navigate('Analytics')
+            : reaction.reason === 'no_planner_items'
+            ? navigation.navigate('AddTask')
+            : navigation.navigate('Tasks')
+        }
         secondaryActionLabel="Today"
         onSecondaryActionPress={() => setSelectedDate(getTodayDate())}
       />
 
       <View style={styles.dateHeader}>
         <View>
-          <Text style={styles.dateHeaderTitle}>Calendar</Text>
+          <Text style={styles.dateHeaderTitle}>Selected Day</Text>
           <Text style={styles.dateHeaderSubtitle}>
             {getReadableFullDate(selectedDate)}
           </Text>
@@ -329,12 +302,25 @@ export default function CalendarScreen() {
         />
       </View>
 
+      {selectedStats.urgent > 0 ? (
+        <View style={styles.urgencyNotice}>
+          <Ionicons
+            name="alert-circle-outline"
+            size={18}
+            color={theme.colors.danger}
+          />
+          <Text style={styles.urgencyNoticeText}>
+            {selectedStats.urgent} urgent item(s) need an early step.
+          </Text>
+        </View>
+      ) : null}
+
       <SectionHeader
         title="Planner Items"
         subtitle={
           selectedItems.length > 0
             ? `${selectedItems.length} item(s) scheduled`
-            : 'No items scheduled for this day.'
+            : 'Nothing planned yet.'
         }
       />
 
@@ -357,7 +343,7 @@ export default function CalendarScreen() {
         <EmptyState
           imageSource={getMiloImageSource('happy')}
           title="No plan for this day"
-          message="Milo can help you add a task, meeting, or important date for this day."
+          message="Add something for this day."
           actionLabel="Create planner item"
           onActionPress={() => navigation.navigate('AddTask')}
         />
@@ -393,7 +379,7 @@ export default function CalendarScreen() {
 
 const styles = StyleSheet.create({
   dateHeader: {
-    marginBottom: 14,
+    marginBottom: 10,
     flexDirection: 'row',
     alignItems: 'center',
   },
@@ -425,17 +411,17 @@ const styles = StyleSheet.create({
     fontWeight: '900',
   },
   dateStrip: {
-    paddingBottom: 18,
+    paddingBottom: 12,
   },
   dateItem: {
-    width: 72,
-    minHeight: 94,
+    width: 66,
+    minHeight: 82,
     borderRadius: theme.radius.lg,
     backgroundColor: theme.colors.surface,
     borderWidth: 1,
     borderColor: theme.colors.border,
     marginRight: 10,
-    paddingVertical: 11,
+    paddingVertical: 9,
     alignItems: 'center',
     justifyContent: 'center',
     ...theme.shadowSoft,
@@ -478,28 +464,28 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     justifyContent: 'space-between',
-    marginBottom: 18,
+    marginBottom: 14,
   },
   summaryCard: {
     width: '48%',
     backgroundColor: theme.colors.surface,
     borderRadius: theme.radius.lg,
-    padding: 14,
+    padding: 10,
     marginBottom: 10,
     borderWidth: 1,
     borderColor: theme.colors.border,
     ...theme.shadowSoft,
   },
   summaryIcon: {
-    width: 38,
-    height: 38,
-    borderRadius: 14,
+    width: 34,
+    height: 34,
+    borderRadius: 12,
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 8,
+    marginBottom: 4,
   },
   summaryValue: {
-    fontSize: 24,
+    fontSize: 22,
     fontWeight: '900',
   },
   summaryTitle: {
@@ -507,6 +493,24 @@ const styles = StyleSheet.create({
     color: theme.colors.muted,
     fontSize: 12,
     fontWeight: '800',
+  },
+  urgencyNotice: {
+    backgroundColor: theme.colors.dangerSoft,
+    borderRadius: theme.radius.lg,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginBottom: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#FFD6D6',
+  },
+  urgencyNoticeText: {
+    flex: 1,
+    marginLeft: 8,
+    color: theme.colors.danger,
+    fontSize: 12,
+    fontWeight: '900',
   },
   itemList: {
     marginBottom: 14,

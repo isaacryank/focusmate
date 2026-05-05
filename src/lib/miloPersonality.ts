@@ -1,4 +1,5 @@
 import { Task } from '../types/task';
+import { compareTasksByUrgency, getTaskUrgency } from './taskUrgency';
 
 export type MiloMood =
   | 'idle'
@@ -52,10 +53,7 @@ export function getMiloPlannerStats(tasks: Task[]): MiloPlannerStats {
   const today = tasks.filter((task) => task.dueDate === todayDate);
 
   const overdue = tasks.filter(
-    (task) =>
-      task.status === 'pending' &&
-      Boolean(task.dueDate) &&
-      task.dueDate! < todayDate
+    (task) => getTaskUrgency(task).level === 'overdue'
   );
 
   const highPriority = tasks.filter(
@@ -87,8 +85,8 @@ export function getMiloState(
     return {
       mood: 'worried',
       title: 'Milo is worried',
-      message: `You have ${stats.overdue.length} overdue item(s). Do not panic. Let us fix one small thing first.`,
-      tagline: 'Small steps beat stress.',
+      message: `${stats.overdue.length} item(s) need care.`,
+      tagline: 'One step at a time.',
       primaryActionLabel: 'Review Tasks',
       primaryActionTarget: 'Tasks',
     };
@@ -97,11 +95,11 @@ export function getMiloState(
   if (stats.pending.length >= 5) {
     return {
       mood: 'focused',
-      title: 'Milo is focused',
-      message: `You have ${stats.pending.length} pending item(s). I suggest starting with the most important one.`,
-      tagline: 'Focus on one task at a time.',
-      primaryActionLabel: 'Start Focus',
-      primaryActionTarget: 'FocusSession',
+      title: 'Milo found your next step',
+      message: `${stats.pending.length} items need attention.`,
+      tagline: 'One step at a time.',
+      primaryActionLabel: 'Open Tasks',
+      primaryActionTarget: 'Tasks',
     };
   }
 
@@ -109,8 +107,8 @@ export function getMiloState(
     return {
       mood: 'waving',
       title: 'Milo is ready',
-      message: `You have ${stats.today.length} planner item(s) today. I will help you stay on track.`,
-      tagline: 'Today has a plan.',
+      message: `${stats.today.length} item(s) today.`,
+      tagline: 'Milo will remind you.',
       primaryActionLabel: 'View Today',
       primaryActionTarget: 'TodayPlan',
     };
@@ -120,8 +118,8 @@ export function getMiloState(
     return {
       mood: 'focused',
       title: 'Milo found your next step',
-      message: `You have ${stats.pending.length} pending item(s). Pick one and let Milo break it down.`,
-      tagline: 'A clear plan feels lighter.',
+      message: `${stats.pending.length} items need attention.`,
+      tagline: 'One step at a time.',
       primaryActionLabel: 'Open Tasks',
       primaryActionTarget: 'Tasks',
     };
@@ -131,8 +129,8 @@ export function getMiloState(
     return {
       mood: 'celebrating',
       title: 'Milo is proud',
-      message: 'Nice work. Your planner is clear right now. Take a short break or plan your next goal.',
-      tagline: 'Progress deserves celebration.',
+      message: 'Your planner is clear.',
+      tagline: 'Nice work.',
       primaryActionLabel: 'View Analytics',
       primaryActionTarget: 'Analytics',
     };
@@ -141,8 +139,8 @@ export function getMiloState(
   return {
     mood: 'happy',
     title: 'Milo is waiting',
-    message: 'Add your first task, meeting, or important date. Milo will help you manage it.',
-    tagline: 'Let us make your first plan.',
+    message: 'Add something when you are ready.',
+    tagline: 'Milo will remember.',
     primaryActionLabel: 'Create Item',
     primaryActionTarget: 'AddTask',
   };
@@ -171,17 +169,17 @@ export function getMiloMoodLabel(mood: MiloMood) {
 export function getMiloEncouragement(mood: MiloMood) {
   switch (mood) {
     case 'worried':
-      return 'It is okay. We will handle this slowly, one step at a time.';
+      return 'It is okay. One step at a time.';
     case 'focused':
-      return 'Let us protect your focus. Start small and keep going.';
+      return 'Start small and keep going.';
     case 'celebrating':
-      return 'You did well. Milo is proud of your progress.';
+      return 'You did well. Milo is proud.';
     case 'waving':
-      return 'I am here with you. Let us make today easier.';
+      return 'Milo is here with you.';
     case 'sleepy':
       return 'Rest is part of productivity too.';
     case 'happy':
-      return 'Planning feels better when we do it together.';
+      return 'Milo can help you plan.';
     case 'idle':
     default:
       return 'Milo is ready whenever you are.';
@@ -189,29 +187,8 @@ export function getMiloEncouragement(mood: MiloMood) {
 }
 
 export function getMiloRecommendedTasks(tasks: Task[], limit: number = 3) {
-  const todayDate = getTodayDate();
-
   return [...tasks]
     .filter((task) => task.status === 'pending')
-    .sort((a, b) => {
-      const overdueA = a.dueDate && a.dueDate < todayDate ? 0 : 1;
-      const overdueB = b.dueDate && b.dueDate < todayDate ? 0 : 1;
-
-      if (overdueA !== overdueB) {
-        return overdueA - overdueB;
-      }
-
-      const priorityA = a.priority === 'high' ? 0 : a.priority === 'medium' ? 1 : 2;
-      const priorityB = b.priority === 'high' ? 0 : b.priority === 'medium' ? 1 : 2;
-
-      if (priorityA !== priorityB) {
-        return priorityA - priorityB;
-      }
-
-      const dateA = `${a.dueDate || '9999-99-99'} ${a.dueTime || ''}`;
-      const dateB = `${b.dueDate || '9999-99-99'} ${b.dueTime || ''}`;
-
-      return dateA.localeCompare(dateB);
-    })
+    .sort(compareTasksByUrgency)
     .slice(0, limit);
 }

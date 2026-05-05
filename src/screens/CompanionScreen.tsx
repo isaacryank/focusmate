@@ -13,8 +13,8 @@ import {
   getMiloEncouragement,
   getMiloPlannerStats,
   getMiloRecommendedTasks,
-  getMiloState,
 } from '../lib/miloPersonality';
+import { getMiloReaction } from '../lib/miloReaction';
 
 import ScreenContainer from '../components/ui/ScreenContainer';
 import SectionHeader from '../components/ui/SectionHeader';
@@ -117,9 +117,9 @@ export default function CompanionScreen() {
   const { tasks, toggleTask } = useTasks();
   const { totalFocusMinutes } = useFocus();
 
-  const miloState = useMemo(() => {
-    return getMiloState(tasks, totalFocusMinutes);
-  }, [tasks, totalFocusMinutes]);
+  const miloReaction = useMemo(() => {
+    return getMiloReaction(tasks);
+  }, [tasks]);
 
   const plannerStats = useMemo(() => {
     return getMiloPlannerStats(tasks);
@@ -132,9 +132,9 @@ export default function CompanionScreen() {
   const [manualMood, setManualMood] = useState<MiloMood | null>(null);
   const [customMessage, setCustomMessage] = useState<string | null>(null);
 
-  const activeMood = manualMood || miloState.mood;
-  const activeTitle = manualMood ? 'Milo changed mood' : miloState.title;
-  const activeMessage = customMessage || miloState.message;
+  const activeMood = manualMood || miloReaction.assetKey;
+  const activeTitle = manualMood ? 'Milo changed mood' : miloReaction.title;
+  const activeMessage = customMessage || miloReaction.message;
 
   const handleSpeak = async () => {
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -170,17 +170,26 @@ export default function CompanionScreen() {
   };
 
   const handlePrimaryAction = () => {
-    navigation.navigate(miloState.primaryActionTarget);
+    navigation.navigate(
+      miloReaction.reason === 'high_priority_due_today'
+        ? 'FocusSession'
+        : miloReaction.reason === 'no_planner_items'
+        ? 'AddTask'
+        : miloReaction.reason === 'all_target_day_items_completed' ||
+          miloReaction.reason === 'all_items_completed'
+        ? 'Analytics'
+        : 'Tasks'
+    );
   };
 
   return (
-    <ScreenContainer topPadding={16} bottomPadding={124}>
+    <ScreenContainer topPadding={6} bottomPadding={124} includeTopInset={false}>
       <MiloMessageCard
         mood={activeMood}
         title={activeTitle}
         message={activeMessage}
-        tagline={miloState.tagline}
-        primaryActionLabel={miloState.primaryActionLabel}
+        tagline={miloReaction.secondaryMessage}
+        primaryActionLabel={miloReaction.suggestedActionLabel}
         onPrimaryActionPress={handlePrimaryAction}
         secondaryActionLabel="Hear Milo"
         onSecondaryActionPress={handleSpeak}
@@ -220,7 +229,7 @@ export default function CompanionScreen() {
 
       <SectionHeader
         title="Milo Mood"
-        subtitle="Milo reacts to your planner, but you can tap a mood too."
+        subtitle="Optional mood picker."
       />
 
       <View style={styles.moodRow}>
@@ -250,7 +259,7 @@ export default function CompanionScreen() {
         />
       </View>
 
-      <SectionHeader title="Planner Mood Check" />
+      <SectionHeader title="Planner Mood" />
 
       <View style={styles.statsGrid}>
         <StatTile
@@ -302,7 +311,7 @@ export default function CompanionScreen() {
 
       <SectionHeader
         title="Milo Suggests"
-        subtitle="These are the items Milo thinks you should handle first."
+        subtitle="Best items to handle first."
         actionLabel="View All"
         onActionPress={() => navigation.navigate('Tasks')}
       />
@@ -322,7 +331,7 @@ export default function CompanionScreen() {
         <EmptyState
           imageSource={getMiloImageSource('happy')}
           title="Milo has no urgent suggestions"
-          message="Your planner looks calm. Add a new item or start a focus session when you are ready."
+          message="Your planner looks calm."
           actionLabel="Create planner item"
           onActionPress={() => navigation.navigate('AddTask')}
         />
@@ -332,7 +341,7 @@ export default function CompanionScreen() {
 
       <ActionCard
         title="Plan Today"
-        subtitle="See what Milo thinks you should do today."
+        subtitle="See today's plan."
         icon={
           <Ionicons
             name="calendar-outline"
@@ -345,7 +354,7 @@ export default function CompanionScreen() {
 
       <ActionCard
         title="Reminder Center"
-        subtitle="Check tasks, meetings, dates, and reminder status."
+        subtitle="Check reminders."
         icon={
           <Ionicons
             name="notifications-outline"
@@ -358,7 +367,7 @@ export default function CompanionScreen() {
 
       <ActionCard
         title="Progress Analytics"
-        subtitle="Review completed tasks and focus progress."
+        subtitle="View progress."
         icon={
           <Ionicons
             name="stats-chart-outline"
@@ -375,7 +384,7 @@ export default function CompanionScreen() {
 const styles = StyleSheet.create({
   buttonRow: {
     flexDirection: 'row',
-    marginBottom: 20,
+    marginBottom: 14,
   },
   buttonHalf: {
     flex: 1,
@@ -383,11 +392,11 @@ const styles = StyleSheet.create({
   },
   moodRow: {
     flexDirection: 'row',
-    marginBottom: 20,
+    marginBottom: 14,
   },
   moodChip: {
     flex: 1,
-    minHeight: 86,
+    minHeight: 68,
     backgroundColor: theme.colors.surface,
     borderRadius: theme.radius.lg,
     alignItems: 'center',
@@ -402,7 +411,7 @@ const styles = StyleSheet.create({
     borderColor: theme.colors.primary,
   },
   moodChipText: {
-    marginTop: 4,
+    marginTop: 2,
     color: theme.colors.textSoft,
     fontSize: 11,
     fontWeight: '900',
@@ -414,25 +423,25 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     justifyContent: 'space-between',
-    marginBottom: 20,
+    marginBottom: 16,
   },
   statTile: {
     width: '48%',
     backgroundColor: theme.colors.surface,
     borderRadius: theme.radius.lg,
-    padding: 14,
+    padding: 12,
     marginBottom: 10,
     borderWidth: 1,
     borderColor: theme.colors.border,
     ...theme.shadowSoft,
   },
   statIcon: {
-    width: 36,
-    height: 36,
-    borderRadius: 13,
+    width: 34,
+    height: 34,
+    borderRadius: 12,
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 8,
+    marginBottom: 6,
   },
   statValue: {
     fontSize: 24,

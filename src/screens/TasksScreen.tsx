@@ -17,6 +17,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { theme } from '../theme';
 import { useTasks } from '../lib/TaskContext';
 import { PlannerType, Task } from '../types/task';
+import { getTaskUrgency } from '../lib/taskUrgency';
 
 const miloFocusedImage = require('../../assets/mascot/milo_focused.png');
 const miloWavingImage = require('../../assets/mascot/milo_waving.png');
@@ -111,9 +112,15 @@ function TaskCard({
 }) {
   const isCompleted = task.status === 'completed';
   const typeConfig = getTypeConfig(task.plannerType);
+  const urgency = getTaskUrgency(task);
+  const urgencyColor = theme.colors[urgency.colorKey];
 
   const accentColor =
-    task.priority === 'high'
+    urgency.level === 'overdue' || urgency.level === 'urgent'
+      ? theme.colors.danger
+      : urgency.level === 'high'
+      ? theme.colors.yellow
+      : task.priority === 'high'
       ? theme.colors.yellow
       : task.priority === 'medium'
       ? typeConfig.color
@@ -162,6 +169,20 @@ function TaskCard({
           <View style={[styles.priorityPill, { backgroundColor: `${accentColor}22` }]}>
             <Text style={[styles.priorityText, { color: accentColor }]}>
               {task.priority}
+            </Text>
+          </View>
+
+          <View
+            style={[
+              styles.statusPill,
+              {
+                backgroundColor: `${urgencyColor}18`,
+                borderColor: `${urgencyColor}45`,
+              },
+            ]}
+          >
+            <Text style={[styles.statusPillText, { color: urgencyColor }]}>
+              {urgency.label}
             </Text>
           </View>
 
@@ -627,6 +648,18 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '900',
     textTransform: 'capitalize',
+  },
+  statusPill: {
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    marginRight: 9,
+    marginBottom: 4,
+  },
+  statusPillText: {
+    fontSize: 11,
+    fontWeight: '900',
   },
   datePill: {
     flexDirection: 'row',

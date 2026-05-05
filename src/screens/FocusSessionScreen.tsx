@@ -18,10 +18,7 @@ import * as Haptics from 'expo-haptics';
 import { theme } from '../theme';
 import { useTasks } from '../lib/TaskContext';
 import { useFocus } from '../lib/FocusContext';
-
-const miloFocusedImage = require('../../assets/mascot/milo_focused.png');
-const miloHappyImage = require('../../assets/mascot/milo_happy.png');
-const miloSleepyImage = require('../../assets/mascot/milo_sleepy.png');
+import { getMiloImageSource } from '../components/milo/MiloMoodImage';
 
 const focusOptions = [5, 15, 25, 45];
 
@@ -106,16 +103,16 @@ export default function FocusSessionScreen() {
 
   const miloImage =
     remainingSeconds === 0
-      ? miloHappyImage
+      ? getMiloImageSource('celebrating')
       : isRunning
-      ? miloFocusedImage
-      : miloSleepyImage;
+      ? getMiloImageSource('focused')
+      : getMiloImageSource('sleepy');
 
   const miloMessage = isRunning
-    ? 'Milo is focusing with you. Stay with one task only.'
-    : todayFocusSessions.length > 0
-    ? `Nice work! You completed ${todayFocusSessions.length} focus session(s) today.`
-    : 'Choose a timer and let Milo help you focus.';
+    ? 'Stay with one small step.'
+    : remainingSeconds === 0 || todayFocusSessions.length > 0
+    ? 'Great focus. Milo is proud.'
+    : 'Milo will guard your focus.';
 
   useEffect(() => {
     if (!isRunning) return;
@@ -296,7 +293,11 @@ export default function FocusSessionScreen() {
         </View>
 
         <View style={styles.miloMessageCard}>
-          <Image source={miloFocusedImage} style={styles.messageMiloImage} resizeMode="contain" />
+          <Image
+            source={miloImage}
+            style={styles.messageMiloImage}
+            resizeMode="contain"
+          />
 
           <View style={styles.messageTextArea}>
             <Text style={styles.messageTitle}>Milo says</Text>

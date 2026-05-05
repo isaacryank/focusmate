@@ -187,9 +187,9 @@ export default function MiloPlanScreen({ navigation, route }: Props) {
       <MiloMessageCard
         compact
         mood={mood}
-        title="Milo Smart Plan"
-        message={`Milo created a simple step-by-step plan for "${task.title}".`}
-        tagline="This is local AI-style planning now. Later, it can connect to your backend AI service."
+        title="Milo made a plan"
+        message="Small steps for this task."
+        tagline="One step at a time."
         primaryActionLabel="Add Checklist"
         onPrimaryActionPress={handleAddPlanToChecklist}
         secondaryActionLabel="Back"
@@ -202,17 +202,16 @@ export default function MiloPlanScreen({ navigation, route }: Props) {
         </View>
 
         <View style={styles.aiTextArea}>
-          <Text style={styles.aiTitle}>Backend-ready AI module</Text>
+          <Text style={styles.aiTitle}>Milo's gentle plan</Text>
           <Text style={styles.aiText}>
-            This screen is prepared for future OpenAI backend integration. For now,
-            Milo uses safe local planning rules for your prototype.
+            Small steps to start.
           </Text>
         </View>
       </View>
 
       <SectionHeader
         title="Suggested Plan"
-        subtitle="Milo breaks the item into smaller actions."
+        subtitle="Small steps for this task."
       />
 
       <View style={styles.planCard}>
@@ -240,7 +239,7 @@ export default function MiloPlanScreen({ navigation, route }: Props) {
         subtitle={
           existingSubtasks.length > 0
             ? `${completedSubtasks}/${existingSubtasks.length} completed`
-            : 'No checklist steps added yet.'
+            : 'No checklist yet'
         }
       />
 
@@ -258,7 +257,7 @@ export default function MiloPlanScreen({ navigation, route }: Props) {
         <EmptyState
           imageSource={getMiloImageSource('focused')}
           title="No checklist yet"
-          message="Tap Add to Checklist and Milo will save these steps inside your planner item."
+          message="Add these steps when ready."
           actionLabel="Add checklist"
           onActionPress={handleAddPlanToChecklist}
         />

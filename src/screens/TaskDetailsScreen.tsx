@@ -7,7 +7,8 @@ import { RootStackParamList } from '../types/navigation';
 import { Subtask } from '../types/task';
 import { theme } from '../theme';
 import { useTasks } from '../lib/TaskContext';
-import { MiloMood, getTodayDate } from '../lib/miloPersonality';
+import { getMiloReaction } from '../lib/miloReaction';
+import { getTaskUrgency } from '../lib/taskUrgency';
 
 import ScreenContainer from '../components/ui/ScreenContainer';
 import SectionHeader from '../components/ui/SectionHeader';
@@ -18,62 +19,6 @@ import MiloMessageCard from '../components/milo/MiloMessageCard';
 import { getMiloImageSource } from '../components/milo/MiloMoodImage';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'TaskDetails'>;
-
-function getTaskMood(taskStatus: string, dueDate?: string, priority?: string): MiloMood {
-  const todayDate = getTodayDate();
-
-  if (taskStatus === 'completed') return 'celebrating';
-
-  if (dueDate && dueDate < todayDate) return 'worried';
-
-  if (priority === 'high') return 'focused';
-
-  return 'waving';
-}
-
-function getTaskMiloText({
-  status,
-  title,
-  dueDate,
-  priority,
-}: {
-  status: string;
-  title: string;
-  dueDate?: string;
-  priority?: string;
-}) {
-  const todayDate = getTodayDate();
-
-  if (status === 'completed') {
-    return {
-      title: 'Milo is celebrating',
-      message: `Great job completing "${title}". Milo is proud of your progress.`,
-      tagline: 'One step completed.',
-    };
-  }
-
-  if (dueDate && dueDate < todayDate) {
-    return {
-      title: 'Milo is checking in',
-      message: `This item looks overdue. Do not stress. Start with one small action and continue from there.`,
-      tagline: 'Small recovery steps count.',
-    };
-  }
-
-  if (priority === 'high') {
-    return {
-      title: 'Milo is focused',
-      message: `This is a high-priority item. Milo suggests breaking it into smaller checklist steps.`,
-      tagline: 'Protect your focus.',
-    };
-  }
-
-  return {
-    title: 'Milo is ready',
-    message: `Milo can help you manage this item and turn it into a clear plan.`,
-    tagline: 'Planning feels lighter together.',
-  };
-}
 
 function DetailRow({
   icon,
@@ -152,18 +97,7 @@ export default function TaskDetailsScreen({ navigation, route }: Props) {
       return null;
     }
 
-    const mood = getTaskMood(task.status, task.dueDate, task.priority);
-    const text = getTaskMiloText({
-      status: task.status,
-      title: task.title,
-      dueDate: task.dueDate,
-      priority: task.priority,
-    });
-
-    return {
-      mood,
-      ...text,
-    };
+    return getMiloReaction([task]);
   }, [task]);
 
   if (!task || !miloData) {
@@ -182,6 +116,8 @@ export default function TaskDetailsScreen({ navigation, route }: Props) {
 
   const subtasks = task.subtasks || [];
   const completedSubtasks = subtasks.filter((item) => item.completed).length;
+  const urgency = getTaskUrgency(task);
+  const urgencyColor = theme.colors[urgency.colorKey];
 
   const handleDelete = () => {
     Alert.alert(
@@ -216,7 +152,7 @@ export default function TaskDetailsScreen({ navigation, route }: Props) {
       message:
         task.status === 'completed'
           ? 'This item is now pending again.'
-          : 'Nice work. Milo marked this item as completed.',
+          : 'You did it. Milo is proud.',
     });
   };
 
@@ -247,10 +183,10 @@ export default function TaskDetailsScreen({ navigation, route }: Props) {
 
       <MiloMessageCard
         compact
-        mood={miloData.mood}
+        mood={miloData.assetKey}
         title={miloData.title}
         message={miloData.message}
-        tagline={miloData.tagline}
+        tagline={miloData.secondaryMessage}
         primaryActionLabel={
           task.status === 'completed' ? 'View Analytics' : 'Smart Plan'
         }
@@ -275,6 +211,19 @@ export default function TaskDetailsScreen({ navigation, route }: Props) {
             <Text style={styles.typeText}>
               {task.plannerType.toUpperCase()} • {task.priority.toUpperCase()}
             </Text>
+            <View
+              style={[
+                styles.urgencyBadge,
+                {
+                  backgroundColor: `${urgencyColor}18`,
+                  borderColor: `${urgencyColor}45`,
+                },
+              ]}
+            >
+              <Text style={[styles.urgencyBadgeText, { color: urgencyColor }]}>
+                {urgency.label} - {urgency.score} urgency
+              </Text>
+            </View>
             <Text style={styles.title}>{task.title}</Text>
           </View>
 
@@ -307,6 +256,18 @@ export default function TaskDetailsScreen({ navigation, route }: Props) {
         )}
 
         <View style={styles.detailBox}>
+          <DetailRow
+            label="Milo start-early note"
+            value={urgency.startEarlyMessage}
+            icon={
+              <Ionicons
+                name="sparkles-outline"
+                size={18}
+                color={urgencyColor}
+              />
+            }
+          />
+
           <DetailRow
             label="Date"
             value={task.dueDate || 'No date selected'}
@@ -362,7 +323,7 @@ export default function TaskDetailsScreen({ navigation, route }: Props) {
         subtitle={
           subtasks.length > 0
             ? `${completedSubtasks}/${subtasks.length} steps completed`
-            : 'Create a smart checklist with Milo.'
+            : 'Milo can turn this into small steps.'
         }
         actionLabel={subtasks.length > 0 ? 'Smart Plan' : undefined}
         onActionPress={
@@ -389,7 +350,7 @@ export default function TaskDetailsScreen({ navigation, route }: Props) {
         <EmptyState
           imageSource={getMiloImageSource('focused')}
           title="No checklist yet"
-          message="Let Milo break this planner item into smaller, easier steps."
+          message="Milo can turn this into small steps."
           actionLabel="Generate Milo plan"
           onActionPress={() =>
             navigation.navigate('MiloPlan', {
@@ -458,6 +419,18 @@ const styles = StyleSheet.create({
     fontSize: 22,
     fontWeight: '900',
     letterSpacing: -0.4,
+  },
+  urgencyBadge: {
+    alignSelf: 'flex-start',
+    borderRadius: theme.radius.pill,
+    borderWidth: 1,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    marginBottom: 8,
+  },
+  urgencyBadgeText: {
+    fontSize: 11,
+    fontWeight: '900',
   },
   statusButton: {
     width: 42,

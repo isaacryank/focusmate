@@ -65,9 +65,9 @@ export default function RegisterScreen() {
           </View>
 
           <View style={styles.speechBubble}>
-            <Text style={styles.speechTitle}>Hi, I’m Milo!</Text>
+            <Text style={styles.speechTitle}>Hi, I'm Milo!</Text>
             <Text style={styles.speechText}>
-              I’ll help you remember what matters and break big goals into small steps.
+              I'll help you remember what matters.
             </Text>
           </View>
         </LinearGradient>
@@ -130,7 +130,7 @@ export default function RegisterScreen() {
         </View>
 
         <Text style={styles.demoNote}>
-          This is still demo authentication. Real Supabase login will be added later.
+          Demo account setup is ready.
         </Text>
       </ScrollView>
     </KeyboardAvoidingView>

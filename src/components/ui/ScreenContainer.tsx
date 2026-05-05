@@ -16,6 +16,7 @@ type ScreenContainerProps = {
   padded?: boolean;
   topPadding?: number;
   bottomPadding?: number;
+  includeTopInset?: boolean;
   style?: StyleProp<ViewStyle>;
   contentStyle?: StyleProp<ViewStyle>;
 };
@@ -26,6 +27,7 @@ export default function ScreenContainer({
   padded = true,
   topPadding = 16,
   bottomPadding = 120,
+  includeTopInset = true,
   style,
   contentStyle,
 }: ScreenContainerProps) {
@@ -35,7 +37,7 @@ export default function ScreenContainer({
     styles.content,
     padded && styles.padded,
     {
-      paddingTop: insets.top + topPadding,
+      paddingTop: (includeTopInset ? insets.top : 0) + topPadding,
       paddingBottom: insets.bottom + bottomPadding,
     },
     contentStyle,

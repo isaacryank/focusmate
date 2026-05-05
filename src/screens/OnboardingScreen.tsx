@@ -46,8 +46,7 @@ export default function OnboardingScreen({ onFinish }: OnboardingScreenProps) {
         id: 'milo',
         label: 'Meet Milo',
         title: 'Your friendly planning dino',
-        message:
-          'Milo helps you manage tasks, dates, meetings, reminders, and focus sessions in one place.',
+        message: 'Milo helps with tasks, dates, meetings, reminders, and focus.',
         image: miloWavingImage,
         icon: <Ionicons name="heart" size={18} color={theme.colors.primaryDark} />,
       },
@@ -55,8 +54,7 @@ export default function OnboardingScreen({ onFinish }: OnboardingScreenProps) {
         id: 'planner',
         label: 'Plan smarter',
         title: 'Organize tasks, dates, and meetings',
-        message:
-          'Create planner items with priority, schedule, location, and reminder options.',
+        message: 'Create items with priority, time, place, and reminders.',
         image: miloFocusedImage,
         icon: (
           <Ionicons
@@ -70,8 +68,7 @@ export default function OnboardingScreen({ onFinish }: OnboardingScreenProps) {
         id: 'reminders',
         label: 'Remember more',
         title: 'Let Milo remind you',
-        message:
-          'Use local phone notifications now. Later, FocusMate can connect to WhatsApp reminders through a backend.',
+        message: 'Set reminders so Milo can help you remember.',
         image: miloHappyImage,
         icon: (
           <Ionicons
@@ -85,8 +82,7 @@ export default function OnboardingScreen({ onFinish }: OnboardingScreenProps) {
         id: 'focus',
         label: 'Stay focused',
         title: 'Break work into small steps',
-        message:
-          'Milo Smart Plan turns big planner items into smaller checklist steps and supports focus sessions.',
+        message: 'Milo turns big items into small checklist steps.',
         image: miloCelebratingImage,
         icon: (
           <MaterialCommunityIcons

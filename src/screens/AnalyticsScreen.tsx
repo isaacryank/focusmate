@@ -85,8 +85,8 @@ function getAnalyticsMood({
     return {
       mood: 'celebrating' as const,
       title: 'Milo is proud',
-      message: `You completed ${completed} planner item(s) and focused for ${totalFocusMinutes} minute(s).`,
-      tagline: 'Progress is building up.',
+      message: `${completed} done. ${totalFocusMinutes} focus minute(s).`,
+      tagline: 'Progress is growing.',
     };
   }
 
@@ -94,8 +94,8 @@ function getAnalyticsMood({
     return {
       mood: 'focused' as const,
       title: 'Milo sees more to do',
-      message: `You still have ${pending} pending item(s). Pick one small task and continue steadily.`,
-      tagline: 'One small action is enough to restart.',
+      message: `${pending} item(s) still need care.`,
+      tagline: 'Start with one step.',
     };
   }
 
@@ -103,16 +103,16 @@ function getAnalyticsMood({
     return {
       mood: 'happy' as const,
       title: 'Milo likes your progress',
-      message: `You completed ${completed} planner item(s). Keep using FocusMate to track your work.`,
-      tagline: 'Good planning creates momentum.',
+      message: `${completed} item(s) completed.`,
+      tagline: 'Nice progress.',
     };
   }
 
   return {
     mood: 'waving' as const,
     title: 'Milo is ready to track progress',
-    message: 'Complete tasks and finish focus sessions to see your productivity analytics grow.',
-    tagline: 'Your progress starts with one plan.',
+    message: 'Complete items to see progress.',
+    tagline: 'Start with one plan.',
   };
 }
 
@@ -316,7 +316,7 @@ export default function AnalyticsScreen() {
   const handleClearFocusHistory = () => {
     Alert.alert(
       'Clear focus history?',
-      'This will reset your local focus analytics for the prototype.',
+      'This will reset your focus history.',
       [
         {
           text: 'Cancel',
@@ -331,7 +331,7 @@ export default function AnalyticsScreen() {
             setNotice({
               type: 'success',
               title: 'Focus history cleared',
-              message: 'Milo reset your local focus analytics.',
+              message: 'Milo reset your focus history.',
             });
           },
         },
@@ -363,7 +363,7 @@ export default function AnalyticsScreen() {
 
       <SectionHeader
         title="Productivity Overview"
-        subtitle="Local analytics for your FocusMate prototype."
+        subtitle="View progress."
       />
 
       <View style={styles.statsGrid}>
@@ -426,7 +426,7 @@ export default function AnalyticsScreen() {
 
       <SectionHeader
         title="Progress Breakdown"
-        subtitle="Milo checks how your planner categories are moving."
+        subtitle="Milo checks your planner."
       />
 
       <View style={styles.breakdownCard}>
@@ -493,15 +493,15 @@ export default function AnalyticsScreen() {
 
       <SectionHeader
         title="Milo Insights"
-        subtitle="Simple feedback for your FYP demo."
+        subtitle="Simple feedback."
       />
 
       <InsightCard
         title="Planner behavior"
         message={
           tasks.length > 0
-            ? `You created ${tasks.length} planner item(s). ${analytics.completed.length} are completed and ${analytics.pending.length} are still pending.`
-            : 'No planner data yet. Add sample items or create your first plan.'
+            ? `${analytics.completed.length} done. ${analytics.pending.length} pending.`
+            : 'No planner data yet.'
         }
         icon={
           <Ionicons
@@ -516,8 +516,8 @@ export default function AnalyticsScreen() {
         title="Focus behavior"
         message={
           focusSessions.length > 0
-            ? `You completed ${focusSessions.length} focus session(s), with ${totalFocusMinutes} total focus minute(s).`
-            : 'No focus sessions yet. Start Focus Mode to record your first session.'
+            ? `${focusSessions.length} session(s). ${totalFocusMinutes} minute(s).`
+            : 'No focus sessions yet.'
         }
         icon={
           <MaterialCommunityIcons

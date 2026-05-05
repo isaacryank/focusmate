@@ -1,6 +1,6 @@
 import React from 'react';
 import {
-  Image,
+  Animated,
   ImageSourcePropType,
   ImageStyle,
   StyleProp,
@@ -31,8 +31,86 @@ export default function MiloMoodImage({
   size?: number;
   style?: StyleProp<ImageStyle>;
 }) {
+  const motion = React.useRef(new Animated.Value(0)).current;
+
+  React.useEffect(() => {
+    motion.setValue(0);
+
+    const animation = Animated.loop(
+      Animated.sequence([
+        Animated.timing(motion, {
+          toValue: 1,
+          duration:
+            mood === 'worried'
+              ? 110
+              : mood === 'celebrating'
+              ? 260
+              : mood === 'focused'
+              ? 950
+              : 1600,
+          useNativeDriver: true,
+        }),
+        Animated.timing(motion, {
+          toValue: 0,
+          duration:
+            mood === 'worried'
+              ? 110
+              : mood === 'celebrating'
+              ? 360
+              : mood === 'focused'
+              ? 950
+              : 1600,
+          useNativeDriver: true,
+        }),
+      ])
+    );
+
+    animation.start();
+
+    return () => animation.stop();
+  }, [mood, motion]);
+
+  const animatedStyle = {
+    transform:
+      mood === 'worried'
+        ? [
+            {
+              translateX: motion.interpolate({
+                inputRange: [0, 0.5, 1],
+                outputRange: [-1.5, 1.5, -1.5],
+              }),
+            },
+          ]
+        : mood === 'celebrating'
+        ? [
+            {
+              translateY: motion.interpolate({
+                inputRange: [0, 0.5, 1],
+                outputRange: [0, -7, 0],
+              }),
+            },
+          ]
+        : mood === 'focused'
+        ? [
+            {
+              translateY: motion.interpolate({
+                inputRange: [0, 1],
+                outputRange: [0, -3],
+              }),
+            },
+          ]
+        : [
+            {
+              scale: motion.interpolate({
+                inputRange: [0, 1],
+                outputRange: [1, 1.025],
+              }),
+            },
+          ],
+  };
+
   return (
-    <Image
+    <Animated.Image
       source={miloImages[mood]}
       resizeMode="contain"
       style={[
@@ -40,6 +118,7 @@ export default function MiloMoodImage({
           width: size,
           height: size,
         },
+        animatedStyle,
         style,
       ]}
     />

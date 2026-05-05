@@ -8,6 +8,7 @@ import { useTasks } from '../lib/TaskContext';
 import { Task } from '../types/task';
 import { getTodayDate } from '../lib/miloPersonality';
 import { scheduleTestNotification } from '../lib/notificationUtils';
+import { getTaskUrgency } from '../lib/taskUrgency';
 
 import ScreenContainer from '../components/ui/ScreenContainer';
 import SectionHeader from '../components/ui/SectionHeader';
@@ -57,8 +58,8 @@ function getReminderMood({
     return {
       mood: 'focused' as const,
       title: 'Milo found items to set up',
-      message: `${needsSetupCount} pending item(s) need a date or reminder. Milo suggests updating them so you do not forget.`,
-      tagline: 'Good reminders reduce stress.',
+      message: `${needsSetupCount} item(s) need a reminder.`,
+      tagline: 'Milo can help.',
     };
   }
 
@@ -66,8 +67,8 @@ function getReminderMood({
     return {
       mood: 'waving' as const,
       title: 'Milo is ready today',
-      message: `You have ${todayCount} item(s) scheduled today. Milo will help you stay aware.`,
-      tagline: 'Today is easier with reminders.',
+      message: `${todayCount} item(s) today.`,
+      tagline: 'Milo will remind you.',
     };
   }
 
@@ -75,7 +76,7 @@ function getReminderMood({
     return {
       mood: 'happy' as const,
       title: 'Milo is watching your reminders',
-      message: `${reminderCount} planner item(s) already have reminders set.`,
+      message: `${reminderCount} reminder(s) set.`,
       tagline: 'You are staying organized.',
     };
   }
@@ -83,7 +84,7 @@ function getReminderMood({
   return {
     mood: 'happy' as const,
     title: 'Milo has no reminders yet',
-    message: 'Add a planner item with a date and reminder so Milo can notify you.',
+    message: 'Add a date and reminder.',
     tagline: 'Let Milo remember with you.',
   };
 }
@@ -162,6 +163,8 @@ function FilterChip({
 
 function ReminderInfoCard({ task }: { task: Task }) {
   const reminderReady = hasReminder(task) && Boolean(task.dueDate);
+  const urgency = getTaskUrgency(task);
+  const urgencyColor = theme.colors[urgency.colorKey];
 
   return (
     <View style={styles.infoCard}>
@@ -189,11 +192,29 @@ function ReminderInfoCard({ task }: { task: Task }) {
 
         <Text style={styles.infoText}>
           {reminderReady
-            ? `${getReminderLabel(task)} • ${task.dueDate || 'No date'}${
-                task.dueTime ? ` • ${task.dueTime}` : ''
+            ? `${getReminderLabel(task)} - ${task.dueDate || 'No date'}${
+                task.dueTime ? ` - ${task.dueTime}` : ''
               }`
             : 'Add a date and reminder so Milo can notify you.'}
         </Text>
+
+        <View style={styles.reminderMetaRow}>
+          <View
+            style={[
+              styles.urgencyChip,
+              {
+                backgroundColor: `${urgencyColor}18`,
+                borderColor: `${urgencyColor}45`,
+              },
+            ]}
+          >
+            <Text style={[styles.urgencyChipText, { color: urgencyColor }]}>
+              {urgency.label}
+            </Text>
+          </View>
+        </View>
+
+        <Text style={styles.startEarlyText}>{urgency.startEarlyMessage}</Text>
       </View>
     </View>
   );
@@ -292,18 +313,18 @@ export default function ReminderCenterScreen() {
 
   const getFilterSubtitle = () => {
     if (selectedFilter === 'today') {
-      return 'Planner items scheduled for today.';
+      return 'Scheduled for today.';
     }
 
     if (selectedFilter === 'upcoming') {
-      return 'Pending items with upcoming dates.';
+      return 'Coming up soon.';
     }
 
     if (selectedFilter === 'needsSetup') {
-      return 'Pending items missing a date or reminder.';
+      return 'Missing a date or reminder.';
     }
 
-    return 'Planner items with reminder options selected.';
+    return 'Reminders Milo is watching.';
   };
 
   return (
@@ -447,7 +468,7 @@ export default function ReminderCenterScreen() {
         <EmptyState
           imageSource={getMiloImageSource('happy')}
           title="Nothing here yet"
-          message="Milo does not see any planner items for this reminder category."
+          message="Milo does not see anything here."
           actionLabel="Create planner item"
           onActionPress={() => navigation.navigate('AddTask')}
         />
@@ -488,10 +509,9 @@ export default function ReminderCenterScreen() {
         </View>
 
         <View style={styles.noteTextArea}>
-          <Text style={styles.noteTitle}>Prototype reminder note</Text>
+          <Text style={styles.noteTitle}>Reminder note</Text>
           <Text style={styles.noteText}>
-            Current reminders use local phone notifications. WhatsApp reminders
-            should be added later through a secure backend.
+            Milo will remind you on this device.
           </Text>
         </View>
       </View>
@@ -621,6 +641,27 @@ const styles = StyleSheet.create({
     color: theme.colors.muted,
     fontSize: 12,
     fontWeight: '700',
+    lineHeight: 17,
+  },
+  reminderMetaRow: {
+    flexDirection: 'row',
+    marginTop: 8,
+  },
+  urgencyChip: {
+    borderWidth: 1,
+    borderRadius: theme.radius.pill,
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+  },
+  urgencyChipText: {
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  startEarlyText: {
+    marginTop: 7,
+    color: theme.colors.textSoft,
+    fontSize: 12,
+    fontWeight: '800',
     lineHeight: 17,
   },
   bottomActions: {

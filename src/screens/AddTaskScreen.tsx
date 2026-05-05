@@ -439,7 +439,7 @@ export default function AddTaskScreen({ navigation }: Props) {
   };
 
   return (
-    <ScreenContainer topPadding={12} bottomPadding={40}>
+    <ScreenContainer topPadding={6} bottomPadding={40} includeTopInset={false}>
       {notice ? (
         <NoticeCard
           type={notice.type}
@@ -483,7 +483,7 @@ export default function AddTaskScreen({ navigation }: Props) {
         <>
           <SectionHeader
             title="What are you planning?"
-            subtitle="Choose the planner type and give Milo a clear title."
+            subtitle="Tell Milo what to remember."
           />
 
           <View style={styles.typeGrid}>
@@ -534,7 +534,7 @@ export default function AddTaskScreen({ navigation }: Props) {
         <>
           <SectionHeader
             title="When should Milo remind you?"
-            subtitle="Date and time are optional unless you set a reminder."
+            subtitle="Add a date, time, or reminder."
           />
 
           <View style={styles.card}>
@@ -583,7 +583,7 @@ export default function AddTaskScreen({ navigation }: Props) {
         <>
           <SectionHeader
             title="Review with Milo"
-            subtitle="Check everything before saving."
+            subtitle="Milo will keep this safe."
           />
 
           <View style={styles.reviewCard}>
@@ -627,7 +627,7 @@ export default function AddTaskScreen({ navigation }: Props) {
             <NoticeCard
               type="info"
               title="Milo tip"
-              message="After saving, open Milo Smart Plan to break this item into smaller checklist steps."
+              message="Milo can split this into smaller steps."
             />
           </View>
         </>
@@ -680,8 +680,8 @@ const styles = StyleSheet.create({
   progressCard: {
     backgroundColor: theme.colors.surface,
     borderRadius: theme.radius.xl,
-    padding: 14,
-    marginBottom: 18,
+    padding: 10,
+    marginBottom: 12,
     flexDirection: 'row',
     borderWidth: 1,
     borderColor: theme.colors.border,
@@ -692,9 +692,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   progressCircle: {
-    width: 31,
-    height: 31,
-    borderRadius: 16,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
     backgroundColor: theme.colors.background,
     justifyContent: 'center',
     alignItems: 'center',
@@ -711,7 +711,7 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
   },
   progressLabel: {
-    marginTop: 6,
+    marginTop: 4,
     color: theme.colors.muted,
     fontSize: 11,
     fontWeight: '800',
@@ -720,13 +720,13 @@ const styles = StyleSheet.create({
     color: theme.colors.primaryDark,
   },
   typeGrid: {
-    marginBottom: 14,
+    marginBottom: 10,
   },
   typeCard: {
     backgroundColor: theme.colors.surface,
     borderRadius: theme.radius.lg,
-    padding: 14,
-    marginBottom: 10,
+    padding: 12,
+    marginBottom: 8,
     flexDirection: 'row',
     alignItems: 'center',
     borderWidth: 1,
@@ -738,9 +738,9 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.primarySoft,
   },
   typeIcon: {
-    width: 46,
-    height: 46,
-    borderRadius: 16,
+    width: 42,
+    height: 42,
+    borderRadius: 15,
     backgroundColor: theme.colors.primarySoft,
     justifyContent: 'center',
     alignItems: 'center',
@@ -763,13 +763,13 @@ const styles = StyleSheet.create({
   card: {
     backgroundColor: theme.colors.surface,
     borderRadius: theme.radius.xl,
-    padding: 16,
+    padding: 14,
     borderWidth: 1,
     borderColor: theme.colors.border,
     ...theme.shadowSoft,
   },
   fieldGroup: {
-    marginBottom: 14,
+    marginBottom: 12,
   },
   fieldLabel: {
     marginBottom: 7,
@@ -904,7 +904,7 @@ const styles = StyleSheet.create({
   },
   footerRow: {
     flexDirection: 'row',
-    marginTop: 18,
+    marginTop: 12,
   },
   footerButton: {
     flex: 1,
