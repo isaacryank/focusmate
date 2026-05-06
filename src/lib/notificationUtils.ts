@@ -28,6 +28,7 @@ type SchedulePlannerReminderInput = {
   dueTime?: string;
   location?: string;
   reminder: ReminderOption;
+  manualReminderMinutes?: number;
 };
 
 type SchedulePlannerReminderResult =
@@ -72,8 +73,10 @@ function getPlannerTypeLabel(type: PlannerType) {
   return 'task';
 }
 
-function getReminderOffsetMs(reminder: ReminderOption) {
+function getReminderOffsetMs(reminder: ReminderOption, manualReminderMinutes?: number) {
   switch (reminder) {
+    case 'custom':
+      return Math.max(manualReminderMinutes || 0, 0) * 60 * 1000;
     case '10min':
       return 10 * 60 * 1000;
     case '30min':
@@ -82,6 +85,7 @@ function getReminderOffsetMs(reminder: ReminderOption) {
       return 60 * 60 * 1000;
     case '1day':
       return 24 * 60 * 60 * 1000;
+    case 'atTime':
     case 'none':
     default:
       return 0;
@@ -164,7 +168,10 @@ export async function schedulePlannerReminder(
     };
   }
 
-  const reminderOffsetMs = getReminderOffsetMs(input.reminder);
+  const reminderOffsetMs = getReminderOffsetMs(
+    input.reminder,
+    input.manualReminderMinutes
+  );
   const scheduledDate = new Date(eventDate.getTime() - reminderOffsetMs);
 
   if (scheduledDate.getTime() <= Date.now()) {

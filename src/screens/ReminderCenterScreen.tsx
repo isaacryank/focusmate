@@ -28,10 +28,14 @@ function hasReminder(task: Task) {
 function getReminderLabel(task: Task) {
   if (!task.reminder || task.reminder === 'none') return 'No reminder';
 
+  if (task.reminder === 'atTime') return 'At time';
   if (task.reminder === '10min') return '10 min before';
   if (task.reminder === '30min') return '30 min before';
   if (task.reminder === '1hour') return '1 hour before';
   if (task.reminder === '1day') return '1 day before';
+  if (task.reminder === 'custom' && task.manualReminderMinutes) {
+    return `${task.manualReminderMinutes} min before`;
+  }
 
   return task.reminder;
 }

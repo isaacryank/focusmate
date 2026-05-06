@@ -8,7 +8,7 @@ import { useAuth } from '../lib/AuthContext';
 import { useTasks } from '../lib/TaskContext';
 import { useFocus } from '../lib/FocusContext';
 import { scheduleTestNotification } from '../lib/notificationUtils';
-import { TaskPriority } from '../types/task';
+import { ReminderOption, TaskPriority } from '../types/task';
 
 import ScreenContainer from '../components/ui/ScreenContainer';
 import SectionHeader from '../components/ui/SectionHeader';
@@ -219,7 +219,7 @@ export default function SettingsScreen() {
       location: string;
       priority: TaskPriority;
       plannerType: 'task' | 'meeting' | 'date';
-      reminder: 'none' | '10min' | '30min' | '1hour' | '1day';
+      reminder: ReminderOption;
     }[] = [
       {
         title: 'Prepare FYP presentation slides',

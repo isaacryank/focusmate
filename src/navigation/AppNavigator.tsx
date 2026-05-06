@@ -279,7 +279,7 @@ export default function AppNavigator() {
             <RootStack.Screen
               name="TaskDetails"
               component={TaskDetailsScreen}
-              options={{ title: 'Planner Details' }}
+              options={{ headerShown: false }}
             />
 
             <RootStack.Screen

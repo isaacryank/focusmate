@@ -8,6 +8,12 @@ import { Subtask } from '../types/task';
 import { theme } from '../theme';
 import { useTasks } from '../lib/TaskContext';
 import { generateMiloPlan } from '../lib/miloPlanner';
+import {
+  buildMiloSmartData,
+  calculateMiloUrgency,
+  generateMiloSmartNudges,
+  generateMiloSmartPlan,
+} from '../lib/miloSmartPlan';
 import { MiloMood, getTodayDate } from '../lib/miloPersonality';
 
 import ScreenContainer from '../components/ui/ScreenContainer';
@@ -105,6 +111,11 @@ export default function MiloPlanScreen({ navigation, route }: Props) {
     return generateMiloPlan(task);
   }, [task]);
 
+  const smartData = useMemo(() => {
+    if (!task) return null;
+    return buildMiloSmartData(task);
+  }, [task]);
+
   if (!task) {
     return (
       <ScreenContainer>
@@ -150,6 +161,9 @@ export default function MiloPlanScreen({ navigation, route }: Props) {
 
     await updateTask(task.id, {
       subtasks: [...existingSubtasks, ...generatedSubtasks],
+      miloSmartPlan: generateMiloSmartPlan(task),
+      miloSmartNudges: generateMiloSmartNudges(task),
+      miloUrgency: calculateMiloUrgency(task),
     });
 
     setNotice({
@@ -187,9 +201,9 @@ export default function MiloPlanScreen({ navigation, route }: Props) {
       <MiloMessageCard
         compact
         mood={mood}
-        title="Milo made a plan"
-        message="Small steps for this task."
-        tagline="One step at a time."
+        title="Milo Smart Plan"
+        message="Milo found a few tiny steps to make this easier."
+        tagline="This plan can be adjusted."
         primaryActionLabel="Add Checklist"
         onPrimaryActionPress={handleAddPlanToChecklist}
         secondaryActionLabel="Back"
@@ -204,14 +218,24 @@ export default function MiloPlanScreen({ navigation, route }: Props) {
         <View style={styles.aiTextArea}>
           <Text style={styles.aiTitle}>Milo's gentle plan</Text>
           <Text style={styles.aiText}>
-            Small steps to start.
+            Milo noticed this may need preparation before the deadline.
           </Text>
         </View>
       </View>
 
+      {smartData ? (
+        <View style={styles.chipCard}>
+          {smartData.chips.map((chip) => (
+            <View key={chip} style={styles.smartChip}>
+              <Text style={styles.smartChipText}>{chip}</Text>
+            </View>
+          ))}
+        </View>
+      ) : null}
+
       <SectionHeader
-        title="Suggested Plan"
-        subtitle="Small steps for this task."
+        title="Suggested Milo Smart Plan"
+        subtitle="Situation-aware steps for this planner item."
       />
 
       <View style={styles.planCard}>
@@ -222,7 +246,7 @@ export default function MiloPlanScreen({ navigation, route }: Props) {
 
       <View style={styles.buttonArea}>
         <AppButton
-          title="Add to Checklist"
+          title="Add to Smart Plan"
           onPress={handleAddPlanToChecklist}
           icon={
             <MaterialCommunityIcons
@@ -234,8 +258,28 @@ export default function MiloPlanScreen({ navigation, route }: Props) {
         />
       </View>
 
+      {smartData ? (
+        <>
+          <SectionHeader
+            title="Smart Nudges"
+            subtitle="These are planning suggestions, separate from the final reminder."
+          />
+
+          <View style={styles.nudgeCard}>
+            {smartData.nudges.map((nudge) => (
+              <View key={nudge.id} style={styles.nudgeItem}>
+                <Text style={styles.nudgeTitle}>{nudge.label}</Text>
+                <Text style={styles.nudgeText}>
+                  {nudge.timing} - {nudge.message}
+                </Text>
+              </View>
+            ))}
+          </View>
+        </>
+      ) : null}
+
       <SectionHeader
-        title="Current Checklist"
+        title="Current Milo Smart Plan"
         subtitle={
           existingSubtasks.length > 0
             ? `${completedSubtasks}/${existingSubtasks.length} completed`
@@ -346,6 +390,29 @@ const styles = StyleSheet.create({
     borderColor: theme.colors.border,
     ...theme.shadowSoft,
   },
+  chipCard: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    backgroundColor: theme.colors.surface,
+    borderRadius: theme.radius.lg,
+    padding: 12,
+    marginBottom: 18,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+  },
+  smartChip: {
+    backgroundColor: theme.colors.primarySoft,
+    borderRadius: theme.radius.pill,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    marginRight: 8,
+    marginBottom: 8,
+  },
+  smartChipText: {
+    color: theme.colors.primaryDark,
+    fontSize: 12,
+    fontWeight: '900',
+  },
   planStep: {
     flexDirection: 'row',
     alignItems: 'flex-start',
@@ -376,6 +443,32 @@ const styles = StyleSheet.create({
   },
   buttonArea: {
     marginBottom: 20,
+  },
+  nudgeCard: {
+    backgroundColor: theme.colors.surface,
+    borderRadius: theme.radius.xl,
+    padding: 14,
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    ...theme.shadowSoft,
+  },
+  nudgeItem: {
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: theme.colors.border,
+  },
+  nudgeTitle: {
+    color: theme.colors.text,
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  nudgeText: {
+    color: theme.colors.textSoft,
+    fontSize: 12,
+    fontWeight: '700',
+    lineHeight: 18,
+    marginTop: 4,
   },
   existingCard: {
     backgroundColor: theme.colors.surface,

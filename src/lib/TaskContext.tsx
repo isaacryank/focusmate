@@ -6,6 +6,10 @@ import {
   Subtask,
   Task,
   TaskPriority,
+  MiloConflictInfo,
+  MiloSmartNudge,
+  MiloSmartPlanStep,
+  MiloUrgencyLevel,
 } from '../types/task';
 import { cancelPlannerReminder } from './notificationUtils';
 
@@ -20,8 +24,18 @@ type AddTaskInput = {
   location?: string;
   reminder?: ReminderOption;
   notificationId?: string;
+  manualReminderMinutes?: number;
   plannerType?: PlannerType;
   priority: TaskPriority;
+  estimatedDurationMinutes?: number;
+  miloUrgency?: MiloUrgencyLevel;
+  miloSmartPlan?: MiloSmartPlanStep[];
+  miloSmartNudges?: MiloSmartNudge[];
+  conflictInfo?: MiloConflictInfo;
+  conflictAccepted?: boolean;
+  conflictWithTitle?: string;
+  conflictWithTime?: string;
+  conflictLevel?: MiloConflictInfo['level'];
   subtasks?: Subtask[];
 };
 
@@ -33,8 +47,18 @@ type UpdateTaskInput = Partial<{
   location?: string;
   reminder?: ReminderOption;
   notificationId?: string;
+  manualReminderMinutes?: number;
   plannerType?: PlannerType;
   priority: TaskPriority;
+  estimatedDurationMinutes?: number;
+  miloUrgency?: MiloUrgencyLevel;
+  miloSmartPlan?: MiloSmartPlanStep[];
+  miloSmartNudges?: MiloSmartNudge[];
+  conflictInfo?: MiloConflictInfo;
+  conflictAccepted?: boolean;
+  conflictWithTitle?: string;
+  conflictWithTime?: string;
+  conflictLevel?: MiloConflictInfo['level'];
   subtasks?: Subtask[];
 }>;
 
@@ -105,8 +129,18 @@ function normalizeTask(task: any): Task {
     location: task.location || '',
     reminder: task.reminder || 'none',
     notificationId: task.notificationId,
+    manualReminderMinutes: task.manualReminderMinutes,
     plannerType: task.plannerType || 'task',
     priority: task.priority || 'medium',
+    estimatedDurationMinutes: task.estimatedDurationMinutes,
+    miloUrgency: task.miloUrgency,
+    miloSmartPlan: Array.isArray(task.miloSmartPlan) ? task.miloSmartPlan : undefined,
+    miloSmartNudges: Array.isArray(task.miloSmartNudges) ? task.miloSmartNudges : undefined,
+    conflictInfo: task.conflictInfo,
+    conflictAccepted: Boolean(task.conflictAccepted),
+    conflictWithTitle: task.conflictWithTitle,
+    conflictWithTime: task.conflictWithTime,
+    conflictLevel: task.conflictLevel,
     status: task.status || 'pending',
     subtasks: Array.isArray(task.subtasks) ? task.subtasks : [],
     createdAt: task.createdAt || new Date().toISOString(),
@@ -164,8 +198,18 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
       location: task.location,
       reminder: task.reminder || 'none',
       notificationId: task.notificationId,
+      manualReminderMinutes: task.manualReminderMinutes,
       plannerType: task.plannerType || 'task',
       priority: task.priority,
+      estimatedDurationMinutes: task.estimatedDurationMinutes,
+      miloUrgency: task.miloUrgency,
+      miloSmartPlan: task.miloSmartPlan,
+      miloSmartNudges: task.miloSmartNudges,
+      conflictInfo: task.conflictInfo,
+      conflictAccepted: task.conflictAccepted,
+      conflictWithTitle: task.conflictWithTitle,
+      conflictWithTime: task.conflictWithTime,
+      conflictLevel: task.conflictLevel,
       status: 'pending',
       subtasks: task.subtasks || [],
       createdAt: new Date().toISOString(),
