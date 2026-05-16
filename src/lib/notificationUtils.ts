@@ -75,8 +75,17 @@ function getPlannerTypeLabel(type: PlannerType) {
 
 function getReminderOffsetMs(reminder: ReminderOption, manualReminderMinutes?: number) {
   switch (reminder) {
-    case 'custom':
+    case 'custom': {
+      if (
+        typeof manualReminderMinutes !== 'number' ||
+        !Number.isFinite(manualReminderMinutes) ||
+        manualReminderMinutes < 0
+      ) {
+        return null;
+      }
+
       return Math.max(manualReminderMinutes || 0, 0) * 60 * 1000;
+    }
     case '10min':
       return 10 * 60 * 1000;
     case '30min':
@@ -172,9 +181,20 @@ export async function schedulePlannerReminder(
     input.reminder,
     input.manualReminderMinutes
   );
+
+  if (reminderOffsetMs === null) {
+    return {
+      ok: false,
+      reason: 'Please choose a valid custom reminder time.',
+    };
+  }
+
   const scheduledDate = new Date(eventDate.getTime() - reminderOffsetMs);
 
-  if (scheduledDate.getTime() <= Date.now()) {
+  if (
+    !Number.isFinite(scheduledDate.getTime()) ||
+    scheduledDate.getTime() <= Date.now()
+  ) {
     return {
       ok: false,
       reason:

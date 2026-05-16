@@ -18,7 +18,13 @@ import {
   miloReactions,
 } from '../assets/generatedAssetMap';
 import { getMiloHomeHero } from '../lib/miloHomeHero';
-import { getTodayDate } from '../lib/miloPersonality';
+import {
+  getHomeMiloSummary,
+  getMiloRecommendedTasks,
+  getMiloSituationForTask,
+  MiloTaskSituation,
+  parseMiloTaskDateTime,
+} from '../lib/miloSituationIntelligence';
 import { getTaskUrgency, TaskUrgency } from '../lib/taskUrgency';
 import { useAuth } from '../lib/AuthContext';
 import { useTasks } from '../lib/TaskContext';
@@ -31,9 +37,9 @@ import ScreenContainer from '../components/ui/ScreenContainer';
 type HomeItem = {
   task: Task;
   urgency: TaskUrgency;
+  situation: MiloTaskSituation;
   categoryIcon: ImageSourcePropType;
   miloSticker: ImageSourcePropType;
-  isMeetingSoon: boolean;
 };
 
 const typeLabels: Record<Task['plannerType'], string> = {
@@ -63,40 +69,6 @@ const typeTone: Record<
   },
 };
 
-function parsePlannerDateTime(item: Task, fallbackEndOfDay = false) {
-  if (!item.dueDate) return null;
-
-  const [year, month, day] = item.dueDate.split('-').map(Number);
-  if (!year || !month || !day) return null;
-
-  const plannedDate = new Date(year, month - 1, day);
-
-  if (!item.dueTime) {
-    if (fallbackEndOfDay) plannedDate.setHours(23, 59, 0, 0);
-    return plannedDate;
-  }
-
-  const normalizedTime = item.dueTime
-    .trim()
-    .match(/^(\d{1,2}):(\d{2})\s*(AM|PM)?$/i);
-  if (!normalizedTime) return plannedDate;
-
-  const [, rawHour, rawMinute, meridiem] = normalizedTime;
-  let hour = Number(rawHour);
-  const minute = Number(rawMinute);
-
-  if (Number.isNaN(hour) || Number.isNaN(minute)) return plannedDate;
-
-  if (meridiem) {
-    const upperMeridiem = meridiem.toUpperCase();
-    if (upperMeridiem === 'PM' && hour < 12) hour += 12;
-    if (upperMeridiem === 'AM' && hour === 12) hour = 0;
-  }
-
-  plannedDate.setHours(hour, minute, 0, 0);
-  return plannedDate;
-}
-
 const weekdayLabels = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const monthLabels = [
   'Jan',
@@ -114,41 +86,12 @@ const monthLabels = [
 ];
 
 function getPlannerDateContext(item: Task) {
-  const plannedDate = parsePlannerDateTime(item);
+  const plannedDate = parseMiloTaskDateTime(item);
   if (!plannedDate) return 'Any day';
 
   return `${weekdayLabels[plannedDate.getDay()]}, ${plannedDate.getDate()} ${
     monthLabels[plannedDate.getMonth()]
   }`;
-}
-
-function isMeetingSoon(item: Task, now: Date, todayDate: string) {
-  if (
-    item.status === 'completed' ||
-    item.plannerType !== 'meeting' ||
-    item.dueDate !== todayDate
-  ) {
-    return false;
-  }
-
-  const plannedDate = parsePlannerDateTime(item);
-  if (!plannedDate || !item.dueTime) return false;
-
-  const minutesUntilMeeting =
-    (plannedDate.getTime() - now.getTime()) / (1000 * 60);
-
-  return minutesUntilMeeting >= 0 && minutesUntilMeeting <= 120;
-}
-
-function getAttentionRank(item: Task, now: Date, todayDate: string) {
-  const urgency = getTaskUrgency(item, now);
-
-  if (urgency.level === 'overdue') return 0;
-  if (urgency.level === 'urgent') return 1;
-  if (isMeetingSoon(item, now, todayDate)) return 2;
-  if (urgency.level === 'medium') return 3;
-  if (urgency.level === 'high') return 4;
-  return 5;
 }
 
 function getKeywordText(item: Task) {
@@ -183,11 +126,25 @@ function getCategoryIconKey(item: Task): CategoryIconKey {
   return 'study_book';
 }
 
-function getMiloSticker(item: Task, urgency: TaskUrgency): ImageSourcePropType {
+function getMiloSticker(
+  item: Task,
+  urgency: TaskUrgency,
+  situation: MiloTaskSituation
+): ImageSourcePropType {
   const text = getKeywordText(item);
 
-  if (urgency.level === 'overdue') return miloReactions.worried;
-  if (urgency.level === 'urgent') return miloReactions.determined_lock_in;
+  if (['overdue', 'missed'].includes(situation.kind)) return miloReactions.worried;
+  if (
+    ['happening_now', 'starting_soon', 'accepted_overlap', 'high_focus'].includes(
+      situation.kind
+    )
+  ) {
+    return miloReactions.determined_lock_in;
+  }
+  if (['due_today', 'due_tonight', 'all_day'].includes(situation.kind)) {
+    return miloActivities.holding_calendar;
+  }
+  if (situation.kind === 'start_early') return miloActivities.checklist_clipboard;
   if (urgency.level === 'done') return miloReactions.proud;
   if (urgency.level === 'medium') return miloReactions.cheering;
   if (includesAny(text, ['birthday'])) return miloActivities.birthday_cake;
@@ -223,6 +180,37 @@ function getUrgencyColors(urgency: TaskUrgency) {
     default:
       return { color: theme.colors.muted, backgroundColor: theme.colors.background };
   }
+}
+
+function getSituationColors(situation: MiloTaskSituation, urgency: TaskUrgency) {
+  switch (situation.kind) {
+    case 'overdue':
+    case 'missed':
+      return { color: theme.colors.danger, backgroundColor: theme.colors.dangerSoft };
+    case 'happening_now':
+    case 'starting_soon':
+    case 'high_focus':
+      return { color: '#D97706', backgroundColor: '#FFF2DC' };
+    case 'accepted_overlap':
+      return { color: '#92400E', backgroundColor: theme.colors.yellowSoft };
+    case 'due_today':
+      return { color: theme.colors.primaryDark, backgroundColor: theme.colors.primarySoft };
+    case 'due_tonight':
+      return { color: '#9A6B00', backgroundColor: theme.colors.yellowSoft };
+    case 'all_day':
+      return { color: theme.colors.blue, backgroundColor: theme.colors.blueSoft };
+    case 'start_early':
+      return { color: theme.colors.primaryDark, backgroundColor: theme.colors.primarySoft };
+    default:
+      return getUrgencyColors(urgency);
+  }
+}
+
+function getItemTimeLabel(task: Task, situation: MiloTaskSituation) {
+  if (situation.kind === 'all_day') return 'All Day';
+  if (task.dueTime) return task.dueTime;
+  if (situation.kind === 'due_today') return 'Today';
+  return 'Anytime';
 }
 
 type StatIconName = React.ComponentProps<typeof Ionicons>['name'];
@@ -295,9 +283,8 @@ function MiloTaskRow({
   item: HomeItem;
   onPress: () => void;
 }) {
-  const { task, urgency, categoryIcon, miloSticker, isMeetingSoon: meetingSoon } = item;
-  const urgencyColors = getUrgencyColors(urgency);
-  const urgencyLabel = meetingSoon ? 'Soon' : urgency.label;
+  const { task, urgency, situation, categoryIcon, miloSticker } = item;
+  const urgencyColors = getSituationColors(situation, urgency);
   const tone = typeTone[task.plannerType];
   const dateContext = getPlannerDateContext(task);
 
@@ -332,7 +319,7 @@ function MiloTaskRow({
             ]}
           >
             <Text style={[styles.itemUrgencyText, { color: urgencyColors.color }]}>
-              {urgencyLabel}
+              {situation.label}
             </Text>
           </View>
           <Text numberOfLines={1} style={styles.itemDateContext}>
@@ -342,7 +329,7 @@ function MiloTaskRow({
       </View>
 
       <Text numberOfLines={1} style={styles.itemTime}>
-        {task.dueTime || (task.dueDate ? 'Today' : 'Anytime')}
+        {getItemTimeLabel(task, situation)}
       </Text>
       <Ionicons name="chevron-forward" size={20} color={theme.colors.muted} />
     </TouchableOpacity>
@@ -355,70 +342,30 @@ export default function HomeScreen() {
   const { tasks } = useTasks();
   const { width } = useWindowDimensions();
 
-  const todayDate = getTodayDate();
   const compactWidth = width < 380;
 
   const homeInsights = useMemo(() => {
     const now = new Date();
-    const todayItems = tasks.filter((task) => task.dueDate === todayDate);
-    const pendingItems = tasks.filter((task) => task.status === 'pending');
-
-    const overdueItems = pendingItems.filter(
-      (task) => getTaskUrgency(task, now).level === 'overdue'
-    );
-    const dueTodayItems = pendingItems.filter(
-      (task) => getTaskUrgency(task, now).level === 'urgent'
-    );
-    const startEarlyItems = pendingItems.filter(
-      (task) => getTaskUrgency(task, now).level === 'medium'
-    );
-    const meetingSoonItems = pendingItems.filter((task) =>
-      isMeetingSoon(task, now, todayDate)
-    );
-
-    const attentionItems = [...pendingItems]
-      .sort((a, b) => {
-        const rankA = getAttentionRank(a, now, todayDate);
-        const rankB = getAttentionRank(b, now, todayDate);
-        if (rankA !== rankB) return rankA - rankB;
-
-        const urgencyA = getTaskUrgency(a, now);
-        const urgencyB = getTaskUrgency(b, now);
-        if (urgencyA.score !== urgencyB.score) return urgencyB.score - urgencyA.score;
-
-        const dateA = parsePlannerDateTime(a, true)?.getTime() || Number.MAX_SAFE_INTEGER;
-        const dateB = parsePlannerDateTime(b, true)?.getTime() || Number.MAX_SAFE_INTEGER;
-        return dateA - dateB;
-      })
+    const summary = getHomeMiloSummary(tasks, now);
+    const attentionItems = getMiloRecommendedTasks(tasks, now)
       .slice(0, 4)
       .map((task) => {
         const urgency = getTaskUrgency(task, now);
+        const situation = getMiloSituationForTask(task, now);
         return {
           task,
           urgency,
+          situation,
           categoryIcon: categoryIcons[getCategoryIconKey(task)],
-          miloSticker: getMiloSticker(task, urgency),
-          isMeetingSoon: isMeetingSoon(task, now, todayDate),
+          miloSticker: getMiloSticker(task, urgency, situation),
         };
       });
 
-    const totalToday = todayItems.length;
-
     return {
-      tasksToday: todayItems.filter((task) => task.plannerType === 'task').length,
-      meetingsToday: todayItems.filter((task) => task.plannerType === 'meeting').length,
-      datesToday: todayItems.filter((task) => task.plannerType === 'date').length,
-      doneToday: todayItems.filter((task) => task.status === 'completed').length,
-      totalToday,
-      overdue: overdueItems.length,
-      dueToday: dueTodayItems.length,
-      startEarly: startEarlyItems.length,
-      meetingSoon: meetingSoonItems.length,
-      reminderCount:
-        overdueItems.length + dueTodayItems.length + meetingSoonItems.length,
+      ...summary,
       attentionItems,
     };
-  }, [tasks, todayDate]);
+  }, [tasks]);
 
   const displayName = userName?.trim() || 'Isaac';
   const heroMiloSize = Math.min(compactWidth ? 170 : 196, width * 0.5);
@@ -433,6 +380,8 @@ export default function HomeScreen() {
     dueToday: homeInsights.dueToday,
     startEarly: homeInsights.startEarly,
     meetingSoon: homeInsights.meetingSoon,
+    smartSituation: homeInsights.strongestSituation,
+    packedDay: homeInsights.packedDay,
   });
 
   return (

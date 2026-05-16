@@ -19,6 +19,7 @@ import { theme } from '../theme';
 import { useTasks } from '../lib/TaskContext';
 import { useFocus } from '../lib/FocusContext';
 import { getMiloImageSource } from '../components/milo/MiloMoodImage';
+import { getTopMiloRecommendedTask } from '../lib/miloSituationIntelligence';
 
 const focusOptions = [5, 15, 25, 45];
 
@@ -84,19 +85,9 @@ export default function FocusSessionScreen() {
     return todayFocusSessions.reduce((total, session) => total + session.minutes, 0);
   }, [todayFocusSessions]);
 
-  const pendingTasks = useMemo(() => {
-    return tasks.filter((task) => task.status === 'pending');
-  }, [tasks]);
-
   const suggestedTask = useMemo(() => {
-    const highPriorityTask = pendingTasks.find((task) => task.priority === 'high');
-
-    if (highPriorityTask) {
-      return highPriorityTask;
-    }
-
-    return pendingTasks[0];
-  }, [pendingTasks]);
+    return getTopMiloRecommendedTask(tasks, new Date());
+  }, [tasks]);
 
   const progress = totalSeconds === 0 ? 0 : 1 - remainingSeconds / totalSeconds;
   const progressPercent = Math.round(progress * 100);
@@ -319,7 +310,7 @@ export default function FocusSessionScreen() {
 
               <Text style={styles.suggestedSubtitle}>
                 {suggestedTask
-                  ? 'Milo recommends focusing on this item first.'
+                  ? 'Milo thinks this should come first.'
                   : 'Create a task first, then come back to focus mode.'}
               </Text>
             </View>

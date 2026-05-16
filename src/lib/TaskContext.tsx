@@ -67,7 +67,7 @@ type TaskContextType = {
   isLoadingTasks: boolean;
   addTask: (task: AddTaskInput) => void;
   updateTask: (id: string, updates: UpdateTaskInput) => Promise<void>;
-  toggleTask: (id: string) => void;
+  toggleTask: (id: string) => Promise<void>;
   deleteTask: (id: string) => Promise<void>;
   clearAllTasks: () => Promise<void>;
 };
@@ -246,13 +246,22 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
     );
   };
 
-  const toggleTask = (id: string) => {
+  const toggleTask = async (id: string) => {
+    const existingTask = tasks.find((task) => task.id === id);
+    const isMarkingDone = existingTask?.status === 'pending';
+
+    if (isMarkingDone && existingTask?.notificationId) {
+      await cancelPlannerReminder(existingTask.notificationId);
+    }
+
     setTasks((current) =>
       current.map((task) =>
         task.id === id
           ? {
               ...task,
               status: task.status === 'completed' ? 'pending' : 'completed',
+              notificationId:
+                task.status === 'pending' ? undefined : task.notificationId,
             }
           : task
       )

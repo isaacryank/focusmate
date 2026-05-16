@@ -14,6 +14,11 @@ import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 
 import { theme } from '../theme';
 import { useTasks } from '../lib/TaskContext';
+import {
+  getMiloRecommendedTasks,
+  getMiloSituationForTask,
+  getTopMiloRecommendedTask,
+} from '../lib/miloSituationIntelligence';
 import { Task } from '../types/task';
 
 const miloFocusedImage = require('../../assets/mascot/milo_focused.png');
@@ -36,6 +41,23 @@ function getReadableToday() {
     month: 'long',
     day: 'numeric',
   });
+}
+
+function getPrioritySortRank(priority: Task['priority']) {
+  if (priority === 'high') return 0;
+  if (priority === 'medium') return 1;
+  return 2;
+}
+
+function compareByPriorityAndTime(a: Task, b: Task) {
+  const firstPriority = getPrioritySortRank(a.priority);
+  const secondPriority = getPrioritySortRank(b.priority);
+
+  if (firstPriority !== secondPriority) {
+    return firstPriority - secondPriority;
+  }
+
+  return (a.dueTime || '').localeCompare(b.dueTime || '');
 }
 
 function getTypeConfig(task: Task) {
@@ -155,58 +177,54 @@ export default function TodayPlanScreen() {
 
   const todayDate = getTodayDate();
 
-  const todayItems = useMemo(() => {
-    return tasks
-      .filter((task) => task.dueDate === todayDate)
-      .sort((a, b) => {
-        const firstPriority = a.priority === 'high' ? 0 : a.priority === 'medium' ? 1 : 2;
-        const secondPriority = b.priority === 'high' ? 0 : b.priority === 'medium' ? 1 : 2;
+  const planInsights = useMemo(() => {
+    const now = new Date();
+    const todaysTasks = tasks.filter((task) => task.dueDate === todayDate);
+    const sortedPendingToday = getMiloRecommendedTasks(todaysTasks, now);
+    const sortedCompletedToday = todaysTasks
+      .filter((task) => task.status === 'completed')
+      .sort(compareByPriorityAndTime);
+    const recommendedTask = getTopMiloRecommendedTask(tasks, now);
 
-        if (firstPriority !== secondPriority) {
-          return firstPriority - secondPriority;
-        }
-
-        return (a.dueTime || '').localeCompare(b.dueTime || '');
-      });
+    return {
+      todayItems: [...sortedPendingToday, ...sortedCompletedToday],
+      recommendedTask,
+      recommendedSituation: recommendedTask
+        ? getMiloSituationForTask(recommendedTask, now)
+        : undefined,
+    };
   }, [tasks, todayDate]);
 
+  const todayItems = planInsights.todayItems;
   const pendingTodayItems = todayItems.filter((task) => task.status === 'pending');
   const completedTodayItems = todayItems.filter((task) => task.status === 'completed');
 
   const meetingsToday = todayItems.filter((task) => task.plannerType === 'meeting').length;
   const datesToday = todayItems.filter((task) => task.plannerType === 'date').length;
-  const highPriorityToday = todayItems.filter((task) => task.priority === 'high').length;
-
-  const recommendedTask = useMemo(() => {
-    const highPriority = pendingTodayItems.find((task) => task.priority === 'high');
-
-    if (highPriority) {
-      return highPriority;
-    }
-
-    const meeting = pendingTodayItems.find((task) => task.plannerType === 'meeting');
-
-    if (meeting) {
-      return meeting;
-    }
-
-    return pendingTodayItems[0];
-  }, [pendingTodayItems]);
+  const highPriorityToday = pendingTodayItems.filter((task) => task.priority === 'high').length;
+  const recommendedTask = planInsights.recommendedTask;
+  const recommendedSituation = planInsights.recommendedSituation;
+  const hasActiveRecommendation = Boolean(recommendedTask);
+  const recommendedNeedsRecovery = recommendedSituation
+    ? ['overdue', 'missed'].includes(recommendedSituation.kind)
+    : false;
 
   const miloImage =
-    pendingTodayItems.length === 0 && todayItems.length > 0
+    !hasActiveRecommendation && pendingTodayItems.length === 0 && todayItems.length > 0
       ? miloHappyImage
+      : recommendedNeedsRecovery
+      ? miloWorriedImage
       : highPriorityToday > 0
       ? miloWorriedImage
-      : todayItems.length > 0
+      : todayItems.length > 0 || hasActiveRecommendation
       ? miloFocusedImage
       : miloWavingImage;
 
   const miloMessage =
-    pendingTodayItems.length === 0 && todayItems.length > 0
+    recommendedTask
+      ? `Start with "${recommendedTask.title}". Milo thinks this should come first.`
+      : pendingTodayItems.length === 0 && todayItems.length > 0
       ? 'Great job! Everything planned for today is completed.'
-      : recommendedTask
-      ? `Start with "${recommendedTask.title}". I think this should come first.`
       : 'You have no planned item today. We can create one if needed.';
 
   return (
@@ -273,7 +291,7 @@ export default function TodayPlanScreen() {
                   {recommendedTask.title}
                 </Text>
                 <Text style={styles.recommendText}>
-                  This is the best item to start with based on priority and type.
+                  Milo sorted this first using timing, urgency, and focus needs.
                 </Text>
               </View>
             </View>
