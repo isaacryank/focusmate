@@ -234,6 +234,9 @@ function FilterChip({
       accessibilityLabel={label}
     >
       <Text
+        numberOfLines={1}
+        adjustsFontSizeToFit
+        minimumFontScale={0.86}
         style={[
           styles.filterText,
           selected && styles.filterTextSelected,
@@ -422,7 +425,12 @@ function ReminderAccordionCard({
                 },
               ]}
             >
-              <Text style={[styles.taskUrgencyText, { color: statusAccent }]}>
+              <Text
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.86}
+                style={[styles.taskUrgencyText, { color: statusAccent }]}
+              >
                 {urgency.label}
               </Text>
             </View>
@@ -962,6 +970,7 @@ const styles = StyleSheet.create({
     marginRight: 7,
   },
   taskUrgencyText: {
+    flexShrink: 1,
     fontSize: 10,
     fontWeight: '900',
   },

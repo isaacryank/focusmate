@@ -25,6 +25,10 @@ import { theme } from '../theme';
 import { useAuth } from '../lib/AuthContext';
 import { useTasks } from '../lib/TaskContext';
 import { getTodayDate, MiloMood } from '../lib/miloPersonality';
+import {
+  isActiveWarningCandidate,
+  isAllDayOrPlaceholder,
+} from '../lib/miloSituationIntelligence';
 import { compareTasksByUrgency, getTaskUrgency } from '../lib/taskUrgency';
 import { Task } from '../types/task';
 
@@ -53,7 +57,6 @@ const overlapTypes = [
   'hard_overlap',
   'ongoing_overlap',
   'soft_overlap',
-  'whole_day',
   'accepted_overlap',
 ];
 
@@ -128,6 +131,10 @@ function countDirectOverlaps(tasks: Task[]) {
     for (let nextIndex = index + 1; nextIndex < tasks.length; nextIndex += 1) {
       const first = tasks[index];
       const second = tasks[nextIndex];
+
+      if (isAllDayOrPlaceholder(first) || isAllDayOrPlaceholder(second)) {
+        continue;
+      }
 
       if (!first.dueDate || !second.dueDate || first.dueDate !== second.dueDate) {
         continue;
@@ -316,15 +323,16 @@ export default function CompanionScreen() {
   const companionData = useMemo(() => {
     const now = new Date();
     const pendingTasks = tasks.filter(isPendingTask);
+    const warningTasks = pendingTasks.filter(isActiveWarningCandidate);
     const rankedTasks = [...pendingTasks].sort(compareTasksByUrgency);
     const firstTask = rankedTasks[0];
-    const overdueItems = pendingTasks.filter(
+    const overdueItems = warningTasks.filter(
       (task) => getTaskUrgency(task, now).level === 'overdue'
     );
-    const dueTodayItems = pendingTasks.filter(
+    const dueTodayItems = warningTasks.filter(
       (task) => getTaskUrgency(task, now).level === 'urgent'
     );
-    const startEarlyItems = pendingTasks.filter(
+    const startEarlyItems = warningTasks.filter(
       (task) => getTaskUrgency(task, now).level === 'medium'
     );
     const meetingTodayItems = pendingTasks.filter(
@@ -611,7 +619,7 @@ export default function CompanionScreen() {
       <View style={styles.header}>
         <View style={styles.headerTextBlock}>
           <Text style={styles.headerTitle}>Companion</Text>
-          <Text style={styles.headerSubtitle}>Chat and plan with Milo 💚</Text>
+          <Text style={styles.headerSubtitle}>Chat and plan with Milo</Text>
         </View>
 
         <TouchableOpacity
@@ -700,7 +708,7 @@ export default function CompanionScreen() {
         </View>
       </View>
 
-      <Text style={styles.tapHint}>Tap Milo to chat 💚</Text>
+      <Text style={styles.tapHint}>Tap Milo to chat</Text>
 
       <View style={styles.sectionBlock}>
         <Text style={styles.sectionTitle}>Ask Milo anything</Text>

@@ -357,12 +357,12 @@ export default function TaskDetailsScreen({ navigation, route }: Props) {
 
   const heroMessage =
     task.status === 'completed'
-      ? 'You did it. Milo is proud 💚'
+      ? 'You did it. Milo is proud'
       : smartNudges.length > 1
       ? 'Your smart plan is ready. Milo can nudge you too.'
       : task.miloSmartPlan?.length
       ? 'Milo made a plan and a few nudges for you.'
-      : 'I made a little plan for you 💚';
+      : 'I made a little plan for you';
 
   const focusActionLabel =
     task.plannerType === 'meeting'

@@ -6,6 +6,9 @@ const STARTING_SOON_MINUTES = 15;
 const TONIGHT_START_HOUR = 20;
 const WHOLE_DAY_MINUTES = 24 * 60;
 
+type TimeSafetyTask = Pick<Task, 'dueTime' | 'estimatedDurationMinutes'> &
+  Partial<Pick<Task, 'dueDate' | 'status'>>;
+
 export type MiloSituationKind =
   | 'done'
   | 'overdue'
@@ -103,14 +106,14 @@ const situationCopy: Record<MiloSituationKind, SituationCopy> = {
   },
   starting_soon: {
     label: 'Starting soon',
-    message: 'This starts soon. Lets get ready.',
+    message: "This starts soon. Let's get ready.",
     heroRank: 3,
     sortRank: 3,
     isActive: true,
   },
   accepted_overlap: {
     label: 'Keep Both',
-    message: 'You chose Keep Both. Ill remind you to stay focused.',
+    message: "You chose Keep Both. I'll remind you to stay focused.",
     heroRank: 7,
     sortRank: 7,
     isActive: true,
@@ -124,14 +127,14 @@ const situationCopy: Record<MiloSituationKind, SituationCopy> = {
   },
   due_today: {
     label: 'Due Today',
-    message: 'Lets handle what matters today.',
+    message: "Let's handle what matters today.",
     heroRank: 4,
     sortRank: 4,
     isActive: true,
   },
   due_tonight: {
     label: 'Due Tonight',
-    message: 'You still have time, but dont leave it too late.',
+    message: "You still have time, but don't leave it too late.",
     heroRank: 5,
     sortRank: 5,
     isActive: true,
@@ -233,6 +236,45 @@ function parseTimeValue(timeValue?: string) {
   };
 }
 
+export function parseTimeMinutes(timeValue?: string) {
+  const cleanedTime = cleanText(timeValue);
+  if (!cleanedTime) return Number.MAX_SAFE_INTEGER;
+
+  const time = parseTimeValue(cleanedTime);
+  if (!time) return Number.MAX_SAFE_INTEGER - 1;
+
+  return time.hour * 60 + time.minute;
+}
+
+function hasClockTime(item: TimeSafetyTask) {
+  return parseTimeMinutes(item.dueTime) < Number.MAX_SAFE_INTEGER - 1;
+}
+
+export function isMidnightPlaceholder(item: TimeSafetyTask) {
+  const duration = item.estimatedDurationMinutes || 0;
+
+  return (
+    hasClockTime(item) &&
+    parseTimeMinutes(item.dueTime) === 0 &&
+    (duration <= 0 || duration >= WHOLE_DAY_MINUTES)
+  );
+}
+
+export function isAllDayOrPlaceholder(item: TimeSafetyTask) {
+  const duration = item.estimatedDurationMinutes || 0;
+
+  return duration >= WHOLE_DAY_MINUTES || isMidnightPlaceholder(item);
+}
+
+export function isActiveWarningCandidate(item: Task) {
+  return (
+    item.status !== 'completed' &&
+    Boolean(cleanText(item.dueDate)) &&
+    hasClockTime(item) &&
+    !isAllDayOrPlaceholder(item)
+  );
+}
+
 function buildDateTime(date: Date, hour: number, minute: number) {
   const dateTime = new Date(date);
   dateTime.setHours(hour, minute, 0, 0);
@@ -277,9 +319,9 @@ function getTaskSchedule(task: Task) {
     start,
     end,
     hasTime: Boolean(time),
-    isMidnightStart: Boolean(time?.isMidnight),
+    isMidnightStart: Boolean(time?.isMidnight && isMidnightPlaceholder(task)),
     duration,
-    isWholeDay: Boolean(duration && duration >= WHOLE_DAY_MINUTES),
+    isWholeDay: isAllDayOrPlaceholder(task),
   };
 }
 
@@ -563,6 +605,7 @@ export function getHomeMiloSummary(
   const todayItems = tasks.filter((task) => task.dueDate === todayKey);
   const pendingItems = tasks.filter((task) => task.status !== 'completed');
   const pendingTodayItems = pendingItems.filter((task) => task.dueDate === todayKey);
+  const activeWarningTodayItems = pendingTodayItems.filter(isActiveWarningCandidate);
   const situationItems = pendingItems.map((task) => ({
     task,
     situation: getMiloSituationForTask(task, now),
@@ -574,11 +617,10 @@ export function getHomeMiloSummary(
   const startingSoon = getSituationCount(situationItems, 'starting_soon');
   const acceptedOverlap = getSituationCount(situationItems, 'accepted_overlap');
   const dueTonight = getSituationCount(situationItems, 'due_tonight');
-  const dueTodaySituation = getSituationCount(situationItems, 'due_today');
   const highFocus = getSituationCount(situationItems, 'high_focus');
   const startEarly = getSituationCount(situationItems, 'start_early');
   const allDay = getSituationCount(situationItems, 'all_day');
-  const dueToday = pendingTodayItems.length;
+  const dueToday = activeWarningTodayItems.length;
   const meetingSoon = situationItems.filter(
     (item) =>
       item.task.plannerType === 'meeting' &&
@@ -629,9 +671,8 @@ export function getHomeMiloSummary(
       happeningNow +
       startingSoon +
       acceptedOverlap +
-      dueTodaySituation +
+      dueToday +
       dueTonight +
-      allDay +
       highFocus,
     packedDay,
     strongestSituation,

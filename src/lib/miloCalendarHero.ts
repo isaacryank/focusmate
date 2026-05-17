@@ -2,6 +2,7 @@ import { ImageSourcePropType } from 'react-native';
 
 import { miloActivities, miloReactions } from '../assets/generatedAssetMap';
 import { Task } from '../types/task';
+import { isActiveWarningCandidate } from './miloSituationIntelligence';
 import { getTaskUrgency } from './taskUrgency';
 
 export type MiloCalendarHero = {
@@ -16,13 +17,14 @@ export function getMiloCalendarHero(items: Task[]): MiloCalendarHero {
   const pendingItems = items.filter((item) => item.status !== 'completed');
   const completedItems = items.filter((item) => item.status === 'completed');
   const urgentItems = pendingItems.filter((item) =>
+    isActiveWarningCandidate(item) &&
     ['overdue', 'urgent', 'high'].includes(getTaskUrgency(item).level)
   );
 
   if (items.length > 0 && completedItems.length === items.length) {
     return {
       moodLabel: 'Proud Milo',
-      headline: 'You wrapped up\nthis date. 💚',
+      headline: 'You wrapped up\nthis date.',
       line1: `${completedItems.length} item${completedItems.length === 1 ? '' : 's'} done,`,
       line2: 'Milo is proud of you.',
       miloAsset: miloReactions.proud,
@@ -47,7 +49,7 @@ export function getMiloCalendarHero(items: Task[]): MiloCalendarHero {
 
     return {
       moodLabel: 'Focused Milo',
-      headline: 'Milo is watching\nthis date. 💚',
+      headline: 'Milo is watching\nthis date.',
       line1: `${meetings} meeting${meetings === 1 ? '' : 's'} soon,`,
       line2: `${laterCount} task${laterCount === 1 ? '' : 's'} later.`,
       miloAsset: meetings > 0 ? miloActivities.online_meeting : miloActivities.holding_calendar,

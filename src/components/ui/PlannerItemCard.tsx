@@ -60,7 +60,7 @@ export default function PlannerItemCard({
   const urgency = getTaskUrgency(task);
   const subtasks = task.subtasks || [];
   const completedSubtasks = subtasks.filter((item) => item.completed).length;
-  const dueText = [task.dueDate, task.dueTime].filter(Boolean).join(' • ');
+  const dueText = [task.dueDate, task.dueTime].filter(Boolean).join(' - ');
 
   return (
     <TouchableOpacity
@@ -115,7 +115,12 @@ export default function PlannerItemCard({
               },
             ]}
           >
-            <Text style={[styles.urgencyText, { color: statusAccent }]}>
+            <Text
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.86}
+              style={[styles.urgencyText, { color: statusAccent }]}
+            >
               {urgency.label}
             </Text>
           </View>
@@ -221,6 +226,7 @@ const styles = StyleSheet.create({
     marginRight: 7,
   },
   urgencyText: {
+    flexShrink: 1,
     fontSize: 10,
     fontWeight: '900',
   },

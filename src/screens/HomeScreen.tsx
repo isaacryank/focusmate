@@ -269,7 +269,12 @@ function CountChip({
   return (
     <View style={[styles.countChip, { backgroundColor: colors.backgroundColor }]}>
       <Ionicons name={iconName} size={14} color={colors.color} />
-      <Text style={[styles.countChipText, { color: colors.color }]}>
+      <Text
+        numberOfLines={1}
+        adjustsFontSizeToFit
+        minimumFontScale={0.82}
+        style={[styles.countChipText, { color: colors.color }]}
+      >
         {count} {label}
       </Text>
     </View>
@@ -308,7 +313,7 @@ function MiloTaskRow({
         </Text>
         <View style={styles.itemMetaRow}>
           <View style={[styles.typeChip, { backgroundColor: tone.chipBackground }]}>
-            <Text style={[styles.typeChipText, { color: tone.color }]}>
+            <Text numberOfLines={1} style={[styles.typeChipText, { color: tone.color }]}>
               {typeLabels[task.plannerType]}
             </Text>
           </View>
@@ -318,7 +323,12 @@ function MiloTaskRow({
               { backgroundColor: urgencyColors.backgroundColor },
             ]}
           >
-            <Text style={[styles.itemUrgencyText, { color: urgencyColors.color }]}>
+            <Text
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.84}
+              style={[styles.itemUrgencyText, { color: urgencyColors.color }]}
+            >
               {situation.label}
             </Text>
           </View>
@@ -918,6 +928,7 @@ const styles = StyleSheet.create({
     marginHorizontal: 4,
   },
   countChipText: {
+    flexShrink: 1,
     marginLeft: 4,
     fontSize: 10,
     fontWeight: '900',
@@ -1051,6 +1062,7 @@ const styles = StyleSheet.create({
     marginLeft: 4,
   },
   itemUrgencyText: {
+    flexShrink: 1,
     fontSize: 9,
     fontWeight: '900',
   },

@@ -17,7 +17,6 @@ import { useTasks } from '../lib/TaskContext';
 import {
   getMiloRecommendedTasks,
   getMiloSituationForTask,
-  getTopMiloRecommendedTask,
 } from '../lib/miloSituationIntelligence';
 import { Task } from '../types/task';
 
@@ -97,18 +96,44 @@ function TodayItemCard({
   const typeConfig = getTypeConfig(task);
   const checklistCount = task.subtasks?.length || 0;
   const checklistDone = task.subtasks?.filter((item) => item.completed).length || 0;
+  const isCompleted = task.status === 'completed';
 
   return (
-    <TouchableOpacity activeOpacity={0.85} style={styles.itemCard} onPress={onPress}>
-      <View style={[styles.itemAccent, { backgroundColor: typeConfig.color }]} />
+    <TouchableOpacity
+      activeOpacity={0.85}
+      style={[styles.itemCard, isCompleted && styles.itemCardCompleted]}
+      onPress={onPress}
+    >
+      <View
+        style={[
+          styles.itemAccent,
+          { backgroundColor: isCompleted ? theme.colors.success : typeConfig.color },
+        ]}
+      />
 
-      <View style={[styles.itemIcon, { backgroundColor: typeConfig.background }]}>
-        <Ionicons name={typeConfig.icon} size={20} color={typeConfig.color} />
+      <View
+        style={[
+          styles.itemIcon,
+          {
+            backgroundColor: isCompleted
+              ? theme.colors.successSoft
+              : typeConfig.background,
+          },
+        ]}
+      >
+        <Ionicons
+          name={isCompleted ? 'checkmark-circle' : typeConfig.icon}
+          size={20}
+          color={isCompleted ? theme.colors.success : typeConfig.color}
+        />
       </View>
 
       <View style={styles.itemTextArea}>
         <View style={styles.itemTopRow}>
-          <Text style={styles.itemTitle} numberOfLines={1}>
+          <Text
+            style={[styles.itemTitle, isCompleted && styles.itemTitleCompleted]}
+            numberOfLines={1}
+          >
             {task.title}
           </Text>
 
@@ -117,9 +142,18 @@ function TodayItemCard({
               {typeConfig.label}
             </Text>
           </View>
+
+          {isCompleted ? (
+            <View style={styles.donePill}>
+              <Text style={styles.donePillText}>Done</Text>
+            </View>
+          ) : null}
         </View>
 
-        <Text style={styles.itemDescription} numberOfLines={2}>
+        <Text
+          style={[styles.itemDescription, isCompleted && styles.itemDescriptionCompleted]}
+          numberOfLines={2}
+        >
           {task.description || 'No description added'}
         </Text>
 
@@ -165,7 +199,7 @@ function EmptyTodayCard({
       </Text>
 
       <TouchableOpacity activeOpacity={0.85} style={styles.emptyButton} onPress={onAdd}>
-        <Text style={styles.emptyButtonText}>Add Today’s Item</Text>
+        <Text style={styles.emptyButtonText}>Add Today's Item</Text>
       </TouchableOpacity>
     </View>
   );
@@ -184,7 +218,7 @@ export default function TodayPlanScreen() {
     const sortedCompletedToday = todaysTasks
       .filter((task) => task.status === 'completed')
       .sort(compareByPriorityAndTime);
-    const recommendedTask = getTopMiloRecommendedTask(tasks, now);
+    const recommendedTask = sortedPendingToday[0];
 
     return {
       todayItems: [...sortedPendingToday, ...sortedCompletedToday],
@@ -225,7 +259,7 @@ export default function TodayPlanScreen() {
       ? `Start with "${recommendedTask.title}". Milo thinks this should come first.`
       : pendingTodayItems.length === 0 && todayItems.length > 0
       ? 'Great job! Everything planned for today is completed.'
-      : 'You have no planned item today. We can create one if needed.';
+      : 'Milo sees a calm day. Nothing active needs focus right now.';
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -240,7 +274,7 @@ export default function TodayPlanScreen() {
           style={styles.heroCard}
         >
           <View style={styles.heroTextArea}>
-            <Text style={styles.heroLabel}>Today’s Plan</Text>
+            <Text style={styles.heroLabel}>Today's Plan</Text>
             <Text style={styles.heroTitle}>{getReadableToday()}</Text>
             <Text style={styles.heroSubtitle}>{miloMessage}</Text>
           </View>
@@ -300,7 +334,9 @@ export default function TodayPlanScreen() {
               <TouchableOpacity
                 activeOpacity={0.85}
                 style={styles.focusButton}
-                onPress={() => navigation.navigate('FocusSession')}
+                onPress={() =>
+                  navigation.navigate('FocusSession', { taskId: recommendedTask.id })
+                }
               >
                 <MaterialCommunityIcons name="target" size={20} color="#FFFFFF" />
                 <Text style={styles.focusButtonText}>Focus on This</Text>
@@ -580,6 +616,9 @@ const styles = StyleSheet.create({
     borderColor: theme.colors.border,
     ...theme.shadow,
   },
+  itemCardCompleted: {
+    opacity: 0.72,
+  },
   itemAccent: {
     position: 'absolute',
     left: 0,
@@ -610,6 +649,10 @@ const styles = StyleSheet.create({
     fontSize: 15,
     paddingRight: 8,
   },
+  itemTitleCompleted: {
+    color: theme.colors.muted,
+    textDecorationLine: 'line-through',
+  },
   typePill: {
     borderRadius: 999,
     paddingHorizontal: 9,
@@ -619,12 +662,27 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     fontSize: 11,
   },
+  donePill: {
+    borderRadius: 999,
+    backgroundColor: theme.colors.successSoft,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    marginLeft: 6,
+  },
+  donePillText: {
+    color: theme.colors.success,
+    fontWeight: '900',
+    fontSize: 11,
+  },
   itemDescription: {
     marginTop: 5,
     color: theme.colors.muted,
     fontWeight: '600',
     lineHeight: 18,
     fontSize: 13,
+  },
+  itemDescriptionCompleted: {
+    color: theme.colors.muted,
   },
   metaRow: {
     flexDirection: 'row',

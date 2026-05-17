@@ -115,7 +115,7 @@ export function getMiloReaction(
     return createReaction({
       mood: 'worried',
       title: 'Milo is checking in',
-      message: 'Lets fix one small thing first.',
+      message: "Let's fix one small thing first.",
       secondaryMessage: `${overdueItems.length} overdue item(s) need care.`,
       suggestedActionLabel: 'Review tasks',
       reason: 'overdue_incomplete_items',
@@ -183,7 +183,7 @@ export function getMiloReaction(
     return createReaction({
       mood: 'calm',
       title: 'Milo sees a quiet day',
-      message: 'Quiet day. Add something when youre ready.',
+      message: "Quiet day. Add something when you're ready.",
       suggestedActionLabel: 'Add item',
       reason: 'no_planner_items',
       priorityLevel: 'low',
@@ -195,7 +195,7 @@ export function getMiloReaction(
     return createReaction({
       mood: 'worried',
       title: 'Milo is keeping it small',
-      message: 'Lets not do everything at once.',
+      message: "Let's not do everything at once.",
       secondaryMessage: `${pendingItems.length} pending item(s) in your planner.`,
       suggestedActionLabel: 'Pick one item',
       reason: 'many_pending_items',

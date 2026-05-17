@@ -17,6 +17,12 @@ import { useNavigation } from '@react-navigation/native';
 import { miloReactions } from '../assets/generatedAssetMap';
 import { getMiloCalendarHero } from '../lib/miloCalendarHero';
 import { getMiloCalendarInsights } from '../lib/miloCalendarInsights';
+import { findMiloConflict } from '../lib/miloConflicts';
+import {
+  isActiveWarningCandidate,
+  isAllDayOrPlaceholder,
+  parseTimeMinutes,
+} from '../lib/miloSituationIntelligence';
 import { getTodayDate } from '../lib/miloPersonality';
 import { getTaskUrgency } from '../lib/taskUrgency';
 import { useTasks } from '../lib/TaskContext';
@@ -33,6 +39,25 @@ type DateItem = {
 };
 
 type IndicatorTone = 'task' | 'meeting' | 'date' | 'urgent';
+type CalendarConflictType =
+  | 'same_time'
+  | 'overlap'
+  | 'ongoing_overlap'
+  | 'soft_conflict'
+  | 'accepted_overlap'
+  | 'all_day_protected';
+type CalendarConflictInfo = NonNullable<Task['conflictInfo']> & {
+  calendarConflictType?: CalendarConflictType;
+  calendarConflictSeverity?: 'calm' | 'soft' | 'strong';
+  calendarConflictLabel?: string;
+  calendarIsActiveWarning?: boolean;
+};
+type ConflictChipTone = 'warning' | 'active' | 'calm';
+type ConflictChipInfo = {
+  label: string;
+  tone: ConflictChipTone;
+  iconName: React.ComponentProps<typeof Ionicons>['name'];
+};
 
 const typeLabels: Record<Task['plannerType'], string> = {
   task: 'Task',
@@ -153,23 +178,8 @@ function createMonthGrid(selectedDate: string) {
   };
 }
 
-function parseTimeMinutes(time?: string) {
-  if (!time) return Number.MAX_SAFE_INTEGER;
-
-  const match = time.trim().match(/^(\d{1,2}):(\d{2})\s*(AM|PM)?$/i);
-  if (!match) return Number.MAX_SAFE_INTEGER - 1;
-
-  const [, rawHour, rawMinute, meridiem] = match;
-  let hour = Number(rawHour);
-  const minute = Number(rawMinute);
-
-  if (meridiem) {
-    const upperMeridiem = meridiem.toUpperCase();
-    if (upperMeridiem === 'PM' && hour < 12) hour += 12;
-    if (upperMeridiem === 'AM' && hour === 12) hour = 0;
-  }
-
-  return hour * 60 + minute;
+function hasClockTime(item: Task) {
+  return parseTimeMinutes(item.dueTime) < Number.MAX_SAFE_INTEGER - 1;
 }
 
 function sortItems(items: Task[]) {
@@ -183,12 +193,13 @@ function sortItems(items: Task[]) {
 
 function getDateIndicators(items: Task[]): IndicatorTone[] {
   const indicators: IndicatorTone[] = [];
+  const warningItems = items.filter(isActiveWarningCandidate);
 
   if (items.some((item) => item.plannerType === 'task')) indicators.push('task');
   if (items.some((item) => item.plannerType === 'meeting')) indicators.push('meeting');
   if (items.some((item) => item.plannerType === 'date')) indicators.push('date');
   if (
-    items.some((item) =>
+    warningItems.some((item) =>
       ['overdue', 'urgent', 'high'].includes(getTaskUrgency(item).level)
     )
   ) {
@@ -200,16 +211,16 @@ function getDateIndicators(items: Task[]): IndicatorTone[] {
 
 function getSummary(selectedItems: Task[]) {
   const now = new Date();
-  const selectedPendingItems = selectedItems.filter((item) => item.status !== 'completed');
+  const selectedWarningItems = selectedItems.filter(isActiveWarningCandidate);
 
   return {
-    overdue: selectedPendingItems.filter(
+    overdue: selectedWarningItems.filter(
       (item) => getTaskUrgency(item, now).level === 'overdue'
     ).length,
-    dueToday: selectedPendingItems.filter(
+    dueToday: selectedWarningItems.filter(
       (item) => getTaskUrgency(item, now).level === 'urgent'
     ).length,
-    startEarly: selectedPendingItems.filter((item) =>
+    startEarly: selectedWarningItems.filter((item) =>
       ['high', 'medium'].includes(getTaskUrgency(item, now).level)
     ).length,
   };
@@ -217,9 +228,9 @@ function getSummary(selectedItems: Task[]) {
 
 function getReminderBadgeCount(tasks: Task[]) {
   const now = new Date();
-  const pendingItems = tasks.filter((item) => item.status !== 'completed');
+  const warningItems = tasks.filter(isActiveWarningCandidate);
 
-  return pendingItems.filter((item) =>
+  return warningItems.filter((item) =>
     ['overdue', 'urgent'].includes(getTaskUrgency(item, now).level)
   ).length;
 }
@@ -260,6 +271,129 @@ function getMeetingLink(item: Task) {
   }
 
   return null;
+}
+
+function getConflictInfo(item: Task, allItems: Task[]) {
+  const storedConflictInfo = item.conflictInfo as CalendarConflictInfo | undefined;
+
+  if (
+    storedConflictInfo?.calendarConflictType ||
+    storedConflictInfo?.type ||
+    storedConflictInfo?.level ||
+    item.conflictAccepted
+  ) {
+    return storedConflictInfo;
+  }
+
+  if (item.status === 'completed' || !hasClockTime(item)) return undefined;
+
+  return findMiloConflict(
+    {
+      title: item.title,
+      plannerType: item.plannerType,
+      dueDate: item.dueDate,
+      dueTime: item.dueTime,
+      location: item.location,
+      estimatedDurationMinutes: item.estimatedDurationMinutes,
+      conflictInfo: item.conflictInfo,
+      conflictAccepted: item.conflictAccepted,
+    },
+    allItems,
+    item.id
+  ) as CalendarConflictInfo | undefined;
+}
+
+function getCalendarConflictType(
+  item: Task,
+  allItems: Task[]
+): CalendarConflictType | undefined {
+  if (item.status === 'completed') return undefined;
+
+  const conflictInfo = getConflictInfo(item, allItems);
+
+  if (
+    item.conflictAccepted ||
+    conflictInfo?.type === 'accepted_overlap' ||
+    conflictInfo?.messageTone === 'accepted'
+  ) {
+    return 'accepted_overlap';
+  }
+
+  if (
+    isAllDayOrPlaceholder(item) ||
+    conflictInfo?.calendarConflictType === 'all_day_protected' ||
+    conflictInfo?.type === 'whole_day'
+  ) {
+    return 'all_day_protected';
+  }
+
+  if (!hasClockTime(item)) return undefined;
+
+  if (conflictInfo?.calendarConflictType) {
+    return conflictInfo.calendarConflictType;
+  }
+
+  switch (conflictInfo?.type) {
+    case 'same_time':
+      return 'same_time';
+    case 'ongoing_overlap':
+      return 'ongoing_overlap';
+    case 'hard_overlap':
+      return 'overlap';
+    case 'soft_overlap':
+      return 'soft_conflict';
+    default:
+      break;
+  }
+
+  if (conflictInfo?.level === 'same_time') return 'same_time';
+  if (conflictInfo?.level === 'hard') return 'overlap';
+  if (conflictInfo?.level === 'soft') return 'soft_conflict';
+
+  return undefined;
+}
+
+function getConflictChipInfo(item: Task, allItems: Task[]): ConflictChipInfo | undefined {
+  switch (getCalendarConflictType(item, allItems)) {
+    case 'same_time':
+      return {
+        label: 'Same time',
+        tone: 'warning',
+        iconName: 'time-outline',
+      };
+    case 'overlap':
+      return {
+        label: 'Overlap',
+        tone: 'warning',
+        iconName: 'layers-outline',
+      };
+    case 'ongoing_overlap':
+      return {
+        label: 'Ongoing',
+        tone: 'active',
+        iconName: 'radio-button-on',
+      };
+    case 'soft_conflict':
+      return {
+        label: 'Soft conflict',
+        tone: 'warning',
+        iconName: 'alert-circle-outline',
+      };
+    case 'accepted_overlap':
+      return {
+        label: 'Keep Both',
+        tone: 'calm',
+        iconName: 'checkmark-circle-outline',
+      };
+    case 'all_day_protected':
+      return {
+        label: 'All-day',
+        tone: 'calm',
+        iconName: 'calendar-outline',
+      };
+    default:
+      return undefined;
+  }
 }
 
 function HeaderButton({
@@ -351,6 +485,7 @@ function TimelineItem({
   onPress,
   onToggle,
   onJoinMeeting,
+  conflictChip,
 }: {
   item: Task;
   isFirst: boolean;
@@ -358,10 +493,16 @@ function TimelineItem({
   onPress: () => void;
   onToggle: () => void;
   onJoinMeeting: (url: string) => void;
+  conflictChip?: ConflictChipInfo;
 }) {
   const tone = typeTone[item.plannerType];
   const urgency = getTaskUrgency(item);
   const isDone = item.status === 'completed';
+  const showUrgencyChip =
+    urgency.level !== 'none' &&
+    !isDone &&
+    hasClockTime(item) &&
+    !isAllDayOrPlaceholder(item);
   const meetingLink = item.plannerType === 'meeting' ? getMeetingLink(item) : null;
   const iconBackground = isDone ? theme.colors.blue : tone.iconBackground;
   const iconColor = theme.colors.white;
@@ -411,7 +552,12 @@ function TimelineItem({
           </Text>
           <View style={styles.timelineMetaRow}>
             <View style={[styles.typeChip, { backgroundColor: tone.chipBackground }]}>
-              <Text style={[styles.typeChipText, { color: tone.color }]}>
+              <Text
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.88}
+                style={[styles.typeChipText, { color: tone.color }]}
+              >
                 {typeLabels[item.plannerType]}
               </Text>
             </View>
@@ -420,10 +566,54 @@ function TimelineItem({
                 <Text style={styles.statusChipText}>Done</Text>
               </View>
             ) : null}
-            {urgency.level !== 'none' ? (
+            {showUrgencyChip ? (
               <View style={styles.urgencyChip}>
-                <Text numberOfLines={1} style={styles.urgencyText}>
+                <Text
+                  numberOfLines={1}
+                  adjustsFontSizeToFit
+                  minimumFontScale={0.86}
+                  style={styles.urgencyText}
+                >
                   {urgency.label}
+                </Text>
+              </View>
+            ) : null}
+            {conflictChip ? (
+              <View
+                style={[
+                  styles.conflictChip,
+                  conflictChip.tone === 'active'
+                    ? styles.conflictChipActive
+                    : conflictChip.tone === 'calm'
+                    ? styles.conflictChipCalm
+                    : styles.conflictChipWarning,
+                ]}
+              >
+                <Ionicons
+                  name={conflictChip.iconName}
+                  size={8}
+                  color={
+                    conflictChip.tone === 'active'
+                      ? theme.colors.danger
+                      : conflictChip.tone === 'calm'
+                      ? theme.colors.primaryDark
+                      : '#B45309'
+                  }
+                />
+                <Text
+                  numberOfLines={1}
+                  adjustsFontSizeToFit
+                  minimumFontScale={0.86}
+                  style={[
+                    styles.conflictChipText,
+                    conflictChip.tone === 'active'
+                      ? styles.conflictChipTextActive
+                      : conflictChip.tone === 'calm'
+                      ? styles.conflictChipTextCalm
+                      : styles.conflictChipTextWarning,
+                  ]}
+                >
+                  {conflictChip.label}
                 </Text>
               </View>
             ) : null}
@@ -605,6 +795,13 @@ export default function CalendarScreen() {
   const selectedItems = useMemo(() => {
     return sortItems(tasks.filter((task) => task.dueDate === selectedDate));
   }, [tasks, selectedDate]);
+  const conflictChipsByTaskId = useMemo(() => {
+    return selectedItems.reduce<Record<string, ConflictChipInfo>>((acc, item) => {
+      const conflictChip = getConflictChipInfo(item, tasks);
+      if (conflictChip) acc[item.id] = conflictChip;
+      return acc;
+    }, {});
+  }, [selectedItems, tasks]);
 
   const selectedPendingItems = selectedItems.filter((item) => item.status !== 'completed');
   const hero = getMiloCalendarHero(selectedItems);
@@ -618,8 +815,11 @@ export default function CalendarScreen() {
       }),
     [tasks, selectedDate, selectedItems]
   );
+  const selectedDayMiloNote = insightCards[0];
   const notificationCount = getReminderBadgeCount(tasks);
   const heroMiloSize = Math.min(compactWidth ? 160 : 188, width * 0.48);
+  const timelineTitle =
+    selectedDate === getTodayDate() ? 'Today timeline' : 'Selected day timeline';
 
   const handleJoinMeeting = (url: string) => {
     Linking.openURL(url);
@@ -741,7 +941,7 @@ export default function CalendarScreen() {
 
       <View style={styles.timelineCard}>
         <View style={styles.timelineHeader}>
-          <Text style={styles.timelineCardTitle}>Today timeline</Text>
+          <Text style={styles.timelineCardTitle}>{timelineTitle}</Text>
 
           <TouchableOpacity
             activeOpacity={0.8}
@@ -765,6 +965,7 @@ export default function CalendarScreen() {
                 isLast={index === selectedItems.length - 1}
                 onToggle={() => toggleTask(item.id)}
                 onJoinMeeting={handleJoinMeeting}
+                conflictChip={conflictChipsByTaskId[item.id]}
                 onPress={() =>
                   navigation.navigate('TaskDetails', {
                     taskId: item.id,
@@ -829,20 +1030,21 @@ export default function CalendarScreen() {
         />
       </View>
 
-      {insightCards.map((insight) => (
-        <View key={insight.id} style={styles.noteCard}>
-          <Image source={insight.miloAsset} style={styles.noteMilo} />
+      {selectedDayMiloNote ? (
+        <View key={selectedDayMiloNote.id} style={styles.noteCard}>
+          <Image source={selectedDayMiloNote.miloAsset} style={styles.noteMilo} />
           <View style={styles.noteCopy}>
-            <Text style={styles.noteTitle}>{insight.title}</Text>
-            <Text style={styles.noteMessage}>{insight.message}</Text>
-            {insight.meta || selectedPendingItems.length > 0 ? (
+            <Text style={styles.noteTitle}>{selectedDayMiloNote.title}</Text>
+            <Text style={styles.noteMessage}>{selectedDayMiloNote.message}</Text>
+            {selectedDayMiloNote.meta || selectedPendingItems.length > 0 ? (
               <Text style={styles.noteMeta}>
-                {insight.meta || `${selectedPendingItems.length} pending on this date`}
+                {selectedDayMiloNote.meta ||
+                  `${selectedPendingItems.length} pending on this date`}
               </Text>
             ) : null}
           </View>
         </View>
-      ))}
+      ) : null}
     </ScreenContainer>
   );
 }
@@ -1226,9 +1428,48 @@ const styles = StyleSheet.create({
     marginLeft: 3,
   },
   urgencyText: {
+    flexShrink: 1,
     color: theme.colors.muted,
     fontSize: 7,
     fontWeight: '900',
+  },
+  conflictChip: {
+    maxWidth: 92,
+    minHeight: 15,
+    borderRadius: theme.radius.pill,
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+    marginLeft: 3,
+    borderWidth: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  conflictChipWarning: {
+    backgroundColor: '#FFF4DF',
+    borderColor: '#FED7AA',
+  },
+  conflictChipActive: {
+    backgroundColor: theme.colors.dangerSoft,
+    borderColor: '#FECACA',
+  },
+  conflictChipCalm: {
+    backgroundColor: theme.colors.successSoft,
+    borderColor: '#BBF7D0',
+  },
+  conflictChipText: {
+    flexShrink: 1,
+    marginLeft: 2,
+    fontSize: 7,
+    fontWeight: '900',
+  },
+  conflictChipTextWarning: {
+    color: '#B45309',
+  },
+  conflictChipTextActive: {
+    color: theme.colors.danger,
+  },
+  conflictChipTextCalm: {
+    color: theme.colors.primaryDark,
   },
   timelineActionColumn: {
     width: 42,

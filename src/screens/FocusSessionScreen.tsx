@@ -9,7 +9,7 @@ import {
   Image,
   Alert,
 } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useRoute } from '@react-navigation/native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import * as Speech from 'expo-speech';
@@ -65,6 +65,7 @@ function OptionButton({
 
 export default function FocusSessionScreen() {
   const navigation = useNavigation<any>();
+  const route = useRoute<any>();
   const { tasks } = useTasks();
   const { focusSessions, addFocusSession, totalFocusMinutes } = useFocus();
 
@@ -85,9 +86,20 @@ export default function FocusSessionScreen() {
     return todayFocusSessions.reduce((total, session) => total + session.minutes, 0);
   }, [todayFocusSessions]);
 
+  const routeTaskId =
+    typeof route.params?.taskId === 'string' ? route.params.taskId : undefined;
+
   const suggestedTask = useMemo(() => {
+    if (routeTaskId) {
+      const routedTask = tasks.find(
+        (task) => task.id === routeTaskId && task.status !== 'completed'
+      );
+
+      if (routedTask) return routedTask;
+    }
+
     return getTopMiloRecommendedTask(tasks, new Date());
-  }, [tasks]);
+  }, [routeTaskId, tasks]);
 
   const progress = totalSeconds === 0 ? 0 : 1 - remainingSeconds / totalSeconds;
   const progressPercent = Math.round(progress * 100);

@@ -2,6 +2,11 @@ import { ImageSourcePropType } from 'react-native';
 
 import { miloActivities, miloReactions } from '../assets/generatedAssetMap';
 import { Task } from '../types/task';
+import {
+  isActiveWarningCandidate,
+  isAllDayOrPlaceholder,
+  parseTimeMinutes,
+} from './miloSituationIntelligence';
 import { getDaysUntilDue, getTaskUrgency } from './taskUrgency';
 
 export type MiloCalendarInsight = {
@@ -19,6 +24,24 @@ type CalendarInsightInput = {
   now?: Date;
 };
 
+type CalendarConflictType =
+  | 'same_time'
+  | 'overlap'
+  | 'ongoing_overlap'
+  | 'soft_conflict'
+  | 'accepted_overlap'
+  | 'all_day_protected';
+
+type CalendarConflictMetadata = {
+  calendarConflictType?: CalendarConflictType;
+  calendarConflictSeverity?: 'calm' | 'soft' | 'strong';
+  calendarConflictLabel?: string;
+  calendarIsActiveWarning?: boolean;
+};
+
+type CalendarConflictInfo = NonNullable<Task['conflictInfo']> &
+  CalendarConflictMetadata;
+
 function getDateKey(date: Date) {
   const year = date.getFullYear();
   const month = `${date.getMonth() + 1}`.padStart(2, '0');
@@ -27,23 +50,8 @@ function getDateKey(date: Date) {
   return `${year}-${month}-${day}`;
 }
 
-function parseTimeMinutes(time?: string) {
-  if (!time) return Number.MAX_SAFE_INTEGER;
-
-  const match = time.trim().match(/^(\d{1,2}):(\d{2})\s*(AM|PM)?$/i);
-  if (!match) return Number.MAX_SAFE_INTEGER - 1;
-
-  const [, rawHour, rawMinute, meridiem] = match;
-  let hour = Number(rawHour);
-  const minute = Number(rawMinute);
-
-  if (meridiem) {
-    const upperMeridiem = meridiem.toUpperCase();
-    if (upperMeridiem === 'PM' && hour < 12) hour += 12;
-    if (upperMeridiem === 'AM' && hour === 12) hour = 0;
-  }
-
-  return hour * 60 + minute;
+function hasClockTime(item: Task) {
+  return parseTimeMinutes(item.dueTime) < Number.MAX_SAFE_INTEGER - 1;
 }
 
 function isPending(item: Task) {
@@ -52,6 +60,139 @@ function isPending(item: Task) {
 
 function pluralize(count: number, singular: string, plural = `${singular}s`) {
   return `${count} ${count === 1 ? singular : plural}`;
+}
+
+function getConflictInfo(item: Task) {
+  return item.conflictInfo as CalendarConflictInfo | undefined;
+}
+
+function getCalendarConflictType(item: Task): CalendarConflictType | undefined {
+  const conflictInfo = getConflictInfo(item);
+
+  if (
+    item.conflictAccepted ||
+    conflictInfo?.type === 'accepted_overlap' ||
+    conflictInfo?.messageTone === 'accepted'
+  ) {
+    return 'accepted_overlap';
+  }
+
+  if (
+    conflictInfo?.calendarConflictType === 'all_day_protected' ||
+    conflictInfo?.type === 'whole_day' ||
+    isAllDayOrPlaceholder(item)
+  ) {
+    return 'all_day_protected';
+  }
+
+  if (!hasClockTime(item)) return undefined;
+
+  if (conflictInfo?.calendarConflictType) {
+    return conflictInfo.calendarConflictType;
+  }
+
+  switch (conflictInfo?.type) {
+    case 'same_time':
+      return 'same_time';
+    case 'ongoing_overlap':
+      return 'ongoing_overlap';
+    case 'hard_overlap':
+      return 'overlap';
+    case 'soft_overlap':
+      return 'soft_conflict';
+    default:
+      return undefined;
+  }
+}
+
+function getConflictMeta(item: Task) {
+  const conflictInfo = getConflictInfo(item);
+  return (
+    conflictInfo?.conflictingTitle ||
+    item.conflictWithTitle ||
+    conflictInfo?.conflictingStartTimeLabel ||
+    conflictInfo?.conflictingTime ||
+    item.conflictWithTime ||
+    item.dueTime ||
+    undefined
+  );
+}
+
+function getConflictInsight(items: Task[]): MiloCalendarInsight | undefined {
+  const conflictPriority: Record<CalendarConflictType, number> = {
+    same_time: 0,
+    ongoing_overlap: 1,
+    overlap: 2,
+    soft_conflict: 3,
+    accepted_overlap: 4,
+    all_day_protected: 5,
+  };
+  const conflictItem = items
+    .map((item) => ({
+      item,
+      type: getCalendarConflictType(item),
+    }))
+    .filter((entry): entry is { item: Task; type: CalendarConflictType } =>
+      Boolean(entry.type)
+    )
+    .sort((a, b) => conflictPriority[a.type] - conflictPriority[b.type])[0];
+
+  if (!conflictItem) return undefined;
+
+  const meta = getConflictMeta(conflictItem.item);
+
+  switch (conflictItem.type) {
+    case 'same_time':
+      return {
+        id: 'same-time-plans',
+        title: 'Same time plans',
+        message: 'Two plans start together. Milo will keep them easy to see.',
+        meta,
+        miloAsset: miloReactions.thinking,
+      };
+    case 'ongoing_overlap':
+      return {
+        id: 'ongoing-overlap',
+        title: 'Overlap right now',
+        message: 'Milo sees plans overlapping now. Pick one small focus first.',
+        meta,
+        miloAsset: miloReactions.determined_lock_in,
+      };
+    case 'overlap':
+      return {
+        id: 'overlap-plans',
+        title: 'Plans overlap',
+        message: 'These plans share some time. A gentle buffer may help.',
+        meta,
+        miloAsset: miloActivities.holding_calendar,
+      };
+    case 'soft_conflict':
+      return {
+        id: 'soft-conflict',
+        title: 'Close together',
+        message: 'Milo noticed these plans are close together.',
+        meta: meta || 'A small buffer may help.',
+        miloAsset: miloReactions.alert_bell,
+      };
+    case 'accepted_overlap':
+      return {
+        id: 'accepted-overlap',
+        title: 'Keep Both noted',
+        message: 'You chose Keep Both, so Milo will just keep an eye on it.',
+        meta,
+        miloAsset: miloReactions.calm_meditating,
+      };
+    case 'all_day_protected':
+      return {
+        id: 'all-day-protected',
+        title: 'All-day item',
+        message: 'Milo sees this as all-day, so it can sit calmly here.',
+        meta: meta || conflictItem.item.title,
+        miloAsset: miloActivities.holding_calendar,
+      };
+    default:
+      return undefined;
+  }
 }
 
 export function getMiloCalendarInsights({
@@ -69,10 +210,10 @@ export function getMiloCalendarInsights({
     (item) => item.status === 'completed' && (item.priority === 'high' || item.plannerType === 'meeting')
   );
   const overdueItems = allItems.filter(
-    (item) => isPending(item) && getTaskUrgency(item, now).level === 'overdue'
+    (item) => isActiveWarningCandidate(item) && getTaskUrgency(item, now).level === 'overdue'
   );
   const dueTodayItems = allItems.filter(
-    (item) => isPending(item) && getTaskUrgency(item, now).level === 'urgent'
+    (item) => isActiveWarningCandidate(item) && getTaskUrgency(item, now).level === 'urgent'
   );
   const futureDueItems = allItems.filter((item) => {
     if (!isPending(item)) return false;
@@ -81,7 +222,12 @@ export function getMiloCalendarInsights({
   });
   const selectedMeetings = selectedPending.filter((item) => item.plannerType === 'meeting');
   const laterTodayMeeting = todayPending
-    .filter((item) => item.plannerType === 'meeting' && parseTimeMinutes(item.dueTime) >= now.getHours() * 60 + now.getMinutes())
+    .filter(
+      (item) =>
+        item.plannerType === 'meeting' &&
+        !isAllDayOrPlaceholder(item) &&
+        parseTimeMinutes(item.dueTime) >= now.getHours() * 60 + now.getMinutes()
+    )
     .sort((a, b) => parseTimeMinutes(a.dueTime) - parseTimeMinutes(b.dueTime))[0];
   const afterNineCount = selectedPending.filter(
     (item) => parseTimeMinutes(item.dueTime) >= 21 * 60
@@ -95,11 +241,16 @@ export function getMiloCalendarInsights({
   const isEvening = now.getHours() >= 17;
 
   const cards: MiloCalendarInsight[] = [];
+  const conflictInsight = getConflictInsight(selectedPending);
+
+  if (conflictInsight) {
+    cards.push(conflictInsight);
+  }
 
   if (overdueItems.length > 0) {
     cards.push({
       id: 'overdue-recovery',
-      title: 'Lets recover gently',
+      title: "Let's recover gently",
       message: `${pluralize(overdueItems.length, 'overdue item')} still needs attention. Start with the smallest step.`,
       meta: 'Small steps still count.',
       miloAsset: miloReactions.worried,
@@ -129,19 +280,19 @@ export function getMiloCalendarInsights({
   if (isEvening && todayPending.length === 0 && todayCompletedImportant.length > 0) {
     cards.push({
       id: 'clear-evening',
-      title: 'Youre clear for the evening',
+      title: "You're clear for the evening",
       message: 'Milo says you can breathe a little easier.',
       meta: `${pluralize(todayCompletedImportant.length, 'important item')} handled today.`,
       miloAsset: miloReactions.calm_meditating,
     });
   }
 
-  if (selectedItems.length >= 5) {
+  if (selectedPending.length >= 5) {
     cards.push({
-      id: 'big-day',
-      title: 'Big day ahead',
-      message: 'Take one gentle step at a time. Milo is pacing it with you.',
-      meta: `${pluralize(selectedItems.length, 'planner item')} on this date.`,
+      id: 'packed-day',
+      title: 'Packed day',
+      message: 'Your day is full. Milo will help you take it one item at a time.',
+      meta: `${pluralize(selectedPending.length, 'pending item')} on this date.`,
       miloAsset: miloReactions.focused_laptop,
     });
   }
@@ -179,9 +330,9 @@ export function getMiloCalendarInsights({
   if (selectedPending.length === 0 && afterNineCount === 0) {
     cards.push({
       id: 'space-to-breathe',
-      title: 'A little space to breathe',
-      message: 'No events after 9:00 PM. Enjoy your evening.',
-      meta: 'Milo is keeping the night soft.',
+      title: 'Calm day',
+      message: 'Your calendar looks calm. Milo is keeping the day soft.',
+      meta: 'A little space to breathe.',
       miloAsset: miloReactions.calm_meditating,
     });
   }
@@ -209,8 +360,8 @@ export function getMiloCalendarInsights({
   if (selectedItems.length === 0) {
     cards.push({
       id: 'quiet-day',
-      title: 'A quiet little day',
-      message: 'Nothing planned here yet. Add something when youre ready, or enjoy the space.',
+      title: 'Calm day',
+      message: "Nothing planned here yet. Add something when you're ready.",
       meta: 'A calm calendar still counts.',
       miloAsset: miloReactions.happy,
     });
@@ -219,8 +370,8 @@ export function getMiloCalendarInsights({
   if (cards.length === 0) {
     cards.push({
       id: 'steady-day',
-      title: 'Steady and manageable',
-      message: 'Your plan looks balanced. Milo says one kind next step is enough.',
+      title: 'Calm day',
+      message: 'Your plan looks balanced. One kind next step is enough.',
       meta: selectedPending.length > 0 ? `${pluralize(selectedPending.length, 'pending item')} on this date.` : undefined,
       miloAsset: miloActivities.holding_calendar,
     });
