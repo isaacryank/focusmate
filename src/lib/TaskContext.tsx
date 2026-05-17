@@ -1,5 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
 import {
   PlannerType,
   ReminderOption,
@@ -12,6 +12,8 @@ import {
   MiloUrgencyLevel,
 } from '../types/task';
 import { cancelPlannerReminder } from './notificationUtils';
+import { useAuth } from './AuthContext';
+import { supabase } from './supabase';
 
 const TASKS_STORAGE_KEY = '@focusmate/tasks';
 
@@ -399,10 +401,23 @@ function normalizeTask(task: any): Task {
   };
 }
 
+function mergeTasksPreferLocal(localTasks: Task[], remoteTasks: Task[]) {
+  const localTaskIds = new Set(localTasks.map((task) => task.id));
+  const remoteOnlyTasks = remoteTasks.filter((task) => !localTaskIds.has(task.id));
+
+  if (remoteOnlyTasks.length === 0) {
+    return localTasks;
+  }
+
+  return [...localTasks, ...remoteOnlyTasks];
+}
+
 export function TaskProvider({ children }: { children: React.ReactNode }) {
+  const { user } = useAuth();
   const [tasks, setTasks] = useState<Task[]>([]);
   const [isLoadingTasks, setIsLoadingTasks] = useState(true);
   const [hasLoadedTasks, setHasLoadedTasks] = useState(false);
+  const lastSyncedUserIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     loadTasks();
@@ -412,6 +427,60 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
     if (!hasLoadedTasks) return;
     saveTasks(tasks);
   }, [tasks, hasLoadedTasks]);
+
+  useEffect(() => {
+    const userId = user?.id ?? null;
+
+    if (!hasLoadedTasks) {
+      return;
+    }
+
+    if (!userId) {
+      lastSyncedUserIdRef.current = null;
+      return;
+    }
+
+    if (lastSyncedUserIdRef.current === userId) {
+      return;
+    }
+
+    let isCancelled = false;
+    lastSyncedUserIdRef.current = userId;
+
+    const fetchSupabaseTasks = async () => {
+      const { data, error } = await supabase
+        .from('tasks')
+        .select('*')
+        .eq('user_id', userId);
+
+      if (error) {
+        console.warn('Failed to fetch Supabase tasks:', error);
+        return;
+      }
+
+      if (isCancelled || !data?.length) {
+        return;
+      }
+
+      const remoteTasks = data.map((row) =>
+        supabaseRowToTask(row as SupabaseTaskRow)
+      );
+
+      setTasks((currentTasks) =>
+        mergeTasksPreferLocal(currentTasks, remoteTasks)
+      );
+    };
+
+    fetchSupabaseTasks().catch((error) => {
+      if (!isCancelled) {
+        console.warn('Failed to fetch Supabase tasks:', error);
+      }
+    });
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [hasLoadedTasks, user?.id]);
 
   const loadTasks = async () => {
     try {
@@ -437,6 +506,49 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
       await AsyncStorage.setItem(TASKS_STORAGE_KEY, JSON.stringify(nextTasks));
     } catch (error) {
       console.log('Failed to save tasks:', error);
+    }
+  };
+
+  const syncTaskToSupabase = async (task: Task) => {
+    const userId = user?.id;
+
+    if (!userId) {
+      return;
+    }
+
+    try {
+      const row = taskToSupabaseRow(task, userId);
+      const { error } = await supabase
+        .from('tasks')
+        .upsert(row, { onConflict: 'user_id,local_id' });
+
+      if (error) {
+        console.warn('Failed to upsert Supabase task:', error);
+      }
+    } catch (error) {
+      console.warn('Failed to upsert Supabase task:', error);
+    }
+  };
+
+  const deleteTaskFromSupabase = async (localTaskId: string) => {
+    const userId = user?.id;
+
+    if (!userId) {
+      return;
+    }
+
+    try {
+      const { error } = await supabase
+        .from('tasks')
+        .delete()
+        .eq('user_id', userId)
+        .eq('local_id', localTaskId);
+
+      if (error) {
+        console.warn('Failed to delete Supabase task:', error);
+      }
+    } catch (error) {
+      console.warn('Failed to delete Supabase task:', error);
     }
   };
 
@@ -468,6 +580,7 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
     };
 
     setTasks((current) => [newTask, ...current]);
+    void syncTaskToSupabase(newTask);
   };
 
   const updateTask = async (id: string, updates: UpdateTaskInput) => {
@@ -486,38 +599,61 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
       await cancelPlannerReminder(existingTask.notificationId);
     }
 
+    let updatedTaskToSync: Task | null = null;
+
     setTasks((current) =>
-      current.map((task) =>
-        task.id === id
-          ? {
-              ...task,
-              ...updates,
-            }
-          : task
-      )
+      current.map((task) => {
+        if (task.id !== id) {
+          return task;
+        }
+
+        const updatedTask = {
+          ...task,
+          ...updates,
+        };
+        updatedTaskToSync = updatedTask;
+        return updatedTask;
+      })
     );
+
+    if (updatedTaskToSync) {
+      void syncTaskToSupabase(updatedTaskToSync);
+    }
   };
 
   const toggleTask = async (id: string) => {
     const existingTask = tasks.find((task) => task.id === id);
     const isMarkingDone = existingTask?.status === 'pending';
 
+    let updatedTaskToSync: Task | null = null;
+
+    setTasks((current) =>
+      current.map((task) => {
+        if (task.id !== id) {
+          return task;
+        }
+
+        const nextStatus: Task['status'] =
+          task.status === 'completed' ? 'pending' : 'completed';
+        const updatedTask = {
+          ...task,
+          status: nextStatus,
+          notificationId:
+            nextStatus === 'completed' ? undefined : task.notificationId,
+        };
+
+        updatedTaskToSync = updatedTask;
+        return updatedTask;
+      })
+    );
+
+    if (updatedTaskToSync) {
+      void syncTaskToSupabase(updatedTaskToSync);
+    }
+
     if (isMarkingDone && existingTask?.notificationId) {
       await cancelPlannerReminder(existingTask.notificationId);
     }
-
-    setTasks((current) =>
-      current.map((task) =>
-        task.id === id
-          ? {
-              ...task,
-              status: task.status === 'completed' ? 'pending' : 'completed',
-              notificationId:
-                task.status === 'pending' ? undefined : task.notificationId,
-            }
-          : task
-      )
-    );
   };
 
   const deleteTask = async (id: string) => {
@@ -528,6 +664,10 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
     }
 
     setTasks((current) => current.filter((task) => task.id !== id));
+
+    if (taskToDelete) {
+      void deleteTaskFromSupabase(id);
+    }
   };
 
   const clearAllTasks = async () => {
