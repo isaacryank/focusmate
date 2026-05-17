@@ -15,7 +15,11 @@ import { cancelPlannerReminder } from './notificationUtils';
 import { useAuth } from './AuthContext';
 import { supabase } from './supabase';
 
-const TASKS_STORAGE_KEY = '@focusmate/tasks';
+const LEGACY_TASKS_STORAGE_KEY = '@focusmate/tasks';
+const ANONYMOUS_TASKS_STORAGE_KEY = '@focusmate/tasks/anonymous';
+
+const getTasksStorageKey = (userId?: string | null) =>
+  userId ? `@focusmate/tasks/user:${userId}` : ANONYMOUS_TASKS_STORAGE_KEY;
 
 export type SupabaseTaskRow = {
   id: string;
@@ -293,6 +297,10 @@ type AddTaskInput = {
   subtasks?: Subtask[];
 };
 
+type AddTaskOptions = {
+  syncToSupabase?: boolean;
+};
+
 type UpdateTaskInput = Partial<{
   title: string;
   description?: string;
@@ -319,7 +327,7 @@ type UpdateTaskInput = Partial<{
 type TaskContextType = {
   tasks: Task[];
   isLoadingTasks: boolean;
-  addTask: (task: AddTaskInput) => void;
+  addTask: (task: AddTaskInput, options?: AddTaskOptions) => void;
   updateTask: (id: string, updates: UpdateTaskInput) => Promise<void>;
   toggleTask: (id: string) => Promise<void>;
   deleteTask: (id: string) => Promise<void>;
@@ -413,25 +421,53 @@ function mergeTasksPreferLocal(localTasks: Task[], remoteTasks: Task[]) {
 }
 
 export function TaskProvider({ children }: { children: React.ReactNode }) {
-  const { user } = useAuth();
+  const { user, isLoadingAuth } = useAuth();
+  const userId = user?.id ?? null;
+  const tasksStorageKey = getTasksStorageKey(userId);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [isLoadingTasks, setIsLoadingTasks] = useState(true);
   const [hasLoadedTasks, setHasLoadedTasks] = useState(false);
+  const [loadedTasksStorageKey, setLoadedTasksStorageKey] = useState<
+    string | null
+  >(null);
   const lastSyncedUserIdRef = useRef<string | null>(null);
+  const skipNextSaveRef = useRef(false);
 
   useEffect(() => {
-    loadTasks();
-  }, []);
+    if (isLoadingAuth) {
+      return;
+    }
+
+    let isCancelled = false;
+
+    setIsLoadingTasks(true);
+    setHasLoadedTasks(false);
+    setLoadedTasksStorageKey(null);
+    lastSyncedUserIdRef.current = null;
+    setTasks([]);
+
+    loadTasks(tasksStorageKey, () => isCancelled);
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [isLoadingAuth, tasksStorageKey]);
 
   useEffect(() => {
-    if (!hasLoadedTasks) return;
-    saveTasks(tasks);
-  }, [tasks, hasLoadedTasks]);
+    if (!hasLoadedTasks || loadedTasksStorageKey !== tasksStorageKey) {
+      return;
+    }
+
+    if (skipNextSaveRef.current) {
+      skipNextSaveRef.current = false;
+      return;
+    }
+
+    saveTasks(tasks, tasksStorageKey);
+  }, [tasks, hasLoadedTasks, loadedTasksStorageKey, tasksStorageKey]);
 
   useEffect(() => {
-    const userId = user?.id ?? null;
-
-    if (!hasLoadedTasks) {
+    if (!hasLoadedTasks || loadedTasksStorageKey !== tasksStorageKey) {
       return;
     }
 
@@ -445,7 +481,6 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
     }
 
     let isCancelled = false;
-    lastSyncedUserIdRef.current = userId;
 
     const fetchSupabaseTasks = async () => {
       const { data, error } = await supabase
@@ -458,17 +493,21 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
         return;
       }
 
-      if (isCancelled || !data?.length) {
+      if (isCancelled) {
         return;
       }
 
-      const remoteTasks = data.map((row) =>
-        supabaseRowToTask(row as SupabaseTaskRow)
-      );
+      if (data?.length) {
+        const remoteTasks = data.map((row) =>
+          supabaseRowToTask(row as SupabaseTaskRow)
+        );
 
-      setTasks((currentTasks) =>
-        mergeTasksPreferLocal(currentTasks, remoteTasks)
-      );
+        setTasks((currentTasks) =>
+          mergeTasksPreferLocal(currentTasks, remoteTasks)
+        );
+      }
+
+      lastSyncedUserIdRef.current = userId;
     };
 
     fetchSupabaseTasks().catch((error) => {
@@ -480,11 +519,18 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
     return () => {
       isCancelled = true;
     };
-  }, [hasLoadedTasks, user?.id]);
+  }, [hasLoadedTasks, loadedTasksStorageKey, tasksStorageKey, userId]);
 
-  const loadTasks = async () => {
+  const loadTasks = async (
+    storageKey: string,
+    isCancelled: () => boolean
+  ) => {
     try {
-      const storedTasks = await AsyncStorage.getItem(TASKS_STORAGE_KEY);
+      const storedTasks = await AsyncStorage.getItem(storageKey);
+
+      if (isCancelled()) {
+        return;
+      }
 
       if (storedTasks) {
         const parsedTasks = JSON.parse(storedTasks);
@@ -493,17 +539,22 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
         setTasks(starterTasks);
       }
     } catch (error) {
-      console.log('Failed to load tasks:', error);
-      setTasks(starterTasks);
+      if (!isCancelled()) {
+        console.log('Failed to load tasks:', error);
+        setTasks(starterTasks);
+      }
     } finally {
-      setIsLoadingTasks(false);
-      setHasLoadedTasks(true);
+      if (!isCancelled()) {
+        setLoadedTasksStorageKey(storageKey);
+        setIsLoadingTasks(false);
+        setHasLoadedTasks(true);
+      }
     }
   };
 
-  const saveTasks = async (nextTasks: Task[]) => {
+  const saveTasks = async (nextTasks: Task[], storageKey: string) => {
     try {
-      await AsyncStorage.setItem(TASKS_STORAGE_KEY, JSON.stringify(nextTasks));
+      await AsyncStorage.setItem(storageKey, JSON.stringify(nextTasks));
     } catch (error) {
       console.log('Failed to save tasks:', error);
     }
@@ -552,7 +603,7 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const addTask = (task: AddTaskInput) => {
+  const addTask = (task: AddTaskInput, options?: AddTaskOptions) => {
     const newTask: Task = {
       id: task.id || Date.now().toString(),
       title: task.title,
@@ -580,7 +631,10 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
     };
 
     setTasks((current) => [newTask, ...current]);
-    void syncTaskToSupabase(newTask);
+
+    if (options?.syncToSupabase !== false) {
+      void syncTaskToSupabase(newTask);
+    }
   };
 
   const updateTask = async (id: string, updates: UpdateTaskInput) => {
@@ -677,8 +731,9 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
       }
     }
 
+    skipNextSaveRef.current = true;
     setTasks([]);
-    await AsyncStorage.removeItem(TASKS_STORAGE_KEY);
+    await AsyncStorage.removeItem(tasksStorageKey);
   };
 
   return (

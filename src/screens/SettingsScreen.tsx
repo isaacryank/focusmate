@@ -264,18 +264,21 @@ export default function SettingsScreen() {
     ];
 
     demoItems.forEach((item, index) => {
-      addTask({
-        id: `${Date.now()}-${index}`,
-        title: item.title,
-        description: item.description,
-        dueDate: item.dueDate,
-        dueTime: item.dueTime,
-        location: item.location,
-        priority: item.priority,
-        plannerType: item.plannerType,
-        reminder: item.reminder,
-        subtasks: [],
-      });
+      addTask(
+        {
+          id: `${Date.now()}-${index}`,
+          title: item.title,
+          description: item.description,
+          dueDate: item.dueDate,
+          dueTime: item.dueTime,
+          location: item.location,
+          priority: item.priority,
+          plannerType: item.plannerType,
+          reminder: item.reminder,
+          subtasks: [],
+        },
+        { syncToSupabase: false }
+      );
     });
 
     setNotice({
