@@ -15,6 +15,258 @@ import { cancelPlannerReminder } from './notificationUtils';
 
 const TASKS_STORAGE_KEY = '@focusmate/tasks';
 
+export type SupabaseTaskRow = {
+  id: string;
+  user_id: string;
+  title: string;
+  description: string | null;
+  type: string | null;
+  priority: string | null;
+  due_date: string | null;
+  due_time: string | null;
+  estimated_duration_minutes: number | null;
+  location_name: string | null;
+  reminder_enabled: boolean | null;
+  reminder_minutes_before: number | null;
+  custom_reminder_minutes: number | null;
+  completed: boolean | null;
+  completed_at: string | null;
+  conflict_accepted: boolean | null;
+  conflict_info: unknown | null;
+  milo_urgency: string | null;
+  milo_note: string | null;
+  local_created_at: string | null;
+  local_updated_at: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  local_id: string | null;
+  milo_smart_plan: unknown | null;
+  milo_smart_nudges: unknown | null;
+  subtasks: unknown | null;
+  conflict_with_title: string | null;
+  conflict_with_time: string | null;
+  conflict_level: string | null;
+};
+
+export type SupabaseTaskUpsertRow = Omit<
+  SupabaseTaskRow,
+  'id' | 'created_at' | 'updated_at'
+> &
+  Partial<Pick<SupabaseTaskRow, 'id' | 'created_at' | 'updated_at'>>;
+
+function stringOrNull(value?: string | null) {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
+}
+
+function numberOrNull(value?: number | null) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function optionalNumber(value?: number | null) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function optionalArray<T>(value: unknown) {
+  return Array.isArray(value) ? (value as T[]) : undefined;
+}
+
+function normalizePlannerType(value?: string | null): PlannerType {
+  if (value === 'meeting' || value === 'date' || value === 'task') {
+    return value;
+  }
+
+  return 'task';
+}
+
+function normalizePriority(value?: string | null): TaskPriority {
+  if (value === 'low' || value === 'medium' || value === 'high') {
+    return value;
+  }
+
+  return 'medium';
+}
+
+function normalizeMiloUrgency(value?: string | null): MiloUrgencyLevel | undefined {
+  if (
+    value === 'calm' ||
+    value === 'low' ||
+    value === 'medium' ||
+    value === 'high' ||
+    value === 'done'
+  ) {
+    return value;
+  }
+
+  return undefined;
+}
+
+function normalizeConflictLevel(
+  value?: string | null
+): MiloConflictInfo['level'] | undefined {
+  if (
+    value === 'hard' ||
+    value === 'soft' ||
+    value === 'same_time' ||
+    value === 'preparation'
+  ) {
+    return value;
+  }
+
+  return undefined;
+}
+
+function normalizeConflictInfo(value: unknown): MiloConflictInfo | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return undefined;
+  }
+
+  return value as MiloConflictInfo;
+}
+
+export function reminderToMinutes(
+  reminder?: ReminderOption,
+  manualReminderMinutes?: number
+) {
+  switch (reminder) {
+    case 'atTime':
+      return 0;
+    case '10min':
+      return 10;
+    case '30min':
+      return 30;
+    case '1hour':
+      return 60;
+    case '1day':
+      return 1440;
+    case 'custom':
+      return numberOrNull(manualReminderMinutes);
+    case 'none':
+    default:
+      return null;
+  }
+}
+
+export function minutesToReminder(
+  minutes?: number | null,
+  customReminderMinutes?: number | null
+): ReminderOption {
+  if (numberOrNull(customReminderMinutes) !== null) {
+    return 'custom';
+  }
+
+  switch (minutes) {
+    case 0:
+      return 'atTime';
+    case 10:
+      return '10min';
+    case 30:
+      return '30min';
+    case 60:
+      return '1hour';
+    case 1440:
+      return '1day';
+    case null:
+    case undefined:
+      return 'none';
+    default:
+      return 'custom';
+  }
+}
+
+function getManualReminderMinutes(
+  reminder: ReminderOption,
+  reminderMinutesBefore?: number | null,
+  customReminderMinutes?: number | null
+) {
+  if (reminder !== 'custom') {
+    return undefined;
+  }
+
+  return optionalNumber(customReminderMinutes) ?? optionalNumber(reminderMinutesBefore);
+}
+
+export function taskToSupabaseRow(
+  task: Task,
+  userId: string
+): SupabaseTaskUpsertRow {
+  const reminder = task.reminder || 'none';
+  const reminderMinutesBefore =
+    reminder === 'none'
+      ? null
+      : reminderToMinutes(reminder, task.manualReminderMinutes);
+  const localCreatedAt = task.createdAt || null;
+
+  return {
+    user_id: userId,
+    title: task.title.trim() || 'Untitled item',
+    description: stringOrNull(task.description),
+    type: task.plannerType,
+    priority: task.priority,
+    due_date: stringOrNull(task.dueDate),
+    due_time: stringOrNull(task.dueTime),
+    estimated_duration_minutes: numberOrNull(task.estimatedDurationMinutes),
+    location_name: stringOrNull(task.location),
+    reminder_enabled: reminder !== 'none',
+    reminder_minutes_before: reminderMinutesBefore,
+    custom_reminder_minutes:
+      reminder === 'custom' ? numberOrNull(task.manualReminderMinutes) : null,
+    completed: task.status === 'completed',
+    completed_at: null,
+    conflict_accepted: Boolean(task.conflictAccepted),
+    conflict_info: task.conflictInfo ?? null,
+    milo_urgency: task.miloUrgency ?? null,
+    milo_note: null,
+    local_created_at: localCreatedAt,
+    local_updated_at: localCreatedAt,
+    local_id: task.id,
+    milo_smart_plan: task.miloSmartPlan ?? null,
+    milo_smart_nudges: task.miloSmartNudges ?? null,
+    subtasks: task.subtasks ?? null,
+    conflict_with_title: stringOrNull(task.conflictWithTitle),
+    conflict_with_time: stringOrNull(task.conflictWithTime),
+    conflict_level: task.conflictLevel ?? null,
+  };
+}
+
+export function supabaseRowToTask(row: SupabaseTaskRow): Task {
+  const reminder = row.reminder_enabled
+    ? minutesToReminder(row.reminder_minutes_before, row.custom_reminder_minutes)
+    : 'none';
+  const smartPlan = optionalArray<MiloSmartPlanStep>(row.milo_smart_plan);
+  const smartNudges = optionalArray<MiloSmartNudge>(row.milo_smart_nudges);
+  const subtasks = optionalArray<Subtask>(row.subtasks);
+
+  return {
+    id: row.local_id || row.id,
+    title: row.title || 'Untitled item',
+    description: row.description || '',
+    dueDate: row.due_date || '',
+    dueTime: row.due_time || '',
+    location: row.location_name || '',
+    reminder,
+    manualReminderMinutes: getManualReminderMinutes(
+      reminder,
+      row.reminder_minutes_before,
+      row.custom_reminder_minutes
+    ),
+    plannerType: normalizePlannerType(row.type),
+    priority: normalizePriority(row.priority),
+    estimatedDurationMinutes: optionalNumber(row.estimated_duration_minutes),
+    miloUrgency: normalizeMiloUrgency(row.milo_urgency),
+    miloSmartPlan: smartPlan,
+    miloSmartNudges: smartNudges,
+    conflictInfo: normalizeConflictInfo(row.conflict_info),
+    conflictAccepted: Boolean(row.conflict_accepted),
+    conflictWithTitle: row.conflict_with_title || undefined,
+    conflictWithTime: row.conflict_with_time || undefined,
+    conflictLevel: normalizeConflictLevel(row.conflict_level),
+    status: row.completed ? 'completed' : 'pending',
+    subtasks: subtasks || [],
+    createdAt: row.local_created_at || row.created_at || new Date().toISOString(),
+  };
+}
+
 type AddTaskInput = {
   id?: string;
   title: string;
