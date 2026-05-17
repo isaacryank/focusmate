@@ -21,17 +21,32 @@ const miloHeroImage = require('../../assets/mascot/milo_hero.png');
 
 export default function LoginScreen() {
   const navigation = useNavigation<any>();
-  const { signIn } = useAuth();
+  const { signInWithEmail } = useAuth();
 
-  const [name, setName] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState('');
 
   const handleLogin = async () => {
     if (isLoading) return;
 
+    setErrorMessage('');
     setIsLoading(true);
-    await signIn(name.trim() || 'Student');
-    setIsLoading(false);
+
+    try {
+      const result = await signInWithEmail(email, password);
+
+      if (!result.success) {
+        setErrorMessage(
+          result.error || 'Milo could not sign you in. Please try again.'
+        );
+      }
+    } catch {
+      setErrorMessage('Milo could not sign you in. Please try again.');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (
@@ -95,19 +110,44 @@ export default function LoginScreen() {
           </Text>
 
           <View style={styles.inputGroup}>
-            <Text style={styles.label}>Your name</Text>
+            <Text style={styles.label}>Email address</Text>
 
             <View style={styles.inputWrapper}>
-              <Ionicons name="person-outline" size={20} color={theme.colors.muted} />
+              <Ionicons name="mail-outline" size={20} color={theme.colors.muted} />
               <TextInput
                 style={styles.input}
-                placeholder="Example: Aina"
+                placeholder="example@email.com"
                 placeholderTextColor={theme.colors.muted}
-                value={name}
-                onChangeText={setName}
+                value={email}
+                onChangeText={setEmail}
+                keyboardType="email-address"
+                autoCapitalize="none"
+                autoCorrect={false}
               />
             </View>
           </View>
+
+          <View style={styles.inputGroup}>
+            <Text style={styles.label}>Password</Text>
+
+            <View style={styles.inputWrapper}>
+              <Ionicons name="lock-closed-outline" size={20} color={theme.colors.muted} />
+              <TextInput
+                style={styles.input}
+                placeholder="Enter your password"
+                placeholderTextColor={theme.colors.muted}
+                value={password}
+                onChangeText={setPassword}
+                secureTextEntry
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+            </View>
+          </View>
+
+          {errorMessage ? (
+            <Text style={styles.errorText}>{errorMessage}</Text>
+          ) : null}
 
           <TouchableOpacity
             activeOpacity={0.9}
@@ -119,7 +159,7 @@ export default function LoginScreen() {
               style={styles.primaryButton}
             >
               <Text style={styles.primaryButtonText}>
-                {isLoading ? 'Starting...' : 'Start Planning'}
+                {isLoading ? 'Signing in...' : 'Login'}
               </Text>
               <Ionicons name="arrow-forward" size={20} color="#FFFFFF" />
             </LinearGradient>
@@ -135,10 +175,6 @@ export default function LoginScreen() {
             </Text>
           </TouchableOpacity>
         </View>
-
-        <Text style={styles.demoNote}>
-          Demo sign-in is ready.
-        </Text>
       </ScrollView>
     </KeyboardAvoidingView>
   );
@@ -299,6 +335,14 @@ const styles = StyleSheet.create({
     color: theme.colors.text,
     fontWeight: '600',
   },
+  errorText: {
+    color: '#D14343',
+    fontSize: 13,
+    lineHeight: 19,
+    fontWeight: '700',
+    marginTop: -4,
+    marginBottom: 14,
+  },
   primaryButton: {
     height: 58,
     borderRadius: theme.radius.md,
@@ -323,13 +367,5 @@ const styles = StyleSheet.create({
   secondaryTextStrong: {
     color: theme.colors.primaryDark,
     fontWeight: '900',
-  },
-  demoNote: {
-    marginTop: 20,
-    color: theme.colors.muted,
-    fontSize: 12,
-    lineHeight: 18,
-    textAlign: 'center',
-    fontWeight: '600',
   },
 });

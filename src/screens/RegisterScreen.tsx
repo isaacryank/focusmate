@@ -21,18 +21,74 @@ const miloIdleImage = require('../../assets/mascot/milo_idle.png');
 
 export default function RegisterScreen() {
   const navigation = useNavigation<any>();
-  const { signIn } = useAuth();
+  const { signUpWithEmail } = useAuth();
 
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [message, setMessage] = useState('');
+  const [isSuccessMessage, setIsSuccessMessage] = useState(false);
 
   const handleRegister = async () => {
     if (isLoading) return;
 
+    const cleanName = name.trim();
+    const cleanEmail = email.trim();
+
+    setMessage('');
+    setIsSuccessMessage(false);
+
+    if (!cleanName) {
+      setMessage('Please enter your name so Milo knows what to call you.');
+      return;
+    }
+
+    if (!cleanEmail) {
+      setMessage('Please enter your email address.');
+      return;
+    }
+
+    if (password.length < 6) {
+      setMessage('Please use a password with at least 6 characters.');
+      return;
+    }
+
+    if (confirmPassword !== password) {
+      setMessage('Your passwords do not match yet.');
+      return;
+    }
+
     setIsLoading(true);
-    await signIn(name.trim() || 'Student');
-    setIsLoading(false);
+
+    try {
+      const result = await signUpWithEmail(cleanName, cleanEmail, password);
+
+      if (!result.success) {
+        setMessage(
+          result.error || 'Milo could not create your account. Please try again.'
+        );
+        return;
+      }
+
+      if (result.needsEmailConfirmation) {
+        setIsSuccessMessage(true);
+        setMessage('Account created. Please check your email to confirm it.');
+        return;
+      }
+
+      if (result.profileError) {
+        setIsSuccessMessage(true);
+        setMessage(
+          'Account created. Milo will finish setting up your profile shortly.'
+        );
+      }
+    } catch {
+      setMessage('Milo could not create your account. Please try again.');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (
@@ -84,6 +140,7 @@ export default function RegisterScreen() {
                 placeholderTextColor={theme.colors.muted}
                 value={name}
                 onChangeText={setName}
+                autoCorrect={false}
               />
             </View>
           </View>
@@ -101,9 +158,57 @@ export default function RegisterScreen() {
                 onChangeText={setEmail}
                 keyboardType="email-address"
                 autoCapitalize="none"
+                autoCorrect={false}
               />
             </View>
           </View>
+
+          <View style={styles.inputGroup}>
+            <Text style={styles.label}>Password</Text>
+
+            <View style={styles.inputWrapper}>
+              <Ionicons name="lock-closed-outline" size={20} color={theme.colors.muted} />
+              <TextInput
+                style={styles.input}
+                placeholder="At least 6 characters"
+                placeholderTextColor={theme.colors.muted}
+                value={password}
+                onChangeText={setPassword}
+                secureTextEntry
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+            </View>
+          </View>
+
+          <View style={styles.inputGroup}>
+            <Text style={styles.label}>Confirm password</Text>
+
+            <View style={styles.inputWrapper}>
+              <Ionicons name="shield-checkmark-outline" size={20} color={theme.colors.muted} />
+              <TextInput
+                style={styles.input}
+                placeholder="Re-enter your password"
+                placeholderTextColor={theme.colors.muted}
+                value={confirmPassword}
+                onChangeText={setConfirmPassword}
+                secureTextEntry
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+            </View>
+          </View>
+
+          {message ? (
+            <Text
+              style={[
+                styles.messageText,
+                isSuccessMessage && styles.successText,
+              ]}
+            >
+              {message}
+            </Text>
+          ) : null}
 
           <TouchableOpacity
             activeOpacity={0.9}
@@ -128,10 +233,6 @@ export default function RegisterScreen() {
             </Text>
           </TouchableOpacity>
         </View>
-
-        <Text style={styles.demoNote}>
-          Demo account setup is ready.
-        </Text>
       </ScrollView>
     </KeyboardAvoidingView>
   );
@@ -251,6 +352,17 @@ const styles = StyleSheet.create({
     color: theme.colors.text,
     fontWeight: '600',
   },
+  messageText: {
+    color: '#D14343',
+    fontSize: 13,
+    lineHeight: 19,
+    fontWeight: '700',
+    marginTop: -4,
+    marginBottom: 14,
+  },
+  successText: {
+    color: theme.colors.primaryDark,
+  },
   primaryButton: {
     height: 58,
     borderRadius: theme.radius.md,
@@ -275,13 +387,5 @@ const styles = StyleSheet.create({
   loginTextStrong: {
     color: theme.colors.primaryDark,
     fontWeight: '900',
-  },
-  demoNote: {
-    marginTop: 20,
-    color: theme.colors.muted,
-    fontSize: 12,
-    lineHeight: 18,
-    textAlign: 'center',
-    fontWeight: '600',
   },
 });
