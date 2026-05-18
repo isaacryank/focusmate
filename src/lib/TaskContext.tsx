@@ -640,6 +640,10 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
   const updateTask = async (id: string, updates: UpdateTaskInput) => {
     const existingTask = tasks.find((task) => task.id === id);
 
+    if (!existingTask) {
+      return;
+    }
+
     const isNotificationUpdate = Object.prototype.hasOwnProperty.call(
       updates,
       'notificationId'
@@ -653,59 +657,42 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
       await cancelPlannerReminder(existingTask.notificationId);
     }
 
-    let updatedTaskToSync: Task | null = null;
+    const updatedTask = {
+      ...existingTask,
+      ...updates,
+    };
 
     setTasks((current) =>
-      current.map((task) => {
-        if (task.id !== id) {
-          return task;
-        }
-
-        const updatedTask = {
-          ...task,
-          ...updates,
-        };
-        updatedTaskToSync = updatedTask;
-        return updatedTask;
-      })
+      current.map((task) => (task.id === id ? updatedTask : task))
     );
 
-    if (updatedTaskToSync) {
-      void syncTaskToSupabase(updatedTaskToSync);
-    }
+    void syncTaskToSupabase(updatedTask);
   };
 
   const toggleTask = async (id: string) => {
     const existingTask = tasks.find((task) => task.id === id);
-    const isMarkingDone = existingTask?.status === 'pending';
 
-    let updatedTaskToSync: Task | null = null;
-
-    setTasks((current) =>
-      current.map((task) => {
-        if (task.id !== id) {
-          return task;
-        }
-
-        const nextStatus: Task['status'] =
-          task.status === 'completed' ? 'pending' : 'completed';
-        const updatedTask = {
-          ...task,
-          status: nextStatus,
-          notificationId:
-            nextStatus === 'completed' ? undefined : task.notificationId,
-        };
-
-        updatedTaskToSync = updatedTask;
-        return updatedTask;
-      })
-    );
-
-    if (updatedTaskToSync) {
-      void syncTaskToSupabase(updatedTaskToSync);
+    if (!existingTask) {
+      return;
     }
 
-    if (isMarkingDone && existingTask?.notificationId) {
+    const isMarkingDone = existingTask.status === 'pending';
+    const nextStatus: Task['status'] =
+      existingTask.status === 'completed' ? 'pending' : 'completed';
+    const toggledTask = {
+      ...existingTask,
+      status: nextStatus,
+      notificationId:
+        nextStatus === 'completed' ? undefined : existingTask.notificationId,
+    };
+
+    setTasks((current) =>
+      current.map((task) => (task.id === id ? toggledTask : task))
+    );
+
+    void syncTaskToSupabase(toggledTask);
+
+    if (isMarkingDone && existingTask.notificationId) {
       await cancelPlannerReminder(existingTask.notificationId);
     }
   };
