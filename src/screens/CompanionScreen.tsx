@@ -33,11 +33,13 @@ import { compareTasksByUrgency, getTaskUrgency } from '../lib/taskUrgency';
 import { Task } from '../types/task';
 
 import ScreenContainer from '../components/ui/ScreenContainer';
-import { getMiloImageSource } from '../components/milo/MiloMoodImage';
+import MiloMoodImage from '../components/milo/MiloMoodImage';
 
 type IconName = React.ComponentProps<typeof Ionicons>['name'];
 
 type QuickActionKey = 'first' | 'plan' | 'calm' | 'schedule';
+
+const TEMPORARY_MILO_REACTION_MS = 6500;
 
 type InsightItem = {
   label: string;
@@ -284,10 +286,13 @@ export default function CompanionScreen() {
 
   const floatMotion = useRef(new Animated.Value(0)).current;
   const tapScale = useRef(new Animated.Value(1)).current;
+  const speechBubbleMotion = useRef(new Animated.Value(1)).current;
+  const tapMessageIndexRef = useRef(0);
+  const reactionTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mountedRef = useRef(true);
 
   const [miloMessage, setMiloMessage] = useState<string | null>(null);
   const [miloMood, setMiloMood] = useState<MiloMood | null>(null);
-  const [tapIndex, setTapIndex] = useState(0);
   const [draftMessage, setDraftMessage] = useState('');
 
   useLayoutEffect(() => {
@@ -319,6 +324,17 @@ export default function CompanionScreen() {
 
     return () => animation.stop();
   }, [floatMotion]);
+
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false;
+
+      if (reactionTimeoutRef.current) {
+        clearTimeout(reactionTimeoutRef.current);
+        reactionTimeoutRef.current = null;
+      }
+    };
+  }, []);
 
   const companionData = useMemo(() => {
     const now = new Date();
@@ -421,8 +437,8 @@ export default function CompanionScreen() {
   const activeMessage = miloMessage || companionData.defaultMessage;
   const roomCardHeight = shortScreen ? 306 : compactWidth ? 322 : 340;
   const miloSize = Math.min(
-    shortScreen ? 178 : compactWidth ? 188 : 204,
-    width * 0.54
+    shortScreen ? 190 : compactWidth ? 202 : 220,
+    width * 0.58
   );
   const bottomContentPadding = tabBarHeight + (shortScreen ? 48 : 60);
 
@@ -431,13 +447,97 @@ export default function CompanionScreen() {
       {
         translateY: floatMotion.interpolate({
           inputRange: [0, 1],
-          outputRange: [0, -9],
+          outputRange: [0, -6],
+        }),
+      },
+    ],
+  };
+
+  const roomBackParallaxStyle = {
+    transform: [
+      {
+        translateX: floatMotion.interpolate({
+          inputRange: [0, 1],
+          outputRange: [0, -0.8],
         }),
       },
       {
-        scale: floatMotion.interpolate({
+        translateY: floatMotion.interpolate({
           inputRange: [0, 1],
-          outputRange: [1, 1.025],
+          outputRange: [0, -1],
+        }),
+      },
+    ],
+  };
+
+  const roomFloorParallaxStyle = {
+    transform: [
+      {
+        translateY: floatMotion.interpolate({
+          inputRange: [0, 1],
+          outputRange: [0, 0.8],
+        }),
+      },
+    ],
+  };
+
+  const floorRugMotionStyle = {
+    transform: [
+      {
+        translateY: floatMotion.interpolate({
+          inputRange: [0, 1],
+          outputRange: [0, 1.5],
+        }),
+      },
+      {
+        scaleX: floatMotion.interpolate({
+          inputRange: [0, 1],
+          outputRange: [1, 0.98],
+        }),
+      },
+      {
+        scaleY: floatMotion.interpolate({
+          inputRange: [0, 1],
+          outputRange: [1, 0.98],
+        }),
+      },
+    ],
+  };
+
+  const floorShadowMotionStyle = {
+    opacity: floatMotion.interpolate({
+      inputRange: [0, 1],
+      outputRange: [0.42, 0.28],
+    }),
+    transform: [
+      {
+        translateY: floatMotion.interpolate({
+          inputRange: [0, 1],
+          outputRange: [0, 1.5],
+        }),
+      },
+      {
+        scaleX: floatMotion.interpolate({
+          inputRange: [0, 1],
+          outputRange: [1, 0.94],
+        }),
+      },
+      {
+        scaleY: floatMotion.interpolate({
+          inputRange: [0, 1],
+          outputRange: [1, 0.94],
+        }),
+      },
+    ],
+  };
+
+  const speechBubbleMotionStyle = {
+    opacity: speechBubbleMotion,
+    transform: [
+      {
+        scale: speechBubbleMotion.interpolate({
+          inputRange: [0, 1],
+          outputRange: [0.97, 1],
         }),
       },
     ],
@@ -454,6 +554,25 @@ export default function CompanionScreen() {
     ],
     [companionData.firstTask, displayName]
   );
+
+  useEffect(() => {
+    tapMessageIndexRef.current = 0;
+  }, [tapMessages]);
+
+  useEffect(() => {
+    speechBubbleMotion.setValue(0);
+
+    const animation = Animated.spring(speechBubbleMotion, {
+      toValue: 1,
+      friction: 7,
+      tension: 90,
+      useNativeDriver: true,
+    });
+
+    animation.start();
+
+    return () => animation.stop();
+  }, [activeMessage, speechBubbleMotion]);
 
   const animateTap = () => {
     tapScale.setValue(1);
@@ -474,18 +593,37 @@ export default function CompanionScreen() {
     ]).start();
   };
 
+  const clearReactionTimeout = () => {
+    if (reactionTimeoutRef.current) {
+      clearTimeout(reactionTimeoutRef.current);
+      reactionTimeoutRef.current = null;
+    }
+  };
+
   const updateMiloSpeech = async (message: string, mood: MiloMood) => {
+    clearReactionTimeout();
+
     await Haptics.selectionAsync();
+
+    if (!mountedRef.current) return;
+
     setMiloMessage(message);
     setMiloMood(mood);
+
+    reactionTimeoutRef.current = setTimeout(() => {
+      setMiloMessage(null);
+      setMiloMood(null);
+      reactionTimeoutRef.current = null;
+    }, TEMPORARY_MILO_REACTION_MS);
   };
 
   const handleMiloTap = async () => {
     animateTap();
 
-    const nextIndex = (tapIndex + 1) % tapMessages.length;
-    setTapIndex(nextIndex);
-    await updateMiloSpeech(tapMessages[nextIndex], 'waving');
+    const currentIndex = tapMessageIndexRef.current % tapMessages.length;
+    tapMessageIndexRef.current = (currentIndex + 1) % tapMessages.length;
+
+    await updateMiloSpeech(tapMessages[currentIndex], 'waving');
   };
 
   const handleSpeak = async () => {
@@ -638,20 +776,34 @@ export default function CompanionScreen() {
       </View>
 
       <View style={[styles.roomCard, { height: roomCardHeight }]}>
-        <View style={styles.roomBackWall}>
-          <View style={styles.wallPanel} />
+        <Animated.View style={[styles.roomBackWall, roomBackParallaxStyle]}>
+          <View style={styles.wallLightGlow} />
+          <View style={styles.roomWindowGlow} />
+          <View style={styles.windowLightBeam} />
           <View style={styles.windowFrame}>
             <View style={styles.windowPane} />
             <View style={styles.windowPane} />
+            <View style={styles.windowDivider} />
+            <View style={styles.windowSill} />
           </View>
           <View style={styles.wallShelf}>
             <View style={styles.shelfBook} />
             <View style={styles.shelfBookShort} />
-            <View style={styles.shelfPlant} />
+            <View style={styles.shelfPlant}>
+              <View style={styles.plantLeafLeft} />
+              <View style={styles.plantLeafRight} />
+            </View>
           </View>
-        </View>
+          <View style={styles.wallBaseboard} />
+        </Animated.View>
 
-        <View style={styles.speechBubble}>
+        <Animated.View
+          style={[
+            styles.speechBubble,
+            { right: compactWidth ? 108 : 120 },
+            speechBubbleMotionStyle,
+          ]}
+        >
           <View style={styles.speechHeader}>
             <Ionicons
               name="chatbubble-ellipses"
@@ -673,14 +825,33 @@ export default function CompanionScreen() {
               />
             </TouchableOpacity>
           </View>
-          <Text style={styles.speechText}>{activeMessage}</Text>
+          <Text
+            numberOfLines={4}
+            adjustsFontSizeToFit
+            minimumFontScale={0.9}
+            style={styles.speechText}
+          >
+            {activeMessage}
+          </Text>
           <View style={styles.speechTail} />
-        </View>
+        </Animated.View>
 
-        <View style={styles.roomFloor}>
+        <Animated.View style={[styles.roomFloor, roomFloorParallaxStyle]}>
+          <View style={styles.floorBackCurve} />
+          <View style={styles.floorJunctionShadow} />
           <View style={styles.floorLine} />
-          <View style={styles.floorRug} />
-        </View>
+          <View style={styles.floorPerspectiveLeft} />
+          <View style={styles.floorPerspectiveCenter} />
+          <View style={styles.floorPerspectiveRight} />
+          <View style={styles.floorBoardLeft} />
+          <View style={styles.floorBoardRight} />
+          <Animated.View style={[styles.floorRug, floorRugMotionStyle]}>
+            <View style={styles.floorRugCenter} />
+          </Animated.View>
+          <Animated.View
+            style={[styles.floorContactShadow, floorShadowMotionStyle]}
+          />
+        </Animated.View>
 
         <View style={styles.miloStage}>
           <Animated.View style={[styles.miloFloat, floatingStyle]}>
@@ -691,16 +862,10 @@ export default function CompanionScreen() {
                 accessibilityRole="button"
                 accessibilityLabel="Tap Milo"
               >
-                <Animated.Image
-                  source={getMiloImageSource(activeMood)}
-                  resizeMode="contain"
-                  style={[
-                    styles.miloImage,
-                    {
-                      width: miloSize,
-                      height: miloSize,
-                    },
-                  ]}
+                <MiloMoodImage
+                  mood={activeMood}
+                  size={miloSize}
+                  style={styles.miloImage}
                 />
               </TouchableOpacity>
             </Animated.View>
@@ -829,61 +994,107 @@ const styles = StyleSheet.create({
   },
   roomCard: {
     position: 'relative',
-    backgroundColor: '#F3FBF6',
+    backgroundColor: '#F4FBF6',
     borderRadius: 28,
     overflow: 'hidden',
     borderWidth: 1,
-    borderColor: '#D7EFDF',
+    borderColor: '#D3EDDD',
     marginBottom: 6,
     ...theme.shadowSoft,
   },
   roomBackWall: {
     position: 'absolute',
     top: 0,
-    left: 0,
-    right: 0,
-    height: '64%',
-    backgroundColor: '#ECF9F1',
+    left: -2,
+    right: -2,
+    height: '72%',
+    backgroundColor: '#EEF9F2',
     zIndex: 0,
+    overflow: 'hidden',
   },
-  wallPanel: {
+  wallLightGlow: {
     position: 'absolute',
-    left: 18,
-    top: 16,
-    width: 118,
-    height: 54,
-    borderRadius: 18,
-    backgroundColor: 'rgba(255, 255, 255, 0.46)',
+    top: -26,
+    right: -24,
+    width: 182,
+    height: 146,
+    borderRadius: 999,
+    backgroundColor: 'rgba(232, 246, 255, 0.74)',
+  },
+  roomWindowGlow: {
+    position: 'absolute',
+    top: 56,
+    left: 70,
+    right: 70,
+    height: 124,
+    borderRadius: 58,
+    backgroundColor: 'rgba(255, 255, 255, 0.42)',
     borderWidth: 1,
-    borderColor: '#D9F0E1',
+    borderColor: 'rgba(213, 239, 222, 0.72)',
+  },
+  windowLightBeam: {
+    position: 'absolute',
+    top: 70,
+    right: -2,
+    width: 206,
+    height: 116,
+    borderRadius: 44,
+    backgroundColor: 'rgba(255, 255, 255, 0.28)',
+    transform: [{ rotate: '-14deg' }],
   },
   windowFrame: {
     position: 'absolute',
-    top: 18,
-    right: 20,
-    width: 68,
-    height: 52,
-    borderRadius: 16,
+    top: 24,
+    right: 34,
+    width: 88,
+    height: 64,
+    borderRadius: 18,
     backgroundColor: theme.colors.white,
     borderWidth: 1.5,
     borderColor: '#D7EAF7',
-    padding: 6,
+    padding: 7,
     flexDirection: 'row',
+    zIndex: 2,
+    shadowColor: '#4D9DE0',
+    shadowOffset: {
+      width: 0,
+      height: 5,
+    },
+    shadowOpacity: 0.07,
+    shadowRadius: 10,
+    elevation: 1,
   },
   windowPane: {
     flex: 1,
-    backgroundColor: theme.colors.blueSoft,
-    borderRadius: 10,
+    backgroundColor: '#EAF7FF',
+    borderRadius: 11,
     marginHorizontal: 2,
+  },
+  windowDivider: {
+    position: 'absolute',
+    top: 8,
+    bottom: 8,
+    left: '50%',
+    width: 1,
+    backgroundColor: '#CFE4F3',
+  },
+  windowSill: {
+    position: 'absolute',
+    left: 10,
+    right: 10,
+    bottom: -8,
+    height: 8,
+    borderRadius: 999,
+    backgroundColor: '#D6EFE0',
   },
   wallShelf: {
     position: 'absolute',
-    left: 24,
-    top: 84,
-    width: 98,
+    left: 26,
+    top: 106,
+    width: 92,
     height: 28,
     borderBottomWidth: 3,
-    borderBottomColor: '#BFE6CC',
+    borderBottomColor: '#B9E3C7',
     flexDirection: 'row',
     alignItems: 'flex-end',
     paddingBottom: 3,
@@ -908,37 +1119,66 @@ const styles = StyleSheet.create({
     height: 12,
     borderRadius: 5,
     backgroundColor: '#8FDFA7',
+    position: 'relative',
+  },
+  plantLeafLeft: {
+    position: 'absolute',
+    left: 2,
+    top: -8,
+    width: 13,
+    height: 10,
+    borderRadius: 999,
+    backgroundColor: theme.colors.primary,
+    transform: [{ rotate: '-28deg' }],
+  },
+  plantLeafRight: {
+    position: 'absolute',
+    right: 1,
+    top: -9,
+    width: 13,
+    height: 10,
+    borderRadius: 999,
+    backgroundColor: theme.colors.primaryDark,
+    transform: [{ rotate: '28deg' }],
+  },
+  wallBaseboard: {
+    position: 'absolute',
+    left: 22,
+    right: 22,
+    bottom: 10,
+    height: 4,
+    borderRadius: 999,
+    backgroundColor: '#CFEBD8',
   },
   speechBubble: {
     position: 'absolute',
-    top: 12,
+    top: 13,
     left: 14,
-    right: 96,
     backgroundColor: theme.colors.white,
-    borderRadius: 18,
-    padding: 10,
+    borderRadius: 17,
+    padding: 9,
     borderWidth: 1,
     borderColor: '#DCEFE4',
-    zIndex: 3,
+    zIndex: 5,
     ...theme.shadowSoft,
   },
   speechHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 5,
+    marginBottom: 4,
   },
   speechName: {
     marginLeft: 6,
     color: theme.colors.primaryDark,
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '900',
     textTransform: 'uppercase',
     letterSpacing: 0,
   },
   speakButton: {
     marginLeft: 'auto',
-    width: 26,
-    height: 26,
+    width: 25,
+    height: 25,
     borderRadius: 9,
     backgroundColor: theme.colors.primarySoft,
     alignItems: 'center',
@@ -948,14 +1188,14 @@ const styles = StyleSheet.create({
     color: theme.colors.text,
     fontSize: 13,
     fontWeight: '800',
-    lineHeight: 18,
+    lineHeight: 17,
   },
   speechTail: {
     position: 'absolute',
-    left: 34,
-    bottom: -8,
-    width: 15,
-    height: 15,
+    right: 28,
+    bottom: -7,
+    width: 14,
+    height: 14,
     backgroundColor: theme.colors.white,
     borderRightWidth: 1,
     borderBottomWidth: 1,
@@ -966,49 +1206,137 @@ const styles = StyleSheet.create({
     position: 'absolute',
     left: 0,
     right: 0,
-    bottom: 18,
-    height: 226,
+    bottom: 14,
+    height: 238,
     alignItems: 'center',
     justifyContent: 'flex-end',
-    zIndex: 2,
+    zIndex: 3,
   },
   miloFloat: {
     alignItems: 'center',
     justifyContent: 'center',
   },
   miloImage: {
-    marginTop: 0,
+    marginBottom: -4,
   },
   roomFloor: {
     position: 'absolute',
     left: 0,
     right: 0,
     bottom: 0,
-    height: 100,
-    backgroundColor: '#FFF8DF',
-    borderTopWidth: 1,
-    borderTopColor: '#F3D9A8',
+    height: 126,
+    backgroundColor: '#FFF6DE',
     zIndex: 1,
+    overflow: 'visible',
+  },
+  floorBackCurve: {
+    position: 'absolute',
+    top: -24,
+    left: -28,
+    right: -28,
+    height: 58,
+    borderRadius: 999,
+    backgroundColor: '#FFF6DE',
+    borderTopWidth: 1,
+    borderTopColor: '#EED59A',
+  },
+  floorJunctionShadow: {
+    position: 'absolute',
+    top: -8,
+    left: 24,
+    right: 24,
+    height: 22,
+    borderRadius: 999,
+    backgroundColor: 'rgba(173, 124, 39, 0.08)',
   },
   floorLine: {
     position: 'absolute',
     left: 30,
     right: 30,
-    top: 23,
+    top: 14,
+    height: 3,
+    borderRadius: 999,
+    backgroundColor: 'rgba(199, 151, 63, 0.3)',
+  },
+  floorPerspectiveLeft: {
+    position: 'absolute',
+    left: 32,
+    top: 34,
+    width: 118,
     height: 2,
     borderRadius: 999,
-    backgroundColor: '#E7C780',
+    backgroundColor: 'rgba(194, 145, 61, 0.13)',
+    transform: [{ rotate: '17deg' }],
+  },
+  floorPerspectiveCenter: {
+    position: 'absolute',
+    alignSelf: 'center',
+    top: 24,
+    width: 2,
+    height: 76,
+    borderRadius: 999,
+    backgroundColor: 'rgba(194, 145, 61, 0.1)',
+  },
+  floorPerspectiveRight: {
+    position: 'absolute',
+    right: 32,
+    top: 34,
+    width: 118,
+    height: 2,
+    borderRadius: 999,
+    backgroundColor: 'rgba(194, 145, 61, 0.13)',
+    transform: [{ rotate: '-17deg' }],
+  },
+  floorBoardLeft: {
+    position: 'absolute',
+    left: 22,
+    bottom: 30,
+    width: 78,
+    height: 2,
+    borderRadius: 999,
+    backgroundColor: 'rgba(194, 145, 61, 0.16)',
+    transform: [{ rotate: '-12deg' }],
+  },
+  floorBoardRight: {
+    position: 'absolute',
+    right: 24,
+    bottom: 48,
+    width: 92,
+    height: 2,
+    borderRadius: 999,
+    backgroundColor: 'rgba(194, 145, 61, 0.15)',
+    transform: [{ rotate: '10deg' }],
+  },
+  floorContactShadow: {
+    position: 'absolute',
+    left: 54,
+    right: 54,
+    bottom: 21,
+    height: 34,
+    borderRadius: 999,
+    backgroundColor: 'rgba(40, 125, 72, 0.25)',
+    zIndex: 3,
   },
   floorRug: {
     position: 'absolute',
-    left: 86,
-    right: 86,
-    bottom: 12,
-    height: 28,
+    left: 54,
+    right: 54,
+    bottom: 18,
+    height: 42,
     borderRadius: 999,
-    backgroundColor: '#DDF3E5',
+    backgroundColor: 'rgba(219, 243, 229, 0.96)',
     borderWidth: 1,
-    borderColor: '#C5EBD4',
+    borderColor: '#BDE8CE',
+    zIndex: 2,
+  },
+  floorRugCenter: {
+    position: 'absolute',
+    left: 20,
+    right: 20,
+    top: 9,
+    height: 17,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255, 255, 255, 0.34)',
   },
   tapHint: {
     marginBottom: 10,
