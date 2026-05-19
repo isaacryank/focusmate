@@ -153,7 +153,7 @@ function MainTabs() {
         component={CompanionScreen}
         options={{
           title: 'Milo',
-          tabBarLabel: 'Focus',
+          tabBarLabel: 'Companion',
           tabBarIcon: ({ color }) => (
             <MaterialCommunityIcons name="target" size={24} color={color} />
           ),
