@@ -92,7 +92,11 @@ function isPendingTask(task: Task) {
 }
 
 function getTaskTitle(task?: Task) {
-  return task?.title?.trim() || 'this planner item';
+  const title = task?.title?.trim() || 'this planner item';
+
+  if (title.length <= 34) return title;
+
+  return `${title.slice(0, 31).trimEnd()}...`;
 }
 
 function parsePlannerDateTime(dueDate?: string, dueTime?: string) {
@@ -228,27 +232,27 @@ function getDefaultMiloMessage(
   const taskTitle = getTaskTitle(snapshot.firstTask);
 
   if (snapshot.firstSituation?.kind === 'missed') {
-    return `I'm here, ${displayName}. "${taskTitle}" slipped, so let's recover gently.`;
+    return `No panic, ${displayName}. We'll rescue "${taskTitle}" gently.`;
   }
 
   if (snapshot.firstSituation?.kind === 'overdue') {
-    return `I'm here, ${displayName}. "${taskTitle}" needs a small recovery step.`;
+    return `No panic, ${displayName}. "${taskTitle}" just needs one tiny step.`;
   }
 
   if (snapshot.firstSituation?.kind === 'happening_now') {
-    return `"${taskTitle}" is happening now, ${displayName}. Stay with this one.`;
+    return `"${taskTitle}" is happening now. Small step first, then continue.`;
   }
 
   if (snapshot.firstSituation?.kind === 'starting_soon') {
-    return `"${taskTitle}" starts soon, ${displayName}. Let's get ready.`;
+    return `Almost time, ${displayName}. Let's get "${taskTitle}" ready calmly.`;
   }
 
   if (snapshot.unacceptedOverlapCount > 0) {
-    return `I see a schedule overlap, ${displayName}. Let's make a little space.`;
+    return `Hmm, these plans are close, ${displayName}. Let's protect your time.`;
   }
 
   if (snapshot.acceptedOverlapCount > 0) {
-    return `You kept both items, ${displayName}. We'll handle them one at a time.`;
+    return `Keep Both is okay, ${displayName}. I'll watch the timing.`;
   }
 
   if (
@@ -257,77 +261,77 @@ function getDefaultMiloMessage(
       snapshot.firstSituation.kind
     )
   ) {
-    return `Today's plan needs focus, ${displayName}. Start with "${taskTitle}".`;
+    return `"${taskTitle}" needs your focus today. I'll stay with you.`;
   }
 
   if (snapshot.meetingTodayCount > 0) {
-    return `You have a meeting today, ${displayName}. Milo is staying ready.`;
+    return `You have a meeting today, ${displayName}. I'll help you arrive calm.`;
   }
 
   if (snapshot.highFocusCount > 0) {
-    return `"${taskTitle}" needs strong focus, ${displayName}. We'll keep it tiny.`;
+    return `"${taskTitle}" needs deep focus. We'll make it feel smaller.`;
   }
 
   if (
     snapshot.completedTodayCount > 0 &&
     snapshot.completedTodayCount === snapshot.totalTodayCount
   ) {
-    return `You finished today's plan, ${displayName}. Milo is proud.`;
+    return `You finished today's plan, ${displayName}. Milo is proud of you.`;
   }
 
   if (snapshot.completedTodayCount > 0) {
-    return `Nice progress today, ${displayName}. The next step can stay tiny.`;
+    return `Nice work, ${displayName}. I saw that progress.`;
   }
 
   if (snapshot.startEarlyCount > 0) {
-    return `"${taskTitle}" can feel easier with one early step.`;
+    return `One early step on "${taskTitle}" can help future you.`;
   }
 
   if (snapshot.pendingCount === 0) {
-    return `Your planner is clear, ${displayName}. Milo is happy with you.`;
+    return `Your planner is clear, ${displayName}. Want to plan something small?`;
   }
 
-  return `Your plan looks calm, ${displayName}. Milo is keeping watch.`;
+  return `Your planner looks calm, ${displayName}. Future you will thank you.`;
 }
 
 function getMiloSays(snapshot: CompanionPlannerSnapshot) {
   if (snapshot.missedCount > 0 || snapshot.overdueCount > 0) {
-    return 'Something slipped. We can recover one tiny step.';
+    return 'No panic. We can rescue this one gently.';
   }
 
   if (snapshot.unacceptedOverlapCount > 0) {
-    return 'I see an overlap. A small buffer can help.';
+    return "Hmm, plans are close. Let's protect your time.";
   }
 
   if (snapshot.acceptedOverlapCount > 0) {
-    return 'Keep Both is on. One item at a time.';
+    return "Keep Both is okay. I'll watch the timing.";
   }
 
   if (snapshot.happeningNowCount > 0 || snapshot.startingSoonCount > 0) {
-    return "This is close. Let's stay ready.";
+    return "Almost time. Let's get ready calmly.";
   }
 
   if (snapshot.dueTodayCount > 0 || snapshot.meetingTodayCount > 0) {
-    return "Today's plan needs focus.";
+    return "This needs today's focus. I'll stay with you.";
   }
 
   if (snapshot.highFocusCount > 0) {
-    return 'This needs stronger focus, but not all at once.';
+    return 'Big focus task. Tiny first step.';
   }
 
   if (snapshot.completedTodayCount > 0) {
-    return 'Nice progress today. Milo is proud.';
+    return 'Nice work. I saw that progress.';
   }
 
   if (snapshot.pendingCount === 0) {
-    return 'Your planner is clear right now.';
+    return 'Your planner is clear. Want one small plan?';
   }
 
   if (snapshot.startEarlyCount > 0) {
-    return 'Starting early can make later easier.';
+    return 'Future you will like one early step.';
   }
 
-  return 'Your plan looks manageable. One small step is enough.';
+  return 'Your planner looks calm. One small step is enough.';
 }
 
 function getSituationMood(snapshot: CompanionPlannerSnapshot): MiloMood {
@@ -693,23 +697,16 @@ export default function CompanionScreen() {
 
   const tapMessages = useMemo(
     () => [
-      `I'm awake, ${displayName}. Let's pick one small step.`,
-      'Tiny steps count. Milo is right here.',
+      `Boop. I'm here, ${displayName}. Pick one tiny step.`,
+      "Tiny steps count. I'll stay close.",
       companionData.firstTask
-        ? `Milo noticed "${getTaskTitle(companionData.firstTask)}" is ${
-            companionData.firstSituation?.label.toLowerCase() || 'important'
-          }.`
+        ? "I found the next step. Let's take it gently."
         : companionData.completedTodayCount > 0
-        ? 'You made progress today. Milo noticed.'
-        : 'Your planner is quiet. We can add one thing later.',
-      'Deep breath. We only need the next useful action.',
+        ? 'You made progress today. I noticed.'
+        : 'Your planner is quiet. Want one tiny plan?',
+      'Deep breath. Just the next useful action.',
     ],
-    [
-      companionData.completedTodayCount,
-      companionData.firstSituation?.label,
-      companionData.firstTask,
-      displayName,
-    ]
+    [companionData.completedTodayCount, companionData.firstTask, displayName]
   );
 
   useEffect(() => {
@@ -800,7 +797,7 @@ export default function CompanionScreen() {
     if (action === 'first') {
       if (!firstTask) {
         await updateMiloSpeech(
-          'Your planner is clear. Add one task when you want help choosing.',
+          'Your planner is clear. Want to add one small thing?',
           'happy'
         );
         return;
@@ -808,7 +805,7 @@ export default function CompanionScreen() {
 
       const title = getTaskTitle(firstTask);
       await updateMiloSpeech(
-        `Start with "${title}". Try only 10 quiet minutes first.`,
+        `"${title}" first. Just 10 calm minutes.`,
         getTaskMood(companionData.firstSituation)
       );
       return;
@@ -817,7 +814,7 @@ export default function CompanionScreen() {
     if (action === 'plan') {
       if (!firstTask) {
         await updateMiloSpeech(
-          'Add one planner item, then I can break it into tiny steps.',
+          "Add one small planner item, then I'll help make it easy.",
           'happy'
         );
         return;
@@ -826,7 +823,7 @@ export default function CompanionScreen() {
       await updateMiloSpeech(
         `Let's make "${getTaskTitle(
           firstTask
-        )}" tiny: open it, choose one useful action, then continue.`,
+        )}" tiny. Open it and choose one action.`,
         'focused'
       );
       return;
@@ -834,7 +831,7 @@ export default function CompanionScreen() {
 
     if (action === 'calm') {
       await updateMiloSpeech(
-        'Deep breath. We only need the next useful action.',
+        "Deep breath. You're safe here. Just one tiny next step.",
         'sleepy'
       );
       return;
@@ -842,9 +839,9 @@ export default function CompanionScreen() {
 
     if (companionData.unacceptedOverlapCount > 0) {
       await updateMiloSpeech(
-        `I found ${companionData.unacceptedOverlapCount} possible overlap${
+        `Hmm, I found ${companionData.unacceptedOverlapCount} possible overlap${
           companionData.unacceptedOverlapCount === 1 ? '' : 's'
-        }. Add a buffer or move one item.`,
+        }. Let's add a buffer or move one item.`,
         'worried'
       );
       return;
@@ -852,16 +849,14 @@ export default function CompanionScreen() {
 
     if (companionData.acceptedOverlapCount > 0) {
       await updateMiloSpeech(
-        `I see ${companionData.acceptedOverlapCount} Keep Both overlap${
-          companionData.acceptedOverlapCount === 1 ? '' : 's'
-        }. Let's give each one a little space.`,
+        "Keep Both is okay. I'll keep an eye on the timing.",
         'focused'
       );
       return;
     }
 
     await updateMiloSpeech(
-      'Your schedule looks manageable. Keep a tiny buffer before meetings.',
+      'Your schedule looks calm. Keep a tiny buffer before meetings.',
       'happy'
     );
   };
@@ -904,7 +899,7 @@ export default function CompanionScreen() {
     }
 
     await updateMiloSpeech(
-      `I heard you. I can help with priorities, tiny plans, calm breaks, and schedule checks.`,
+      'I heard you. I can help with first steps, tiny plans, calm breaks, or timing.',
       'waving'
     );
   };
