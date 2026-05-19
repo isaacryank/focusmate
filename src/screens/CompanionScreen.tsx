@@ -26,10 +26,12 @@ import { useAuth } from '../lib/AuthContext';
 import { useTasks } from '../lib/TaskContext';
 import { getTodayDate, MiloMood } from '../lib/miloPersonality';
 import {
-  isActiveWarningCandidate,
+  getMiloRecommendedTasks,
+  getMiloSituationForTask,
   isAllDayOrPlaceholder,
+  type MiloSituationKind,
+  type MiloTaskSituation,
 } from '../lib/miloSituationIntelligence';
-import { compareTasksByUrgency, getTaskUrgency } from '../lib/taskUrgency';
 import { Task } from '../types/task';
 
 import ScreenContainer from '../components/ui/ScreenContainer';
@@ -52,6 +54,29 @@ type InsightItem = {
 type TaskWindow = {
   start: Date;
   end: Date;
+};
+
+type SituationItem = {
+  task: Task;
+  situation: MiloTaskSituation;
+};
+
+type CompanionPlannerSnapshot = {
+  firstTask?: Task;
+  firstSituation?: MiloTaskSituation;
+  pendingCount: number;
+  completedTodayCount: number;
+  totalTodayCount: number;
+  overdueCount: number;
+  missedCount: number;
+  happeningNowCount: number;
+  startingSoonCount: number;
+  dueTodayCount: number;
+  meetingTodayCount: number;
+  highFocusCount: number;
+  startEarlyCount: number;
+  acceptedOverlapCount: number;
+  unacceptedOverlapCount: number;
 };
 
 const overlapTypes = [
@@ -166,61 +191,169 @@ function countDirectOverlaps(tasks: Task[]) {
   return count;
 }
 
-function getDefaultMiloMessage(
-  displayName: string,
-  overdueCount: number,
-  dueTodayCount: number,
-  acceptedOverlapCount: number
-) {
-  if (overdueCount > 0) {
-    return `I'm awake, ${displayName}. One thing slipped, but we can recover it gently.`;
-  }
-
-  if (dueTodayCount > 0) {
-    return `I'm awake, ${displayName}. Let's pick one small step.`;
-  }
-
-  if (acceptedOverlapCount > 0) {
-    return `I'm here, ${displayName}. We'll handle one overlap calmly.`;
-  }
-
-  return `I'm awake, ${displayName}. Let's pick one small step.`;
+function countSituations(items: SituationItem[], kinds: MiloSituationKind[]) {
+  return items.filter((item) => kinds.includes(item.situation.kind)).length;
 }
 
-function getMiloSays(
-  overdueCount: number,
-  dueTodayCount: number,
-  acceptedOverlapCount: number,
-  pendingCount: number
+function getTaskMood(situation?: MiloTaskSituation): MiloMood {
+  if (!situation) return 'focused';
+
+  if (['overdue', 'missed'].includes(situation.kind)) return 'worried';
+
+  if (situation.kind === 'high_focus' && situation.urgency.level === 'high') {
+    return 'worried';
+  }
+
+  if (
+    [
+      'happening_now',
+      'starting_soon',
+      'accepted_overlap',
+      'due_today',
+      'due_tonight',
+      'all_day',
+      'high_focus',
+    ].includes(situation.kind)
+  ) {
+    return 'focused';
+  }
+
+  return 'waving';
+}
+
+function getDefaultMiloMessage(
+  displayName: string,
+  snapshot: CompanionPlannerSnapshot
 ) {
-  if (overdueCount > 0) {
-    return 'One thing slipped, but we can recover it gently.';
+  const taskTitle = getTaskTitle(snapshot.firstTask);
+
+  if (snapshot.firstSituation?.kind === 'missed') {
+    return `I'm here, ${displayName}. "${taskTitle}" slipped, so let's recover gently.`;
   }
 
-  if (acceptedOverlapCount > 0) {
-    return "We kept both items. Let's give each one a little space.";
+  if (snapshot.firstSituation?.kind === 'overdue') {
+    return `I'm here, ${displayName}. "${taskTitle}" needs a small recovery step.`;
   }
 
-  if (dueTodayCount > 0) {
-    return "Let's start with what matters today.";
+  if (snapshot.firstSituation?.kind === 'happening_now') {
+    return `"${taskTitle}" is happening now, ${displayName}. Stay with this one.`;
   }
 
-  if (pendingCount === 0) {
-    return 'Your plan looks calm right now.';
+  if (snapshot.firstSituation?.kind === 'starting_soon') {
+    return `"${taskTitle}" starts soon, ${displayName}. Let's get ready.`;
+  }
+
+  if (snapshot.unacceptedOverlapCount > 0) {
+    return `I see a schedule overlap, ${displayName}. Let's make a little space.`;
+  }
+
+  if (snapshot.acceptedOverlapCount > 0) {
+    return `You kept both items, ${displayName}. We'll handle them one at a time.`;
+  }
+
+  if (
+    snapshot.firstSituation &&
+    ['due_today', 'due_tonight', 'all_day'].includes(
+      snapshot.firstSituation.kind
+    )
+  ) {
+    return `Today's plan needs focus, ${displayName}. Start with "${taskTitle}".`;
+  }
+
+  if (snapshot.meetingTodayCount > 0) {
+    return `You have a meeting today, ${displayName}. Milo is staying ready.`;
+  }
+
+  if (snapshot.highFocusCount > 0) {
+    return `"${taskTitle}" needs strong focus, ${displayName}. We'll keep it tiny.`;
+  }
+
+  if (
+    snapshot.completedTodayCount > 0 &&
+    snapshot.completedTodayCount === snapshot.totalTodayCount
+  ) {
+    return `You finished today's plan, ${displayName}. Milo is proud.`;
+  }
+
+  if (snapshot.completedTodayCount > 0) {
+    return `Nice progress today, ${displayName}. The next step can stay tiny.`;
+  }
+
+  if (snapshot.startEarlyCount > 0) {
+    return `"${taskTitle}" can feel easier with one early step.`;
+  }
+
+  if (snapshot.pendingCount === 0) {
+    return `Your planner is clear, ${displayName}. Milo is happy with you.`;
+  }
+
+  return `Your plan looks calm, ${displayName}. Milo is keeping watch.`;
+}
+
+function getMiloSays(snapshot: CompanionPlannerSnapshot) {
+  if (snapshot.missedCount > 0 || snapshot.overdueCount > 0) {
+    return 'Something slipped. We can recover one tiny step.';
+  }
+
+  if (snapshot.unacceptedOverlapCount > 0) {
+    return 'I see an overlap. A small buffer can help.';
+  }
+
+  if (snapshot.acceptedOverlapCount > 0) {
+    return 'Keep Both is on. One item at a time.';
+  }
+
+  if (snapshot.happeningNowCount > 0 || snapshot.startingSoonCount > 0) {
+    return "This is close. Let's stay ready.";
+  }
+
+  if (snapshot.dueTodayCount > 0 || snapshot.meetingTodayCount > 0) {
+    return "Today's plan needs focus.";
+  }
+
+  if (snapshot.highFocusCount > 0) {
+    return 'This needs stronger focus, but not all at once.';
+  }
+
+  if (snapshot.completedTodayCount > 0) {
+    return 'Nice progress today. Milo is proud.';
+  }
+
+  if (snapshot.pendingCount === 0) {
+    return 'Your planner is clear right now.';
+  }
+
+  if (snapshot.startEarlyCount > 0) {
+    return 'Starting early can make later easier.';
   }
 
   return 'Your plan looks manageable. One small step is enough.';
 }
 
-function getSituationMood(
-  overdueCount: number,
-  dueTodayCount: number,
-  acceptedOverlapCount: number,
-  pendingCount: number
-): MiloMood {
-  if (overdueCount > 0) return 'worried';
-  if (dueTodayCount > 0 || acceptedOverlapCount > 0) return 'focused';
-  if (pendingCount === 0) return 'happy';
+function getSituationMood(snapshot: CompanionPlannerSnapshot): MiloMood {
+  if (snapshot.missedCount > 0 || snapshot.overdueCount > 0) return 'worried';
+  if (snapshot.unacceptedOverlapCount > 0) return 'worried';
+  if (
+    snapshot.highFocusCount > 0 &&
+    snapshot.dueTodayCount === 0 &&
+    snapshot.meetingTodayCount === 0 &&
+    snapshot.happeningNowCount === 0 &&
+    snapshot.startingSoonCount === 0
+  ) {
+    return 'worried';
+  }
+  if (
+    snapshot.dueTodayCount > 0 ||
+    snapshot.meetingTodayCount > 0 ||
+    snapshot.happeningNowCount > 0 ||
+    snapshot.startingSoonCount > 0 ||
+    snapshot.acceptedOverlapCount > 0
+  ) {
+    return 'focused';
+  }
+  if (snapshot.completedTodayCount > 0 || snapshot.pendingCount === 0) {
+    return 'happy';
+  }
   return 'waving';
 }
 
@@ -339,66 +472,86 @@ export default function CompanionScreen() {
   const companionData = useMemo(() => {
     const now = new Date();
     const pendingTasks = tasks.filter(isPendingTask);
-    const warningTasks = pendingTasks.filter(isActiveWarningCandidate);
-    const rankedTasks = [...pendingTasks].sort(compareTasksByUrgency);
-    const firstTask = rankedTasks[0];
-    const overdueItems = warningTasks.filter(
-      (task) => getTaskUrgency(task, now).level === 'overdue'
+    const recommendedTasks = getMiloRecommendedTasks(tasks, now);
+    const firstTask = recommendedTasks[0];
+    const firstSituation = firstTask
+      ? getMiloSituationForTask(firstTask, now)
+      : undefined;
+    const situationItems = pendingTasks.map((task) => ({
+      task,
+      situation: getMiloSituationForTask(task, now),
+    }));
+    const completedTodayItems = tasks.filter(
+      (task) => task.status === 'completed' && task.dueDate === todayDate
     );
-    const dueTodayItems = warningTasks.filter(
-      (task) => getTaskUrgency(task, now).level === 'urgent'
-    );
-    const startEarlyItems = warningTasks.filter(
-      (task) => getTaskUrgency(task, now).level === 'medium'
-    );
+    const overdueCount = countSituations(situationItems, ['overdue']);
+    const missedCount = countSituations(situationItems, ['missed']);
+    const happeningNowCount = countSituations(situationItems, ['happening_now']);
+    const startingSoonCount = countSituations(situationItems, ['starting_soon']);
+    const dueTodayCount = countSituations(situationItems, [
+      'due_today',
+      'due_tonight',
+      'all_day',
+    ]);
+    const highFocusCount = countSituations(situationItems, ['high_focus']);
+    const startEarlyCount = countSituations(situationItems, ['start_early']);
     const meetingTodayItems = pendingTasks.filter(
       (task) => task.plannerType === 'meeting' && task.dueDate === todayDate
     );
-    const acceptedOverlapItems = pendingTasks.filter(hasAcceptedOverlap);
+    const acceptedOverlapItems = situationItems.filter(
+      (item) =>
+        item.situation.kind === 'accepted_overlap' || hasAcceptedOverlap(item.task)
+    );
     const storedOverlapItems = pendingTasks.filter(hasStoredOverlap);
     const directOverlapCount = countDirectOverlaps(pendingTasks);
     const scheduleOverlapCount = Math.max(
       storedOverlapItems.length,
       directOverlapCount
     );
+    const unacceptedOverlapCount = Math.max(
+      0,
+      scheduleOverlapCount - acceptedOverlapItems.length
+    );
+    const snapshot: CompanionPlannerSnapshot = {
+      firstTask,
+      firstSituation,
+      pendingCount: pendingTasks.length,
+      completedTodayCount: completedTodayItems.length,
+      totalTodayCount: tasks.filter((task) => task.dueDate === todayDate).length,
+      overdueCount,
+      missedCount,
+      happeningNowCount,
+      startingSoonCount,
+      dueTodayCount,
+      meetingTodayCount: meetingTodayItems.length,
+      highFocusCount,
+      startEarlyCount,
+      acceptedOverlapCount: acceptedOverlapItems.length,
+      unacceptedOverlapCount,
+    };
 
-    const defaultMessage = getDefaultMiloMessage(
-      displayName,
-      overdueItems.length,
-      dueTodayItems.length,
-      acceptedOverlapItems.length
-    );
-    const says = getMiloSays(
-      overdueItems.length,
-      dueTodayItems.length,
-      acceptedOverlapItems.length,
-      pendingTasks.length
-    );
-    const mood = getSituationMood(
-      overdueItems.length,
-      dueTodayItems.length,
-      acceptedOverlapItems.length,
-      pendingTasks.length
-    );
+    const defaultMessage = getDefaultMiloMessage(displayName, snapshot);
+    const says = getMiloSays(snapshot);
+    const mood = getSituationMood(snapshot);
 
     const insights: InsightItem[] = [
       {
         label: 'Overdue',
-        value: overdueItems.length,
+        value: overdueCount + missedCount,
         icon: 'alert-circle',
         color: theme.colors.danger,
         backgroundColor: theme.colors.dangerSoft,
       },
       {
         label: 'Today',
-        value: dueTodayItems.length,
+        value: dueTodayCount + happeningNowCount + startingSoonCount,
         icon: 'today',
         color: '#D97706',
         backgroundColor: '#FFF7ED',
       },
       {
         label: 'Start early',
-        value: startEarlyItems.length,
+        value: startEarlyCount,
         icon: 'leaf',
         color: theme.colors.primaryDark,
         backgroundColor: theme.colors.primarySoft,
@@ -420,12 +573,7 @@ export default function CompanionScreen() {
     ];
 
     return {
-      pendingCount: pendingTasks.length,
-      firstTask,
-      overdueCount: overdueItems.length,
-      dueTodayCount: dueTodayItems.length,
-      acceptedOverlapCount: acceptedOverlapItems.length,
-      scheduleOverlapCount,
+      ...snapshot,
       defaultMessage,
       says,
       mood,
@@ -548,11 +696,20 @@ export default function CompanionScreen() {
       `I'm awake, ${displayName}. Let's pick one small step.`,
       'Tiny steps count. Milo is right here.',
       companionData.firstTask
-        ? `I'm looking at "${getTaskTitle(companionData.firstTask)}" with you.`
+        ? `Milo noticed "${getTaskTitle(companionData.firstTask)}" is ${
+            companionData.firstSituation?.label.toLowerCase() || 'important'
+          }.`
+        : companionData.completedTodayCount > 0
+        ? 'You made progress today. Milo noticed.'
         : 'Your planner is quiet. We can add one thing later.',
       'Deep breath. We only need the next useful action.',
     ],
-    [companionData.firstTask, displayName]
+    [
+      companionData.completedTodayCount,
+      companionData.firstSituation?.label,
+      companionData.firstTask,
+      displayName,
+    ]
   );
 
   useEffect(() => {
@@ -623,7 +780,7 @@ export default function CompanionScreen() {
     const currentIndex = tapMessageIndexRef.current % tapMessages.length;
     tapMessageIndexRef.current = (currentIndex + 1) % tapMessages.length;
 
-    await updateMiloSpeech(tapMessages[currentIndex], 'waving');
+    await updateMiloSpeech(tapMessages[currentIndex], companionData.mood);
   };
 
   const handleSpeak = async () => {
@@ -652,7 +809,7 @@ export default function CompanionScreen() {
       const title = getTaskTitle(firstTask);
       await updateMiloSpeech(
         `Start with "${title}". Try only 10 quiet minutes first.`,
-        getTaskUrgency(firstTask).level === 'overdue' ? 'worried' : 'focused'
+        getTaskMood(companionData.firstSituation)
       );
       return;
     }
@@ -683,22 +840,22 @@ export default function CompanionScreen() {
       return;
     }
 
+    if (companionData.unacceptedOverlapCount > 0) {
+      await updateMiloSpeech(
+        `I found ${companionData.unacceptedOverlapCount} possible overlap${
+          companionData.unacceptedOverlapCount === 1 ? '' : 's'
+        }. Add a buffer or move one item.`,
+        'worried'
+      );
+      return;
+    }
+
     if (companionData.acceptedOverlapCount > 0) {
       await updateMiloSpeech(
         `I see ${companionData.acceptedOverlapCount} Keep Both overlap${
           companionData.acceptedOverlapCount === 1 ? '' : 's'
         }. Let's give each one a little space.`,
         'focused'
-      );
-      return;
-    }
-
-    if (companionData.scheduleOverlapCount > 0) {
-      await updateMiloSpeech(
-        `I found ${companionData.scheduleOverlapCount} possible overlap${
-          companionData.scheduleOverlapCount === 1 ? '' : 's'
-        }. Add a buffer or move one item.`,
-        'worried'
       );
       return;
     }
