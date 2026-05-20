@@ -24,7 +24,12 @@ import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import { theme } from '../theme';
 import { useAuth } from '../lib/AuthContext';
 import { useTasks } from '../lib/TaskContext';
-import { getTodayDate, MiloMood } from '../lib/miloPersonality';
+import {
+  getMiloEncouragement,
+  getMiloMoodLabel,
+  getTodayDate,
+  MiloMood,
+} from '../lib/miloPersonality';
 import {
   getMiloRecommendedTasks,
   getMiloSituationForTask,
@@ -46,6 +51,14 @@ const TEMPORARY_MILO_REACTION_MS = 6500;
 type InsightItem = {
   label: string;
   value: number;
+  icon: IconName;
+  color: string;
+  backgroundColor: string;
+};
+
+type MoodStatusItem = {
+  label: string;
+  value: string;
   icon: IconName;
   color: string;
   backgroundColor: string;
@@ -381,31 +394,61 @@ function QuickActionButton({
   title,
   icon,
   onPress,
+  backgroundColor,
+  iconColor = theme.colors.primaryDark,
 }: {
   title: string;
   icon: IconName;
   onPress: () => void;
+  backgroundColor: string;
+  iconColor?: string;
 }) {
   return (
     <TouchableOpacity
       activeOpacity={0.84}
-      style={styles.quickActionButton}
+      style={[styles.quickActionButton, { backgroundColor }]}
       onPress={onPress}
       accessibilityRole="button"
       accessibilityLabel={title}
     >
-      <View style={styles.quickActionIcon}>
-        <Ionicons name={icon} size={19} color={theme.colors.primaryDark} />
-      </View>
+      <Ionicons
+        name={icon}
+        size={20}
+        color={iconColor}
+        style={styles.quickActionIcon}
+      />
       <Text
         numberOfLines={2}
         adjustsFontSizeToFit
-        minimumFontScale={0.9}
+        minimumFontScale={0.84}
         style={styles.quickActionText}
       >
         {title}
       </Text>
     </TouchableOpacity>
+  );
+}
+
+function MoodStatusCard({ item }: { item: MoodStatusItem }) {
+  return (
+    <View style={styles.statusCard}>
+      <View
+        style={[
+          styles.statusIcon,
+          { backgroundColor: item.backgroundColor },
+        ]}
+      >
+        <Ionicons name={item.icon} size={13} color={item.color} />
+      </View>
+      <View style={styles.statusCopy}>
+        <Text numberOfLines={1} style={styles.statusLabel}>
+          {item.label}
+        </Text>
+        <Text numberOfLines={1} style={styles.statusValue}>
+          {item.value}
+        </Text>
+      </View>
+    </View>
   );
 }
 
@@ -587,12 +630,54 @@ export default function CompanionScreen() {
 
   const activeMood = miloMood || companionData.mood;
   const activeMessage = miloMessage || companionData.defaultMessage;
-  const roomCardHeight = shortScreen ? 306 : compactWidth ? 322 : 340;
+  const heroInnerWidth = Math.max(width - 40, 300);
+  const moodPanelWidth = compactWidth ? 104 : 118;
+  const roomCardHeight = shortScreen ? 414 : compactWidth ? 430 : 456;
   const miloSize = Math.min(
-    shortScreen ? 190 : compactWidth ? 202 : 220,
-    width * 0.58
+    shortScreen ? 202 : compactWidth ? 208 : 228,
+    Math.max(compactWidth ? 184 : 204, heroInnerWidth - moodPanelWidth - 32)
   );
-  const bottomContentPadding = tabBarHeight + (shortScreen ? 48 : 60);
+  const bottomContentPadding = tabBarHeight + (shortScreen ? 54 : 66);
+  const moodLabel = getMiloMoodLabel(activeMood);
+  const moodCareText = getMiloEncouragement(activeMood);
+  const stressSignals =
+    companionData.overdueCount +
+    companionData.missedCount +
+    companionData.unacceptedOverlapCount;
+  const statusItems: MoodStatusItem[] = [
+    {
+      label: 'Energy',
+      value: companionData.completedTodayCount > 0 ? 'Bright' : 'Gentle',
+      icon: 'battery-half',
+      color: theme.colors.primaryDark,
+      backgroundColor: theme.colors.primarySoft,
+    },
+    {
+      label: 'Stress',
+      value: stressSignals > 0 ? 'Needs care' : 'Low',
+      icon: 'heart',
+      color: stressSignals > 0 ? theme.colors.danger : theme.colors.primaryDark,
+      backgroundColor:
+        stressSignals > 0 ? theme.colors.dangerSoft : theme.colors.primarySoft,
+    },
+    {
+      label: 'Focus',
+      value:
+        companionData.highFocusCount > 0 || companionData.dueTodayCount > 0
+          ? 'On task'
+          : 'Open',
+      icon: 'sparkles',
+      color: theme.colors.purple,
+      backgroundColor: theme.colors.purpleSoft,
+    },
+    {
+      label: 'About Milo',
+      value: 'Kind planner',
+      icon: 'leaf',
+      color: theme.colors.blue,
+      backgroundColor: theme.colors.blueSoft,
+    },
+  ];
 
   const floatingStyle = {
     transform: [
@@ -905,26 +990,50 @@ export default function CompanionScreen() {
   };
 
   return (
-    <ScreenContainer topPadding={8} bottomPadding={bottomContentPadding}>
+    <ScreenContainer
+      topPadding={14}
+      bottomPadding={bottomContentPadding}
+      style={styles.screen}
+      contentStyle={styles.screenContent}
+    >
       <View style={styles.header}>
         <View style={styles.headerTextBlock}>
           <Text style={styles.headerTitle}>Companion</Text>
-          <Text style={styles.headerSubtitle}>Chat and plan with Milo</Text>
+          <Text style={styles.headerSubtitle}>Chat and plan with Milo 💚</Text>
         </View>
 
-        <TouchableOpacity
-          activeOpacity={0.8}
-          style={styles.headerIconButton}
-          onPress={() => navigation.navigate('ReminderCenter')}
-          accessibilityRole="button"
-          accessibilityLabel="Open Reminder Center"
-        >
-          <Ionicons
-            name="notifications-outline"
-            size={21}
-            color={theme.colors.primaryDark}
-          />
-        </TouchableOpacity>
+        <View style={styles.headerActions}>
+          <TouchableOpacity
+            activeOpacity={0.82}
+            style={styles.headerIconButton}
+            onPress={() => navigation.navigate('ReminderCenter')}
+            accessibilityRole="button"
+            accessibilityLabel="Open Reminder Center"
+          >
+            <Ionicons
+              name="notifications-outline"
+              size={21}
+              color={theme.colors.primaryDark}
+            />
+            <View style={styles.notificationBadge}>
+              <Text style={styles.notificationBadgeText}>2</Text>
+            </View>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            activeOpacity={0.82}
+            style={styles.headerIconButton}
+            onPress={() => navigation.navigate('Settings')}
+            accessibilityRole="button"
+            accessibilityLabel="Open Settings"
+          >
+            <Ionicons
+              name="settings-outline"
+              size={21}
+              color={theme.colors.primaryDark}
+            />
+          </TouchableOpacity>
+        </View>
       </View>
 
       <View style={[styles.roomCard, { height: roomCardHeight }]}>
@@ -938,6 +1047,10 @@ export default function CompanionScreen() {
             <View style={styles.windowDivider} />
             <View style={styles.windowSill} />
           </View>
+          <View style={styles.wallPoster}>
+            <View style={styles.posterSun} />
+            <View style={styles.posterHill} />
+          </View>
           <View style={styles.wallShelf}>
             <View style={styles.shelfBook} />
             <View style={styles.shelfBookShort} />
@@ -950,43 +1063,42 @@ export default function CompanionScreen() {
         </Animated.View>
 
         <Animated.View
-          style={[
-            styles.speechBubble,
-            { right: compactWidth ? 108 : 120 },
-            speechBubbleMotionStyle,
-          ]}
+          style={[styles.speechBubble, speechBubbleMotionStyle]}
         >
-          <View style={styles.speechHeader}>
-            <Ionicons
-              name="chatbubble-ellipses"
-              size={14}
-              color={theme.colors.primaryDark}
-            />
-            <Text style={styles.speechName}>Milo</Text>
-            <TouchableOpacity
-              activeOpacity={0.75}
-              style={styles.speakButton}
-              onPress={handleSpeak}
-              accessibilityRole="button"
-              accessibilityLabel="Hear Milo"
-            >
-              <Ionicons
-                name="volume-medium"
-                size={15}
-                color={theme.colors.primaryDark}
-              />
-            </TouchableOpacity>
-          </View>
+          <Text style={styles.speechGreeting}>Hi {displayName}! 👋</Text>
           <Text
             numberOfLines={4}
             adjustsFontSizeToFit
-            minimumFontScale={0.9}
+            minimumFontScale={0.88}
             style={styles.speechText}
           >
             {activeMessage}
           </Text>
           <View style={styles.speechTail} />
         </Animated.View>
+
+        <View style={[styles.moodPanel, { width: moodPanelWidth }]}>
+          <View style={styles.moodCard}>
+            <View style={styles.moodCardTopRow}>
+              <Text style={styles.moodCardTitle}>Milo's Mood</Text>
+              <MiloMoodImage
+                mood={activeMood}
+                size={38}
+                style={styles.moodCardMilo}
+              />
+            </View>
+            <Text numberOfLines={1} style={styles.moodLabel}>
+              {moodLabel}
+            </Text>
+            <Text numberOfLines={2} style={styles.moodSubtext}>
+              {moodCareText}
+            </Text>
+          </View>
+
+          {statusItems.map((item) => (
+            <MoodStatusCard key={item.label} item={item} />
+          ))}
+        </View>
 
         <Animated.View style={[styles.roomFloor, roomFloorParallaxStyle]}>
           <View style={styles.floorBackCurve} />
@@ -997,6 +1109,12 @@ export default function CompanionScreen() {
           <View style={styles.floorPerspectiveRight} />
           <View style={styles.floorBoardLeft} />
           <View style={styles.floorBoardRight} />
+          <View style={styles.floorPlant}>
+            <View style={styles.floorPlantPot} />
+            <View style={styles.floorPlantLeafOne} />
+            <View style={styles.floorPlantLeafTwo} />
+            <View style={styles.floorPlantLeafThree} />
+          </View>
           <Animated.View style={[styles.floorRug, floorRugMotionStyle]}>
             <View style={styles.floorRugCenter} />
           </Animated.View>
@@ -1005,7 +1123,36 @@ export default function CompanionScreen() {
           />
         </Animated.View>
 
-        <View style={styles.miloStage}>
+        <View style={styles.tapMiloCard}>
+          <TouchableOpacity
+            activeOpacity={0.82}
+            style={styles.tapSpeakerButton}
+            onPress={handleSpeak}
+            accessibilityRole="button"
+            accessibilityLabel="Hear Milo"
+          >
+            <Ionicons
+              name="volume-medium"
+              size={15}
+              color={theme.colors.primaryDark}
+            />
+          </TouchableOpacity>
+          <TouchableOpacity
+            activeOpacity={0.86}
+            onPress={handleMiloTap}
+            accessibilityRole="button"
+            accessibilityLabel="Tap Milo to talk"
+          >
+            <Text style={styles.tapHint}>Tap Milo to talk!</Text>
+          </TouchableOpacity>
+        </View>
+
+        <View
+          style={[
+            styles.miloStage,
+            { right: moodPanelWidth + (compactWidth ? 18 : 26) },
+          ]}
+        >
           <Animated.View style={[styles.miloFloat, floatingStyle]}>
             <Animated.View style={{ transform: [{ scale: tapScale }] }}>
               <TouchableOpacity
@@ -1025,29 +1172,38 @@ export default function CompanionScreen() {
         </View>
       </View>
 
-      <Text style={styles.tapHint}>Tap Milo to chat</Text>
+      <View style={styles.askCard}>
+        <View style={styles.askHeader}>
+          <Text style={styles.askTitle}>Ask Milo anything</Text>
+          <Text style={styles.seeAllText}>See all &gt;</Text>
+        </View>
 
-      <View style={styles.sectionBlock}>
-        <Text style={styles.sectionTitle}>Ask Milo anything</Text>
         <View style={styles.quickActionGrid}>
           <QuickActionButton
             title="What should I do first?"
-            icon="flag"
+            icon="chatbubble-ellipses-outline"
+            backgroundColor="#ECF8EF"
             onPress={() => handleQuickAction('first')}
           />
           <QuickActionButton
             title="Generate my plan"
-            icon="sparkles"
+            icon="color-wand-outline"
+            backgroundColor="#F3EEFF"
+            iconColor={theme.colors.purple}
             onPress={() => handleQuickAction('plan')}
           />
           <QuickActionButton
             title="Calm me down"
-            icon="heart"
+            icon="flower-outline"
+            backgroundColor="#FFF6DB"
+            iconColor="#B7791F"
             onPress={() => handleQuickAction('calm')}
           />
           <QuickActionButton
             title="Fix my schedule"
-            icon="calendar"
+            icon="calendar-outline"
+            backgroundColor="#EAF4FF"
+            iconColor={theme.colors.blue}
             onPress={() => handleQuickAction('schedule')}
           />
         </View>
@@ -1055,11 +1211,13 @@ export default function CompanionScreen() {
 
       <View style={styles.insightCard}>
         <View style={styles.cardHeaderRow}>
-          <View>
-            <Text style={styles.cardEyebrow}>MILO INSIGHT</Text>
-            <Text style={styles.cardTitle}>What Milo noticed</Text>
+          <View style={styles.cardTitleBlock}>
+            <Text style={styles.insightTitle}>💡 Milo's Insight</Text>
+            <Text style={styles.insightSubtitle}>A quick read of today</Text>
           </View>
-          <Text style={styles.pendingCount}>{companionData.pendingCount} pending</Text>
+          <Text style={styles.pendingCount}>
+            {companionData.pendingCount} pending
+          </Text>
         </View>
 
         <View style={styles.insightGrid}>
@@ -1070,16 +1228,25 @@ export default function CompanionScreen() {
       </View>
 
       <View style={styles.miloSaysCard}>
-        <View style={styles.miloSaysIcon}>
-          <Ionicons
-            name="heart-circle"
-            size={24}
-            color={theme.colors.primaryDark}
+        <View style={styles.miloSaysAvatar}>
+          <MiloMoodImage
+            mood={activeMood}
+            size={54}
+            style={styles.miloSaysImage}
           />
         </View>
         <View style={styles.miloSaysCopy}>
-          <Text style={styles.cardEyebrow}>Milo says</Text>
+          <Text style={styles.miloSaysTitle}>Milo says</Text>
           <Text style={styles.miloSaysText}>{companionData.says}</Text>
+          <TouchableOpacity
+            activeOpacity={0.84}
+            style={styles.encourageButton}
+            onPress={() => handleQuickAction('calm')}
+            accessibilityRole="button"
+            accessibilityLabel="Encourage me"
+          >
+            <Text style={styles.encourageButtonText}>Encourage me</Text>
+          </TouchableOpacity>
         </View>
       </View>
 
@@ -1112,47 +1279,84 @@ export default function CompanionScreen() {
 }
 
 const styles = StyleSheet.create({
+  screen: {
+    backgroundColor: '#F7F8F1',
+  },
+  screenContent: {
+    backgroundColor: '#F7F8F1',
+  },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 10,
+    marginBottom: 18,
   },
   headerTextBlock: {
     flex: 1,
     paddingRight: 12,
   },
   headerTitle: {
-    color: theme.colors.text,
-    fontSize: 28,
+    color: '#111827',
+    fontSize: 32,
     fontWeight: '900',
     letterSpacing: 0,
   },
   headerSubtitle: {
-    marginTop: 3,
-    color: theme.colors.textSoft,
-    fontSize: 13,
+    marginTop: 5,
+    color: '#4B5563',
+    fontSize: 15,
     fontWeight: '700',
   },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
   headerIconButton: {
-    width: 38,
-    height: 38,
-    borderRadius: 14,
-    backgroundColor: theme.colors.primarySoft,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: theme.colors.white,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
-    borderColor: '#CBEED8',
+    borderColor: '#EEF1EA',
+    marginLeft: 10,
+    ...theme.shadowSoft,
+  },
+  notificationBadge: {
+    position: 'absolute',
+    top: -2,
+    right: -2,
+    minWidth: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: '#EF4444',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: theme.colors.white,
+  },
+  notificationBadgeText: {
+    color: theme.colors.white,
+    fontSize: 10,
+    fontWeight: '900',
   },
   roomCard: {
     position: 'relative',
-    backgroundColor: '#F4FBF6',
-    borderRadius: 28,
+    backgroundColor: '#F8F4E9',
+    borderRadius: 32,
     overflow: 'hidden',
     borderWidth: 1,
-    borderColor: '#D3EDDD',
-    marginBottom: 6,
-    ...theme.shadowSoft,
+    borderColor: '#E8E5D8',
+    marginBottom: 18,
+    shadowColor: '#233B23',
+    shadowOffset: {
+      width: 0,
+      height: 16,
+    },
+    shadowOpacity: 0.1,
+    shadowRadius: 22,
+    elevation: 5,
   },
   roomBackWall: {
     position: 'absolute',
@@ -1160,60 +1364,60 @@ const styles = StyleSheet.create({
     left: -2,
     right: -2,
     height: '72%',
-    backgroundColor: '#EEF9F2',
+    backgroundColor: '#F7F2E5',
     zIndex: 0,
     overflow: 'hidden',
   },
   wallLightGlow: {
     position: 'absolute',
-    top: -26,
-    right: -24,
-    width: 182,
-    height: 146,
+    top: -36,
+    right: -38,
+    width: 214,
+    height: 166,
     borderRadius: 999,
-    backgroundColor: 'rgba(232, 246, 255, 0.74)',
+    backgroundColor: 'rgba(232, 246, 255, 0.82)',
   },
   roomWindowGlow: {
     position: 'absolute',
-    top: 56,
-    left: 70,
-    right: 70,
-    height: 124,
-    borderRadius: 58,
+    top: 64,
+    left: 62,
+    right: 82,
+    height: 154,
+    borderRadius: 74,
     backgroundColor: 'rgba(255, 255, 255, 0.42)',
     borderWidth: 1,
-    borderColor: 'rgba(213, 239, 222, 0.72)',
+    borderColor: 'rgba(226, 237, 218, 0.8)',
   },
   windowLightBeam: {
     position: 'absolute',
-    top: 70,
-    right: -2,
-    width: 206,
-    height: 116,
-    borderRadius: 44,
+    top: 76,
+    right: -16,
+    width: 244,
+    height: 140,
+    borderRadius: 52,
     backgroundColor: 'rgba(255, 255, 255, 0.28)',
-    transform: [{ rotate: '-14deg' }],
+    transform: [{ rotate: '-15deg' }],
   },
   windowFrame: {
     position: 'absolute',
-    top: 24,
-    right: 34,
-    width: 88,
-    height: 64,
-    borderRadius: 18,
+    top: 28,
+    right: 28,
+    width: 92,
+    height: 70,
+    borderRadius: 20,
     backgroundColor: theme.colors.white,
     borderWidth: 1.5,
-    borderColor: '#D7EAF7',
+    borderColor: '#D6E8F1',
     padding: 7,
     flexDirection: 'row',
     zIndex: 2,
     shadowColor: '#4D9DE0',
     shadowOffset: {
       width: 0,
-      height: 5,
+      height: 6,
     },
-    shadowOpacity: 0.07,
-    shadowRadius: 10,
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
     elevation: 1,
   },
   windowPane: {
@@ -1224,8 +1428,8 @@ const styles = StyleSheet.create({
   },
   windowDivider: {
     position: 'absolute',
-    top: 8,
-    bottom: 8,
+    top: 9,
+    bottom: 9,
     left: '50%',
     width: 1,
     backgroundColor: '#CFE4F3',
@@ -1234,439 +1438,710 @@ const styles = StyleSheet.create({
     position: 'absolute',
     left: 10,
     right: 10,
-    bottom: -8,
-    height: 8,
+    bottom: -9,
+    height: 9,
     borderRadius: 999,
-    backgroundColor: '#D6EFE0',
+    backgroundColor: '#D7EEDC',
+  },
+  wallPoster: {
+    position: 'absolute',
+    left: 30,
+    top: 154,
+    width: 58,
+    height: 54,
+    borderRadius: 16,
+    backgroundColor: '#FFFDF5',
+    borderWidth: 1,
+    borderColor: '#E7E2CE',
+    overflow: 'hidden',
+  },
+  posterSun: {
+    position: 'absolute',
+    right: 10,
+    top: 9,
+    width: 13,
+    height: 13,
+    borderRadius: 999,
+    backgroundColor: '#F5C75B',
+  },
+  posterHill: {
+    position: 'absolute',
+    left: -8,
+    right: -8,
+    bottom: -8,
+    height: 32,
+    borderRadius: 999,
+    backgroundColor: '#BEE5C3',
   },
   wallShelf: {
     position: 'absolute',
-    left: 26,
-    top: 106,
-    width: 92,
-    height: 28,
-    borderBottomWidth: 3,
-    borderBottomColor: '#B9E3C7',
+    left: 24,
+    top: 96,
+    width: 96,
+    height: 32,
+    borderBottomWidth: 4,
+    borderBottomColor: '#B7DDAE',
     flexDirection: 'row',
     alignItems: 'flex-end',
-    paddingBottom: 3,
+    paddingBottom: 4,
     paddingHorizontal: 8,
   },
   shelfBook: {
-    width: 9,
-    height: 20,
-    borderRadius: 4,
-    backgroundColor: theme.colors.primary,
+    width: 10,
+    height: 22,
+    borderRadius: 5,
+    backgroundColor: '#2F8A3B',
     marginRight: 5,
   },
   shelfBookShort: {
-    width: 9,
-    height: 15,
-    borderRadius: 4,
-    backgroundColor: theme.colors.yellow,
-    marginRight: 9,
+    width: 10,
+    height: 16,
+    borderRadius: 5,
+    backgroundColor: '#F4C542',
+    marginRight: 10,
   },
   shelfPlant: {
-    width: 20,
-    height: 12,
-    borderRadius: 5,
+    width: 21,
+    height: 13,
+    borderRadius: 6,
     backgroundColor: '#8FDFA7',
     position: 'relative',
   },
   plantLeafLeft: {
     position: 'absolute',
     left: 2,
-    top: -8,
-    width: 13,
-    height: 10,
+    top: -9,
+    width: 14,
+    height: 11,
     borderRadius: 999,
-    backgroundColor: theme.colors.primary,
+    backgroundColor: '#55C878',
     transform: [{ rotate: '-28deg' }],
   },
   plantLeafRight: {
     position: 'absolute',
     right: 1,
-    top: -9,
-    width: 13,
-    height: 10,
+    top: -10,
+    width: 14,
+    height: 11,
     borderRadius: 999,
-    backgroundColor: theme.colors.primaryDark,
+    backgroundColor: '#2F8A3B',
     transform: [{ rotate: '28deg' }],
   },
   wallBaseboard: {
     position: 'absolute',
-    left: 22,
-    right: 22,
-    bottom: 10,
-    height: 4,
+    left: 24,
+    right: 24,
+    bottom: 11,
+    height: 5,
     borderRadius: 999,
-    backgroundColor: '#CFEBD8',
+    backgroundColor: '#D6E7C7',
   },
   speechBubble: {
     position: 'absolute',
-    top: 13,
-    left: 14,
+    top: 18,
+    left: 18,
+    width: '52%',
+    maxWidth: 210,
     backgroundColor: theme.colors.white,
-    borderRadius: 17,
-    padding: 9,
+    borderRadius: 26,
+    paddingHorizontal: 15,
+    paddingVertical: 14,
     borderWidth: 1,
-    borderColor: '#DCEFE4',
-    zIndex: 5,
-    ...theme.shadowSoft,
+    borderColor: '#EEF1EA',
+    zIndex: 8,
+    shadowColor: '#243024',
+    shadowOffset: {
+      width: 0,
+      height: 10,
+    },
+    shadowOpacity: 0.08,
+    shadowRadius: 16,
+    elevation: 4,
   },
-  speechHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
+  speechGreeting: {
+    color: '#111827',
+    fontSize: 15,
+    fontWeight: '900',
+    lineHeight: 20,
     marginBottom: 4,
   },
-  speechName: {
-    marginLeft: 6,
-    color: theme.colors.primaryDark,
-    fontSize: 11,
-    fontWeight: '900',
-    textTransform: 'uppercase',
-    letterSpacing: 0,
-  },
-  speakButton: {
-    marginLeft: 'auto',
-    width: 25,
-    height: 25,
-    borderRadius: 9,
-    backgroundColor: theme.colors.primarySoft,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
   speechText: {
-    color: theme.colors.text,
+    color: '#111827',
     fontSize: 13,
     fontWeight: '800',
-    lineHeight: 17,
+    lineHeight: 18,
   },
   speechTail: {
     position: 'absolute',
-    right: 28,
-    bottom: -7,
-    width: 14,
-    height: 14,
+    right: 38,
+    bottom: -8,
+    width: 17,
+    height: 17,
     backgroundColor: theme.colors.white,
     borderRightWidth: 1,
     borderBottomWidth: 1,
-    borderColor: '#DCEFE4',
+    borderColor: '#EEF1EA',
     transform: [{ rotate: '45deg' }],
   },
-  miloStage: {
+  moodPanel: {
     position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 14,
-    height: 238,
-    alignItems: 'center',
-    justifyContent: 'flex-end',
-    zIndex: 3,
+    top: 18,
+    right: 12,
+    zIndex: 7,
   },
-  miloFloat: {
+  moodCard: {
+    minHeight: 108,
+    borderRadius: 22,
+    backgroundColor: theme.colors.white,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: '#EEF1EA',
+    shadowColor: '#223322',
+    shadowOffset: {
+      width: 0,
+      height: 8,
+    },
+    shadowOpacity: 0.07,
+    shadowRadius: 12,
+    elevation: 3,
+  },
+  moodCardTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  moodCardTitle: {
+    flex: 1,
+    color: '#247A3E',
+    fontSize: 10,
+    fontWeight: '900',
+    lineHeight: 13,
+  },
+  moodCardMilo: {
+    marginRight: -5,
+    marginTop: -5,
+  },
+  moodLabel: {
+    marginTop: 2,
+    color: '#111827',
+    fontSize: 15,
+    fontWeight: '900',
+  },
+  moodSubtext: {
+    marginTop: 4,
+    color: '#5B6658',
+    fontSize: 10,
+    fontWeight: '700',
+    lineHeight: 13,
+  },
+  statusCard: {
+    minHeight: 49,
+    borderRadius: 18,
+    backgroundColor: theme.colors.white,
+    paddingHorizontal: 8,
+    paddingVertical: 7,
+    borderWidth: 1,
+    borderColor: '#EEF1EA',
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 7,
+    shadowColor: '#223322',
+    shadowOffset: {
+      width: 0,
+      height: 6,
+    },
+    shadowOpacity: 0.055,
+    shadowRadius: 10,
+    elevation: 2,
+  },
+  statusIcon: {
+    width: 25,
+    height: 25,
+    borderRadius: 10,
     alignItems: 'center',
     justifyContent: 'center',
+    marginRight: 7,
   },
-  miloImage: {
-    marginBottom: -4,
+  statusCopy: {
+    flex: 1,
+  },
+  statusLabel: {
+    color: '#6B7280',
+    fontSize: 9,
+    fontWeight: '800',
+  },
+  statusValue: {
+    marginTop: 1,
+    color: '#111827',
+    fontSize: 10,
+    fontWeight: '900',
   },
   roomFloor: {
     position: 'absolute',
     left: 0,
     right: 0,
     bottom: 0,
-    height: 126,
-    backgroundColor: '#FFF6DE',
+    height: 174,
+    backgroundColor: '#EAF5D8',
     zIndex: 1,
     overflow: 'visible',
   },
   floorBackCurve: {
     position: 'absolute',
-    top: -24,
-    left: -28,
-    right: -28,
-    height: 58,
+    top: -34,
+    left: -34,
+    right: -34,
+    height: 74,
     borderRadius: 999,
-    backgroundColor: '#FFF6DE',
+    backgroundColor: '#EAF5D8',
     borderTopWidth: 1,
-    borderTopColor: '#EED59A',
+    borderTopColor: '#CFE3B1',
   },
   floorJunctionShadow: {
     position: 'absolute',
-    top: -8,
-    left: 24,
-    right: 24,
-    height: 22,
+    top: -11,
+    left: 22,
+    right: 22,
+    height: 26,
     borderRadius: 999,
-    backgroundColor: 'rgba(173, 124, 39, 0.08)',
+    backgroundColor: 'rgba(76, 103, 45, 0.08)',
   },
   floorLine: {
     position: 'absolute',
     left: 30,
     right: 30,
-    top: 14,
+    top: 17,
     height: 3,
     borderRadius: 999,
-    backgroundColor: 'rgba(199, 151, 63, 0.3)',
+    backgroundColor: 'rgba(69, 120, 52, 0.18)',
   },
   floorPerspectiveLeft: {
     position: 'absolute',
-    left: 32,
-    top: 34,
-    width: 118,
+    left: 28,
+    top: 46,
+    width: 126,
     height: 2,
     borderRadius: 999,
-    backgroundColor: 'rgba(194, 145, 61, 0.13)',
+    backgroundColor: 'rgba(69, 120, 52, 0.11)',
     transform: [{ rotate: '17deg' }],
   },
   floorPerspectiveCenter: {
     position: 'absolute',
     alignSelf: 'center',
-    top: 24,
+    top: 34,
     width: 2,
-    height: 76,
+    height: 94,
     borderRadius: 999,
-    backgroundColor: 'rgba(194, 145, 61, 0.1)',
+    backgroundColor: 'rgba(69, 120, 52, 0.08)',
   },
   floorPerspectiveRight: {
     position: 'absolute',
-    right: 32,
-    top: 34,
-    width: 118,
+    right: 28,
+    top: 46,
+    width: 126,
     height: 2,
     borderRadius: 999,
-    backgroundColor: 'rgba(194, 145, 61, 0.13)',
+    backgroundColor: 'rgba(69, 120, 52, 0.11)',
     transform: [{ rotate: '-17deg' }],
   },
   floorBoardLeft: {
     position: 'absolute',
     left: 22,
-    bottom: 30,
-    width: 78,
+    bottom: 40,
+    width: 80,
     height: 2,
     borderRadius: 999,
-    backgroundColor: 'rgba(194, 145, 61, 0.16)',
+    backgroundColor: 'rgba(69, 120, 52, 0.13)',
     transform: [{ rotate: '-12deg' }],
   },
   floorBoardRight: {
     position: 'absolute',
     right: 24,
-    bottom: 48,
-    width: 92,
+    bottom: 60,
+    width: 94,
     height: 2,
     borderRadius: 999,
-    backgroundColor: 'rgba(194, 145, 61, 0.15)',
+    backgroundColor: 'rgba(69, 120, 52, 0.12)',
     transform: [{ rotate: '10deg' }],
+  },
+  floorPlant: {
+    position: 'absolute',
+    right: 18,
+    bottom: 22,
+    width: 46,
+    height: 66,
+    zIndex: 1,
+  },
+  floorPlantPot: {
+    position: 'absolute',
+    left: 12,
+    right: 10,
+    bottom: 0,
+    height: 22,
+    borderRadius: 10,
+    backgroundColor: '#F2CF8F',
+    borderWidth: 1,
+    borderColor: '#E1B96D',
+  },
+  floorPlantLeafOne: {
+    position: 'absolute',
+    left: 11,
+    bottom: 20,
+    width: 20,
+    height: 34,
+    borderRadius: 999,
+    backgroundColor: '#55C878',
+    transform: [{ rotate: '-26deg' }],
+  },
+  floorPlantLeafTwo: {
+    position: 'absolute',
+    right: 7,
+    bottom: 18,
+    width: 20,
+    height: 38,
+    borderRadius: 999,
+    backgroundColor: '#2F8A3B',
+    transform: [{ rotate: '22deg' }],
+  },
+  floorPlantLeafThree: {
+    position: 'absolute',
+    left: 18,
+    bottom: 24,
+    width: 18,
+    height: 40,
+    borderRadius: 999,
+    backgroundColor: '#7ED889',
   },
   floorContactShadow: {
     position: 'absolute',
     left: 54,
-    right: 54,
-    bottom: 21,
+    right: 102,
+    bottom: 48,
     height: 34,
     borderRadius: 999,
-    backgroundColor: 'rgba(40, 125, 72, 0.25)',
-    zIndex: 3,
+    backgroundColor: 'rgba(37, 91, 45, 0.25)',
+    zIndex: 4,
   },
   floorRug: {
     position: 'absolute',
-    left: 54,
-    right: 54,
-    bottom: 18,
-    height: 42,
+    left: 48,
+    right: 98,
+    bottom: 35,
+    height: 58,
     borderRadius: 999,
-    backgroundColor: 'rgba(219, 243, 229, 0.96)',
+    backgroundColor: 'rgba(255, 248, 219, 0.98)',
     borderWidth: 1,
-    borderColor: '#BDE8CE',
-    zIndex: 2,
+    borderColor: '#EEDC9B',
+    zIndex: 3,
   },
   floorRugCenter: {
     position: 'absolute',
     left: 20,
     right: 20,
-    top: 9,
-    height: 17,
+    top: 14,
+    height: 22,
     borderRadius: 999,
-    backgroundColor: 'rgba(255, 255, 255, 0.34)',
+    backgroundColor: 'rgba(255, 255, 255, 0.42)',
   },
-  tapHint: {
-    marginBottom: 10,
-    color: theme.colors.textSoft,
-    fontSize: 12,
-    fontWeight: '800',
-    textAlign: 'center',
-  },
-  sectionBlock: {
-    marginBottom: 12,
-  },
-  sectionTitle: {
-    color: theme.colors.text,
-    fontSize: 17,
-    fontWeight: '900',
-    marginBottom: 9,
-  },
-  quickActionGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'space-between',
-  },
-  quickActionButton: {
-    width: '48.5%',
-    minHeight: 58,
-    borderRadius: 15,
-    backgroundColor: theme.colors.surface,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    padding: 9,
-    marginBottom: 8,
+  tapMiloCard: {
+    position: 'absolute',
+    left: 16,
+    bottom: 18,
+    minHeight: 40,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255, 255, 255, 0.94)',
+    paddingVertical: 6,
+    paddingLeft: 7,
+    paddingRight: 12,
     flexDirection: 'row',
     alignItems: 'center',
-    ...theme.shadowSoft,
+    zIndex: 8,
+    borderWidth: 1,
+    borderColor: '#EEF1EA',
+    shadowColor: '#223322',
+    shadowOffset: {
+      width: 0,
+      height: 7,
+    },
+    shadowOpacity: 0.07,
+    shadowRadius: 12,
+    elevation: 3,
   },
-  quickActionIcon: {
-    width: 30,
-    height: 30,
-    borderRadius: 12,
+  tapSpeakerButton: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
     backgroundColor: theme.colors.primarySoft,
     alignItems: 'center',
     justifyContent: 'center',
-    marginRight: 8,
+    marginRight: 7,
+  },
+  tapHint: {
+    color: '#247A3E',
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  miloStage: {
+    position: 'absolute',
+    left: 6,
+    bottom: 38,
+    height: 288,
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    zIndex: 5,
+  },
+  miloFloat: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  miloImage: {
+    marginBottom: -2,
+  },
+  askCard: {
+    backgroundColor: theme.colors.white,
+    borderRadius: 30,
+    borderWidth: 1,
+    borderColor: '#ECEFE8',
+    paddingHorizontal: 14,
+    paddingTop: 14,
+    paddingBottom: 13,
+    marginBottom: 16,
+    shadowColor: '#223322',
+    shadowOffset: {
+      width: 0,
+      height: 12,
+    },
+    shadowOpacity: 0.07,
+    shadowRadius: 18,
+    elevation: 4,
+  },
+  askHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+  },
+  askTitle: {
+    color: '#111827',
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  seeAllText: {
+    color: '#247A3E',
+    fontSize: 12,
+    fontWeight: '500',
+  },
+  quickActionGrid: {
+    flexDirection: 'row',
+    gap: 6,
+  },
+  quickActionButton: {
+    flex: 1,
+    minHeight: 62,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(34, 40, 49, 0.04)',
+    paddingHorizontal: 7,
+    paddingVertical: 7,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+  },
+  quickActionIcon: {
+    marginRight: 5,
+    flexShrink: 0,
   },
   quickActionText: {
     flex: 1,
-    color: theme.colors.text,
-    fontSize: 12,
-    fontWeight: '900',
-    lineHeight: 16,
+    color: '#111827',
+    fontSize: 9,
+    fontWeight: '800',
+    lineHeight: 14,
+    textAlign: 'left',
   },
   insightCard: {
-    backgroundColor: theme.colors.surface,
-    borderRadius: 20,
+    backgroundColor: '#F3FBF0',
+    borderRadius: 28,
     borderWidth: 1,
-    borderColor: theme.colors.border,
-    padding: 12,
-    marginBottom: 10,
-    ...theme.shadowSoft,
+    borderColor: '#DAEFD6',
+    padding: 16,
+    marginBottom: 16,
+    shadowColor: '#223322',
+    shadowOffset: {
+      width: 0,
+      height: 10,
+    },
+    shadowOpacity: 0.065,
+    shadowRadius: 16,
+    elevation: 3,
   },
   cardHeaderRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 8,
+    marginBottom: 12,
   },
-  cardEyebrow: {
-    color: theme.colors.primaryDark,
-    fontSize: 11,
+  cardTitleBlock: {
+    flex: 1,
+    paddingRight: 10,
+  },
+  insightTitle: {
+    color: '#247A3E',
+    fontSize: 17,
     fontWeight: '900',
-    textTransform: 'uppercase',
-    letterSpacing: 0,
+    lineHeight: 22,
   },
-  cardTitle: {
+  insightSubtitle: {
     marginTop: 2,
-    color: theme.colors.text,
-    fontSize: 14,
-    fontWeight: '900',
+    color: '#5B6658',
+    fontSize: 12,
+    fontWeight: '700',
   },
   pendingCount: {
-    color: theme.colors.primaryDark,
+    color: '#247A3E',
     fontSize: 12,
-    fontWeight: '800',
-    backgroundColor: theme.colors.primarySoft,
+    fontWeight: '900',
+    backgroundColor: theme.colors.white,
     borderRadius: 999,
     overflow: 'hidden',
-    paddingHorizontal: 9,
-    paddingVertical: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
   },
   insightGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    marginHorizontal: -3,
+    marginHorizontal: -4,
   },
   insightPill: {
-    minWidth: '30.5%',
+    minWidth: '30%',
     flexGrow: 1,
-    borderRadius: 14,
-    padding: 8,
-    margin: 3,
+    borderRadius: 18,
+    padding: 9,
+    margin: 4,
     borderWidth: 1,
-    borderColor: 'rgba(34, 40, 49, 0.05)',
+    borderColor: 'rgba(34, 40, 49, 0.04)',
   },
   insightIcon: {
-    width: 24,
-    height: 24,
-    borderRadius: 9,
+    width: 26,
+    height: 26,
+    borderRadius: 10,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 4,
+    marginBottom: 5,
   },
   insightValue: {
-    fontSize: 17,
+    fontSize: 18,
     fontWeight: '900',
   },
   insightLabel: {
-    color: theme.colors.textSoft,
+    color: '#4B5563',
     fontSize: 11,
     fontWeight: '800',
   },
   miloSaysCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#F8FFF9',
-    borderRadius: 20,
+    backgroundColor: theme.colors.white,
+    borderRadius: 28,
     borderWidth: 1,
-    borderColor: '#D9F1E2',
-    padding: 11,
-    marginBottom: 10,
-    ...theme.shadowSoft,
+    borderColor: '#ECEFE8',
+    padding: 14,
+    marginBottom: 16,
+    shadowColor: '#223322',
+    shadowOffset: {
+      width: 0,
+      height: 10,
+    },
+    shadowOpacity: 0.065,
+    shadowRadius: 16,
+    elevation: 3,
   },
-  miloSaysIcon: {
-    width: 34,
-    height: 34,
-    borderRadius: 13,
-    backgroundColor: theme.colors.primarySoft,
+  miloSaysAvatar: {
+    width: 62,
+    height: 62,
+    borderRadius: 22,
+    backgroundColor: '#ECF8EF',
     alignItems: 'center',
     justifyContent: 'center',
-    marginRight: 10,
+    marginRight: 12,
+    overflow: 'hidden',
+  },
+  miloSaysImage: {
+    marginBottom: -5,
   },
   miloSaysCopy: {
     flex: 1,
   },
+  miloSaysTitle: {
+    color: '#247A3E',
+    fontSize: 13,
+    fontWeight: '900',
+    marginBottom: 4,
+  },
   miloSaysText: {
-    marginTop: 3,
-    color: theme.colors.text,
+    color: '#111827',
     fontSize: 13,
     fontWeight: '800',
     lineHeight: 18,
   },
+  encourageButton: {
+    alignSelf: 'flex-start',
+    marginTop: 10,
+    minHeight: 34,
+    borderRadius: 17,
+    backgroundColor: '#ECF8EF',
+    paddingHorizontal: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  encourageButtonText: {
+    color: '#247A3E',
+    fontSize: 12,
+    fontWeight: '900',
+  },
   chatBar: {
-    minHeight: 52,
-    backgroundColor: theme.colors.surface,
-    borderRadius: 18,
+    minHeight: 60,
+    backgroundColor: theme.colors.white,
+    borderRadius: 30,
     borderWidth: 1,
-    borderColor: theme.colors.border,
+    borderColor: '#E5E7EB',
     paddingVertical: 7,
-    paddingLeft: 12,
+    paddingLeft: 18,
     paddingRight: 7,
     flexDirection: 'row',
     alignItems: 'center',
-    ...theme.shadowSoft,
+    shadowColor: '#223322',
+    shadowOffset: {
+      width: 0,
+      height: 10,
+    },
+    shadowOpacity: 0.065,
+    shadowRadius: 16,
+    elevation: 3,
   },
   chatInput: {
     flex: 1,
-    color: theme.colors.text,
+    color: '#111827',
     fontSize: 14,
     fontWeight: '700',
-    paddingVertical: 7,
+    paddingVertical: 10,
     paddingRight: 10,
   },
   sendButton: {
-    width: 38,
-    height: 38,
-    borderRadius: 14,
-    backgroundColor: theme.colors.primaryDark,
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    backgroundColor: '#247A3E',
     alignItems: 'center',
     justifyContent: 'center',
+    shadowColor: '#247A3E',
+    shadowOffset: {
+      width: 0,
+      height: 7,
+    },
+    shadowOpacity: 0.18,
+    shadowRadius: 12,
+    elevation: 4,
   },
   sendButtonDisabled: {
     backgroundColor: theme.colors.muted,
