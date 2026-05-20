@@ -374,16 +374,30 @@ function getSituationMood(snapshot: CompanionPlannerSnapshot): MiloMood {
   return 'waving';
 }
 
-function InsightPill({ item }: { item: InsightItem }) {
+function InsightPill({
+  item,
+  showDivider,
+}: {
+  item: InsightItem;
+  showDivider: boolean;
+}) {
   return (
-    <View style={[styles.insightPill, { backgroundColor: item.backgroundColor }]}>
-      <View style={[styles.insightIcon, { backgroundColor: `${item.color}18` }]}>
-        <Ionicons name={item.icon} size={15} color={item.color} />
+    <View style={styles.insightPill}>
+      {showDivider ? <View style={styles.insightDivider} /> : null}
+      <View style={styles.insightMetricRow}>
+        <View style={[styles.insightIcon, { backgroundColor: `${item.color}16` }]}>
+          <Ionicons name={item.icon} size={12} color={item.color} />
+        </View>
+        <Text style={[styles.insightValue, { color: item.color }]}>
+          {item.value}
+        </Text>
       </View>
-      <Text style={[styles.insightValue, { color: item.color }]}>
-        {item.value}
-      </Text>
-      <Text numberOfLines={1} style={styles.insightLabel}>
+      <Text
+        numberOfLines={2}
+        adjustsFontSizeToFit
+        minimumFontScale={0.86}
+        style={styles.insightLabel}
+      >
         {item.label}
       </Text>
     </View>
@@ -590,30 +604,30 @@ export default function CompanionScreen() {
         backgroundColor: theme.colors.dangerSoft,
       },
       {
-        label: 'Today',
+        label: 'Due today',
         value: dueTodayCount + happeningNowCount + startingSoonCount,
-        icon: 'today',
+        icon: 'time',
         color: '#D97706',
         backgroundColor: '#FFF7ED',
       },
       {
         label: 'Start early',
         value: startEarlyCount,
-        icon: 'leaf',
+        icon: 'airplane',
         color: theme.colors.primaryDark,
         backgroundColor: theme.colors.primarySoft,
       },
       {
-        label: 'Meeting',
+        label: 'Meeting today',
         value: meetingTodayItems.length,
         icon: 'people',
         color: theme.colors.purple,
         backgroundColor: theme.colors.purpleSoft,
       },
       {
-        label: 'Keep Both',
+        label: 'Accepted overlap',
         value: acceptedOverlapItems.length,
-        icon: 'git-compare',
+        icon: 'heart',
         color: theme.colors.blue,
         backgroundColor: theme.colors.blueSoft,
       },
@@ -1211,18 +1225,16 @@ export default function CompanionScreen() {
 
       <View style={styles.insightCard}>
         <View style={styles.cardHeaderRow}>
-          <View style={styles.cardTitleBlock}>
-            <Text style={styles.insightTitle}>💡 Milo's Insight</Text>
-            <Text style={styles.insightSubtitle}>A quick read of today</Text>
-          </View>
-          <Text style={styles.pendingCount}>
-            {companionData.pendingCount} pending
-          </Text>
+          <Text style={styles.insightTitle}>💡 Milos Insight</Text>
         </View>
 
         <View style={styles.insightGrid}>
-          {companionData.insights.map((item) => (
-            <InsightPill key={item.label} item={item} />
+          {companionData.insights.map((item, index) => (
+            <InsightPill
+              key={item.label}
+              item={item}
+              showDivider={index > 0}
+            />
           ))}
         </View>
       </View>
@@ -1961,82 +1973,86 @@ const styles = StyleSheet.create({
   },
   insightCard: {
     backgroundColor: '#F3FBF0',
-    borderRadius: 28,
+    borderRadius: 26,
     borderWidth: 1,
     borderColor: '#DAEFD6',
-    padding: 16,
-    marginBottom: 16,
+    paddingHorizontal: 13,
+    paddingTop: 13,
+    paddingBottom: 12,
+    marginBottom: 14,
     shadowColor: '#223322',
     shadowOffset: {
       width: 0,
-      height: 10,
+      height: 8,
     },
-    shadowOpacity: 0.065,
-    shadowRadius: 16,
+    shadowOpacity: 0.06,
+    shadowRadius: 14,
     elevation: 3,
   },
   cardHeaderRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 12,
-  },
-  cardTitleBlock: {
-    flex: 1,
-    paddingRight: 10,
+    marginBottom: 9,
   },
   insightTitle: {
     color: '#247A3E',
-    fontSize: 17,
+    fontSize: 16,
     fontWeight: '900',
-    lineHeight: 22,
-  },
-  insightSubtitle: {
-    marginTop: 2,
-    color: '#5B6658',
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  pendingCount: {
-    color: '#247A3E',
-    fontSize: 12,
-    fontWeight: '900',
-    backgroundColor: theme.colors.white,
-    borderRadius: 999,
-    overflow: 'hidden',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
+    lineHeight: 20,
   },
   insightGrid: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    marginHorizontal: -4,
+    alignItems: 'stretch',
+    backgroundColor: 'rgba(255, 255, 255, 0.58)',
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(214, 222, 210, 0.58)',
+    paddingHorizontal: 4,
+    paddingVertical: 8,
   },
   insightPill: {
-    minWidth: '30%',
-    flexGrow: 1,
-    borderRadius: 18,
-    padding: 9,
-    margin: 4,
-    borderWidth: 1,
-    borderColor: 'rgba(34, 40, 49, 0.04)',
+    flex: 1,
+    minWidth: 0,
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+    paddingHorizontal: 2,
+    position: 'relative',
   },
-  insightIcon: {
-    width: 26,
-    height: 26,
-    borderRadius: 10,
+  insightDivider: {
+    position: 'absolute',
+    left: 0,
+    top: 4,
+    bottom: 3,
+    width: 1,
+    backgroundColor: '#D6DED2',
+  },
+  insightMetricRow: {
+    minHeight: 22,
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 5,
+    gap: 3,
+    marginBottom: 4,
+  },
+  insightIcon: {
+    width: 19,
+    height: 19,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   insightValue: {
-    fontSize: 18,
+    fontSize: 15,
     fontWeight: '900',
+    lineHeight: 18,
   },
   insightLabel: {
-    color: '#4B5563',
-    fontSize: 11,
+    width: '100%',
+    color: '#485247',
+    fontSize: 10,
     fontWeight: '800',
+    lineHeight: 12,
+    textAlign: 'center',
   },
   miloSaysCard: {
     flexDirection: 'row',
