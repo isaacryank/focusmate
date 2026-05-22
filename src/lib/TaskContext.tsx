@@ -15,11 +15,15 @@ import { cancelPlannerReminder } from './notificationUtils';
 import { useAuth } from './AuthContext';
 import { supabase } from './supabase';
 
-const LEGACY_TASKS_STORAGE_KEY = '@focusmate/tasks';
 const ANONYMOUS_TASKS_STORAGE_KEY = '@focusmate/tasks/anonymous';
+const TASK_CONTEXT_LOG_PREFIX = '[TaskContext]';
 
 const getTasksStorageKey = (userId?: string | null) =>
   userId ? `@focusmate/tasks/user:${userId}` : ANONYMOUS_TASKS_STORAGE_KEY;
+
+type StoredTask = Task & {
+  localOnly?: boolean;
+};
 
 export type SupabaseTaskRow = {
   id: string;
@@ -336,52 +340,7 @@ type TaskContextType = {
 
 const TaskContext = createContext<TaskContextType | undefined>(undefined);
 
-const starterTasks: Task[] = [
-  {
-    id: '1',
-    title: 'Prepare FYP proposal outline',
-    description: 'Draft the main idea, objectives, and scope.',
-    dueDate: '2026-05-10',
-    dueTime: '10:00 AM',
-    location: 'Library',
-    reminder: '30min',
-    plannerType: 'task',
-    priority: 'high',
-    status: 'pending',
-    subtasks: [],
-    createdAt: new Date().toISOString(),
-  },
-  {
-    id: '2',
-    title: 'Supervisor meeting',
-    description: 'Discuss FocusMate app scope and AI companion module.',
-    dueDate: '2026-05-12',
-    dueTime: '2:30 PM',
-    location: 'Faculty office',
-    reminder: '1hour',
-    plannerType: 'meeting',
-    priority: 'high',
-    status: 'pending',
-    subtasks: [],
-    createdAt: new Date().toISOString(),
-  },
-  {
-    id: '3',
-    title: 'Friend meetup',
-    description: 'Dinner meetup reminder.',
-    dueDate: '2026-05-15',
-    dueTime: '8:00 PM',
-    location: 'Cafe',
-    reminder: '1day',
-    plannerType: 'date',
-    priority: 'medium',
-    status: 'pending',
-    subtasks: [],
-    createdAt: new Date().toISOString(),
-  },
-];
-
-function normalizeTask(task: any): Task {
+function normalizeTask(task: any): StoredTask {
   return {
     id: task.id || Date.now().toString(),
     title: task.title || 'Untitled item',
@@ -406,32 +365,29 @@ function normalizeTask(task: any): Task {
     status: task.status || 'pending',
     subtasks: Array.isArray(task.subtasks) ? task.subtasks : [],
     createdAt: task.createdAt || new Date().toISOString(),
+    localOnly: Boolean(task.localOnly),
   };
-}
-
-function mergeTasksPreferLocal(localTasks: Task[], remoteTasks: Task[]) {
-  const localTaskIds = new Set(localTasks.map((task) => task.id));
-  const remoteOnlyTasks = remoteTasks.filter((task) => !localTaskIds.has(task.id));
-
-  if (remoteOnlyTasks.length === 0) {
-    return localTasks;
-  }
-
-  return [...localTasks, ...remoteOnlyTasks];
 }
 
 export function TaskProvider({ children }: { children: React.ReactNode }) {
   const { user, isLoadingAuth } = useAuth();
   const userId = user?.id ?? null;
   const tasksStorageKey = getTasksStorageKey(userId);
-  const [tasks, setTasks] = useState<Task[]>([]);
+  const [tasks, setTasks] = useState<StoredTask[]>([]);
   const [isLoadingTasks, setIsLoadingTasks] = useState(true);
   const [hasLoadedTasks, setHasLoadedTasks] = useState(false);
   const [loadedTasksStorageKey, setLoadedTasksStorageKey] = useState<
     string | null
   >(null);
-  const lastSyncedUserIdRef = useRef<string | null>(null);
+  const loadRequestIdRef = useRef(0);
+  const currentTaskScopeRef = useRef({
+    storageKey: tasksStorageKey,
+    userId,
+  });
   const skipNextSaveRef = useRef(false);
+  const hasLoadedCurrentTaskScope =
+    hasLoadedTasks && loadedTasksStorageKey === tasksStorageKey;
+  const scopedTasks = hasLoadedCurrentTaskScope ? tasks : [];
 
   useEffect(() => {
     if (isLoadingAuth) {
@@ -439,22 +395,127 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
     }
 
     let isCancelled = false;
+    const loadRequestId = loadRequestIdRef.current + 1;
+    const taskScope = {
+      storageKey: tasksStorageKey,
+      userId,
+    };
+
+    loadRequestIdRef.current = loadRequestId;
+    currentTaskScopeRef.current = taskScope;
 
     setIsLoadingTasks(true);
     setHasLoadedTasks(false);
     setLoadedTasksStorageKey(null);
-    lastSyncedUserIdRef.current = null;
     setTasks([]);
 
-    loadTasks(tasksStorageKey, () => isCancelled);
+    const isCurrentLoad = () =>
+      !isCancelled &&
+      loadRequestIdRef.current === loadRequestId &&
+      currentTaskScopeRef.current.storageKey === taskScope.storageKey &&
+      currentTaskScopeRef.current.userId === taskScope.userId;
+
+    const logTaskLoadCounts = (
+      localTaskCount: number,
+      remoteTaskCount: number,
+      finalTaskCount: number
+    ) => {
+      console.log(
+        `${TASK_CONTEXT_LOG_PREFIX} current auth user id:`,
+        taskScope.userId
+      );
+      console.log(
+        `${TASK_CONTEXT_LOG_PREFIX} storage key being loaded:`,
+        taskScope.storageKey
+      );
+      console.log(`${TASK_CONTEXT_LOG_PREFIX} local task count:`, localTaskCount);
+      console.log(
+        `${TASK_CONTEXT_LOG_PREFIX} remote task count:`,
+        remoteTaskCount
+      );
+      console.log(`${TASK_CONTEXT_LOG_PREFIX} final task count:`, finalTaskCount);
+    };
+
+    const loadScopedTasks = async () => {
+      let nextTasks: StoredTask[] = [];
+      let localTaskCount = 0;
+      let remoteTaskCount = 0;
+
+      try {
+        const storedTasks = await AsyncStorage.getItem(taskScope.storageKey);
+
+        if (!isCurrentLoad()) {
+          return;
+        }
+
+        if (storedTasks) {
+          const parsedTasks = JSON.parse(storedTasks);
+          nextTasks = Array.isArray(parsedTasks)
+            ? parsedTasks.map(normalizeTask)
+            : [];
+        }
+
+        localTaskCount = nextTasks.length;
+      } catch (error) {
+        if (!isCurrentLoad()) {
+          return;
+        }
+
+        console.log('Failed to load tasks:', error);
+        nextTasks = [];
+        localTaskCount = 0;
+      }
+
+      if (taskScope.userId) {
+        try {
+          const { data, error } = await supabase
+            .from('tasks')
+            .select('*')
+            .eq('user_id', taskScope.userId);
+
+          if (!isCurrentLoad()) {
+            return;
+          }
+
+          if (error) {
+            console.warn('Failed to fetch Supabase tasks:', error);
+          } else {
+            const remoteTasks: StoredTask[] = (data ?? []).map((row) =>
+              supabaseRowToTask(row as SupabaseTaskRow)
+            );
+
+            remoteTaskCount = remoteTasks.length;
+            nextTasks = remoteTasks;
+          }
+        } catch (error) {
+          if (!isCurrentLoad()) {
+            return;
+          }
+
+          console.warn('Failed to fetch Supabase tasks:', error);
+        }
+      }
+
+      if (!isCurrentLoad()) {
+        return;
+      }
+
+      logTaskLoadCounts(localTaskCount, remoteTaskCount, nextTasks.length);
+      setTasks(nextTasks);
+      setLoadedTasksStorageKey(taskScope.storageKey);
+      setIsLoadingTasks(false);
+      setHasLoadedTasks(true);
+    };
+
+    void loadScopedTasks();
 
     return () => {
       isCancelled = true;
     };
-  }, [isLoadingAuth, tasksStorageKey]);
+  }, [isLoadingAuth, tasksStorageKey, userId]);
 
   useEffect(() => {
-    if (!hasLoadedTasks || loadedTasksStorageKey !== tasksStorageKey) {
+    if (!hasLoadedCurrentTaskScope) {
       return;
     }
 
@@ -464,95 +525,9 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
     }
 
     saveTasks(tasks, tasksStorageKey);
-  }, [tasks, hasLoadedTasks, loadedTasksStorageKey, tasksStorageKey]);
+  }, [tasks, hasLoadedCurrentTaskScope, tasksStorageKey]);
 
-  useEffect(() => {
-    if (!hasLoadedTasks || loadedTasksStorageKey !== tasksStorageKey) {
-      return;
-    }
-
-    if (!userId) {
-      lastSyncedUserIdRef.current = null;
-      return;
-    }
-
-    if (lastSyncedUserIdRef.current === userId) {
-      return;
-    }
-
-    let isCancelled = false;
-
-    const fetchSupabaseTasks = async () => {
-      const { data, error } = await supabase
-        .from('tasks')
-        .select('*')
-        .eq('user_id', userId);
-
-      if (error) {
-        console.warn('Failed to fetch Supabase tasks:', error);
-        return;
-      }
-
-      if (isCancelled) {
-        return;
-      }
-
-      if (data?.length) {
-        const remoteTasks = data.map((row) =>
-          supabaseRowToTask(row as SupabaseTaskRow)
-        );
-
-        setTasks((currentTasks) =>
-          mergeTasksPreferLocal(currentTasks, remoteTasks)
-        );
-      }
-
-      lastSyncedUserIdRef.current = userId;
-    };
-
-    fetchSupabaseTasks().catch((error) => {
-      if (!isCancelled) {
-        console.warn('Failed to fetch Supabase tasks:', error);
-      }
-    });
-
-    return () => {
-      isCancelled = true;
-    };
-  }, [hasLoadedTasks, loadedTasksStorageKey, tasksStorageKey, userId]);
-
-  const loadTasks = async (
-    storageKey: string,
-    isCancelled: () => boolean
-  ) => {
-    try {
-      const storedTasks = await AsyncStorage.getItem(storageKey);
-
-      if (isCancelled()) {
-        return;
-      }
-
-      if (storedTasks) {
-        const parsedTasks = JSON.parse(storedTasks);
-        setTasks(parsedTasks.map(normalizeTask));
-      } else {
-        setTasks(starterTasks);
-      }
-    } catch (error) {
-      if (!isCancelled()) {
-        console.log('Failed to load tasks:', error);
-        setTasks(starterTasks);
-      }
-    } finally {
-      if (!isCancelled()) {
-        setLoadedTasksStorageKey(storageKey);
-        setIsLoadingTasks(false);
-        setHasLoadedTasks(true);
-      }
-    }
-  };
-
-  const saveTasks = async (nextTasks: Task[], storageKey: string) => {
+  const saveTasks = async (nextTasks: StoredTask[], storageKey: string) => {
     try {
       await AsyncStorage.setItem(storageKey, JSON.stringify(nextTasks));
     } catch (error) {
@@ -560,15 +535,16 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const syncTaskToSupabase = async (task: Task) => {
-    const userId = user?.id;
-
-    if (!userId) {
+  const syncTaskToSupabase = async (
+    task: StoredTask,
+    scopedUserId: string | null
+  ) => {
+    if (!scopedUserId || task.localOnly) {
       return;
     }
 
     try {
-      const row = taskToSupabaseRow(task, userId);
+      const row = taskToSupabaseRow(task, scopedUserId);
       const { error } = await supabase
         .from('tasks')
         .upsert(row, { onConflict: 'user_id,local_id' });
@@ -581,10 +557,11 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const deleteTaskFromSupabase = async (localTaskId: string) => {
-    const userId = user?.id;
-
-    if (!userId) {
+  const deleteTaskFromSupabase = async (
+    localTaskId: string,
+    scopedUserId: string | null
+  ) => {
+    if (!scopedUserId) {
       return;
     }
 
@@ -592,7 +569,7 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
       const { error } = await supabase
         .from('tasks')
         .delete()
-        .eq('user_id', userId)
+        .eq('user_id', scopedUserId)
         .eq('local_id', localTaskId);
 
       if (error) {
@@ -604,7 +581,8 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
   };
 
   const addTask = (task: AddTaskInput, options?: AddTaskOptions) => {
-    const newTask: Task = {
+    const shouldSyncToSupabase = options?.syncToSupabase !== false;
+    const newTask: StoredTask = {
       id: task.id || Date.now().toString(),
       title: task.title,
       description: task.description,
@@ -628,17 +606,22 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
       status: 'pending',
       subtasks: task.subtasks || [],
       createdAt: new Date().toISOString(),
+      localOnly: shouldSyncToSupabase ? undefined : true,
     };
 
-    setTasks((current) => [newTask, ...current]);
+    skipNextSaveRef.current = false;
+    setTasks((current) => {
+      const currentScopeTasks = hasLoadedCurrentTaskScope ? current : [];
+      return [newTask, ...currentScopeTasks];
+    });
 
-    if (options?.syncToSupabase !== false) {
-      void syncTaskToSupabase(newTask);
+    if (shouldSyncToSupabase) {
+      void syncTaskToSupabase(newTask, userId);
     }
   };
 
   const updateTask = async (id: string, updates: UpdateTaskInput) => {
-    const existingTask = tasks.find((task) => task.id === id);
+    const existingTask = scopedTasks.find((task) => task.id === id);
 
     if (!existingTask) {
       return;
@@ -666,11 +649,11 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
       current.map((task) => (task.id === id ? updatedTask : task))
     );
 
-    void syncTaskToSupabase(updatedTask);
+    void syncTaskToSupabase(updatedTask, userId);
   };
 
   const toggleTask = async (id: string) => {
-    const existingTask = tasks.find((task) => task.id === id);
+    const existingTask = scopedTasks.find((task) => task.id === id);
 
     if (!existingTask) {
       return;
@@ -690,7 +673,7 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
       current.map((task) => (task.id === id ? toggledTask : task))
     );
 
-    void syncTaskToSupabase(toggledTask);
+    void syncTaskToSupabase(toggledTask, userId);
 
     if (isMarkingDone && existingTask.notificationId) {
       await cancelPlannerReminder(existingTask.notificationId);
@@ -698,7 +681,11 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
   };
 
   const deleteTask = async (id: string) => {
-    const taskToDelete = tasks.find((task) => task.id === id);
+    const taskToDelete = scopedTasks.find((task) => task.id === id);
+
+    if (!taskToDelete) {
+      return;
+    }
 
     if (taskToDelete?.notificationId) {
       await cancelPlannerReminder(taskToDelete.notificationId);
@@ -706,13 +693,13 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
 
     setTasks((current) => current.filter((task) => task.id !== id));
 
-    if (taskToDelete) {
-      void deleteTaskFromSupabase(id);
+    if (!taskToDelete.localOnly) {
+      void deleteTaskFromSupabase(id, userId);
     }
   };
 
   const clearAllTasks = async () => {
-    for (const task of tasks) {
+    for (const task of scopedTasks) {
       if (task.notificationId) {
         await cancelPlannerReminder(task.notificationId);
       }
@@ -726,7 +713,7 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
   return (
     <TaskContext.Provider
       value={{
-        tasks,
+        tasks: scopedTasks,
         isLoadingTasks,
         addTask,
         updateTask,
