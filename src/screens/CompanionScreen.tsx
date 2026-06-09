@@ -1,4 +1,5 @@
 import React, {
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -7,7 +8,7 @@ import React, {
 } from 'react';
 import {
   Animated,
-  Easing,
+  Image,
   StyleSheet,
   Text,
   TextInput,
@@ -17,8 +18,9 @@ import {
 } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import * as Speech from 'expo-speech';
+import { VideoView, useVideoPlayer } from 'expo-video';
 import { Ionicons } from '@expo/vector-icons';
-import { useNavigation } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 
 import { theme } from '../theme';
@@ -45,8 +47,13 @@ import MiloMoodImage from '../components/milo/MiloMoodImage';
 type IconName = React.ComponentProps<typeof Ionicons>['name'];
 
 type QuickActionKey = 'first' | 'plan' | 'calm' | 'schedule';
+type MiloVideoKey = 'idle' | 'greeting';
 
 const TEMPORARY_MILO_REACTION_MS = 6500;
+const MILO_INACTIVITY_AUTOPLAY_MS = 30000;
+const miloIdleScene = require('../../assets/images/companion/milo_idle_scene.png');
+const miloIdleVideo = require('../../assets/videos/milo/milo_idle_final.mp4');
+const miloGreetingVideo = require('../../assets/videos/milo/milo_greeting_final.mp4');
 
 type InsightItem = {
   label: string;
@@ -478,16 +485,37 @@ export default function CompanionScreen() {
   const compactWidth = width < 380;
   const shortScreen = height < 760;
 
-  const floatMotion = useRef(new Animated.Value(0)).current;
-  const tapScale = useRef(new Animated.Value(1)).current;
   const speechBubbleMotion = useRef(new Animated.Value(1)).current;
   const tapMessageIndexRef = useRef(0);
   const reactionTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const inactivityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isMiloVideoPlayingRef = useRef(false);
+  const isCompanionFocusedRef = useRef(false);
+  const playIdleMiloVideoRef = useRef<() => void>(() => {});
   const mountedRef = useRef(true);
 
   const [miloMessage, setMiloMessage] = useState<string | null>(null);
   const [miloMood, setMiloMood] = useState<MiloMood | null>(null);
   const [draftMessage, setDraftMessage] = useState('');
+  const [activeMiloVideo, setActiveMiloVideo] = useState<MiloVideoKey | null>(
+    null
+  );
+  const [isCompanionFocused, setIsCompanionFocused] = useState(false);
+  const [videoFailed, setVideoFailed] = useState(false);
+
+  const idlePlayer = useVideoPlayer(miloIdleVideo, (player) => {
+    player.loop = false;
+    player.muted = true;
+  });
+  const greetingPlayer = useVideoPlayer(miloGreetingVideo, (player) => {
+    player.loop = false;
+    player.muted = true;
+  });
+  const getActivePlayer = useCallback(() => {
+    if (activeMiloVideo === 'greeting') return greetingPlayer;
+    if (activeMiloVideo === 'idle') return idlePlayer;
+    return null;
+  }, [activeMiloVideo, greetingPlayer, idlePlayer]);
 
   useLayoutEffect(() => {
     navigation.setOptions({
@@ -497,35 +525,17 @@ export default function CompanionScreen() {
   }, [navigation]);
 
   useEffect(() => {
-    const animation = Animated.loop(
-      Animated.sequence([
-        Animated.timing(floatMotion, {
-          toValue: 1,
-          duration: 1600,
-          easing: Easing.inOut(Easing.ease),
-          useNativeDriver: true,
-        }),
-        Animated.timing(floatMotion, {
-          toValue: 0,
-          duration: 1600,
-          easing: Easing.inOut(Easing.ease),
-          useNativeDriver: true,
-        }),
-      ])
-    );
-
-    animation.start();
-
-    return () => animation.stop();
-  }, [floatMotion]);
-
-  useEffect(() => {
     return () => {
       mountedRef.current = false;
 
       if (reactionTimeoutRef.current) {
         clearTimeout(reactionTimeoutRef.current);
         reactionTimeoutRef.current = null;
+      }
+
+      if (inactivityTimerRef.current) {
+        clearTimeout(inactivityTimerRef.current);
+        inactivityTimerRef.current = null;
       }
     };
   }, []);
@@ -644,13 +654,8 @@ export default function CompanionScreen() {
 
   const activeMood = miloMood || companionData.mood;
   const activeMessage = miloMessage || companionData.defaultMessage;
-  const heroInnerWidth = Math.max(width - 40, 300);
   const moodPanelWidth = compactWidth ? 104 : 118;
   const roomCardHeight = shortScreen ? 414 : compactWidth ? 430 : 456;
-  const miloSize = Math.min(
-    shortScreen ? 202 : compactWidth ? 208 : 228,
-    Math.max(compactWidth ? 184 : 204, heroInnerWidth - moodPanelWidth - 32)
-  );
   const bottomContentPadding = tabBarHeight + (shortScreen ? 54 : 66);
   const moodLabel = getMiloMoodLabel(activeMood);
   const moodCareText = getMiloEncouragement(activeMood);
@@ -693,95 +698,6 @@ export default function CompanionScreen() {
     },
   ];
 
-  const floatingStyle = {
-    transform: [
-      {
-        translateY: floatMotion.interpolate({
-          inputRange: [0, 1],
-          outputRange: [0, -6],
-        }),
-      },
-    ],
-  };
-
-  const roomBackParallaxStyle = {
-    transform: [
-      {
-        translateX: floatMotion.interpolate({
-          inputRange: [0, 1],
-          outputRange: [0, -0.8],
-        }),
-      },
-      {
-        translateY: floatMotion.interpolate({
-          inputRange: [0, 1],
-          outputRange: [0, -1],
-        }),
-      },
-    ],
-  };
-
-  const roomFloorParallaxStyle = {
-    transform: [
-      {
-        translateY: floatMotion.interpolate({
-          inputRange: [0, 1],
-          outputRange: [0, 0.8],
-        }),
-      },
-    ],
-  };
-
-  const floorRugMotionStyle = {
-    transform: [
-      {
-        translateY: floatMotion.interpolate({
-          inputRange: [0, 1],
-          outputRange: [0, 1.5],
-        }),
-      },
-      {
-        scaleX: floatMotion.interpolate({
-          inputRange: [0, 1],
-          outputRange: [1, 0.98],
-        }),
-      },
-      {
-        scaleY: floatMotion.interpolate({
-          inputRange: [0, 1],
-          outputRange: [1, 0.98],
-        }),
-      },
-    ],
-  };
-
-  const floorShadowMotionStyle = {
-    opacity: floatMotion.interpolate({
-      inputRange: [0, 1],
-      outputRange: [0.42, 0.28],
-    }),
-    transform: [
-      {
-        translateY: floatMotion.interpolate({
-          inputRange: [0, 1],
-          outputRange: [0, 1.5],
-        }),
-      },
-      {
-        scaleX: floatMotion.interpolate({
-          inputRange: [0, 1],
-          outputRange: [1, 0.94],
-        }),
-      },
-      {
-        scaleY: floatMotion.interpolate({
-          inputRange: [0, 1],
-          outputRange: [1, 0.94],
-        }),
-      },
-    ],
-  };
-
   const speechBubbleMotionStyle = {
     opacity: speechBubbleMotion,
     transform: [
@@ -793,6 +709,116 @@ export default function CompanionScreen() {
       },
     ],
   };
+
+  const clearInactivityTimer = useCallback(() => {
+    if (inactivityTimerRef.current) {
+      clearTimeout(inactivityTimerRef.current);
+      inactivityTimerRef.current = null;
+    }
+  }, []);
+
+  const stopMiloVideos = useCallback(() => {
+    try {
+      greetingPlayer.pause();
+      idlePlayer.pause();
+    } catch (error) {
+      console.warn('Unable to pause Milo videos:', error);
+    }
+
+    isMiloVideoPlayingRef.current = false;
+    setActiveMiloVideo(null);
+  }, [greetingPlayer, idlePlayer]);
+
+  const resetInactivityTimer = useCallback(() => {
+    clearInactivityTimer();
+
+    if (!isCompanionFocusedRef.current) {
+      return;
+    }
+
+    inactivityTimerRef.current = setTimeout(() => {
+      inactivityTimerRef.current = null;
+
+      if (!isCompanionFocusedRef.current) {
+        console.log('Skipped Milo video because Companion is not focused');
+        return;
+      }
+
+      playIdleMiloVideoRef.current();
+    }, MILO_INACTIVITY_AUTOPLAY_MS);
+  }, [clearInactivityTimer]);
+
+  const finishMiloVideo = useCallback(() => {
+    if (!isMiloVideoPlayingRef.current) {
+      return;
+    }
+
+    console.log('Milo video ended');
+    isMiloVideoPlayingRef.current = false;
+    setActiveMiloVideo(null);
+    resetInactivityTimer();
+  }, [resetInactivityTimer]);
+
+  const handleMiloVideoError = useCallback(
+    (videoKey: MiloVideoKey, error: unknown) => {
+      console.warn('Milo video error', error);
+      console.warn(`Unable to play Milo ${videoKey} video:`, error);
+      isMiloVideoPlayingRef.current = false;
+      setActiveMiloVideo(null);
+      setVideoFailed(true);
+      resetInactivityTimer();
+    },
+    [resetInactivityTimer]
+  );
+
+  const playMiloVideo = useCallback(
+    (videoKey: MiloVideoKey) => {
+      if (!isCompanionFocusedRef.current) {
+        console.log('Skipped Milo video because Companion is not focused');
+        return;
+      }
+
+      if (isMiloVideoPlayingRef.current) {
+        return;
+      }
+
+      if (videoFailed) return;
+
+      clearInactivityTimer();
+
+      const player = videoKey === 'greeting' ? greetingPlayer : idlePlayer;
+
+      try {
+        console.log(
+          videoKey === 'greeting' ? 'Playing greeting video' : 'Playing idle video'
+        );
+        isMiloVideoPlayingRef.current = true;
+        setActiveMiloVideo(videoKey);
+
+        requestAnimationFrame(() => {
+          try {
+            player.replay();
+            player.play();
+          } catch (error) {
+            handleMiloVideoError(videoKey, error);
+          }
+        });
+      } catch (error) {
+        handleMiloVideoError(videoKey, error);
+      }
+    },
+    [
+      clearInactivityTimer,
+      greetingPlayer,
+      handleMiloVideoError,
+      idlePlayer,
+      videoFailed,
+    ]
+  );
+
+  const playIdleMiloVideo = useCallback(() => {
+    playMiloVideo('idle');
+  }, [playMiloVideo]);
 
   const tapMessages = useMemo(
     () => [
@@ -813,6 +839,60 @@ export default function CompanionScreen() {
   }, [tapMessages]);
 
   useEffect(() => {
+    playIdleMiloVideoRef.current = playIdleMiloVideo;
+  }, [playIdleMiloVideo]);
+
+  useFocusEffect(
+    useCallback(() => {
+      console.log('Companion focused');
+      isCompanionFocusedRef.current = true;
+      setIsCompanionFocused(true);
+      setActiveMiloVideo(null);
+      isMiloVideoPlayingRef.current = false;
+      resetInactivityTimer();
+
+      return () => {
+        console.log('Companion blurred, stopping Milo videos');
+        isCompanionFocusedRef.current = false;
+        setIsCompanionFocused(false);
+        clearInactivityTimer();
+        stopMiloVideos();
+      };
+    }, [clearInactivityTimer, resetInactivityTimer, stopMiloVideos])
+  );
+
+  useEffect(() => {
+    const idleEndSubscription = idlePlayer.addListener('playToEnd', finishMiloVideo);
+    const greetingEndSubscription = greetingPlayer.addListener(
+      'playToEnd',
+      finishMiloVideo
+    );
+    const idleStatusSubscription = idlePlayer.addListener(
+      'statusChange',
+      ({ status, error }) => {
+        if (status === 'error') {
+          handleMiloVideoError('idle', error);
+        }
+      }
+    );
+    const greetingStatusSubscription = greetingPlayer.addListener(
+      'statusChange',
+      ({ status, error }) => {
+        if (status === 'error') {
+          handleMiloVideoError('greeting', error);
+        }
+      }
+    );
+
+    return () => {
+      idleEndSubscription.remove();
+      greetingEndSubscription.remove();
+      idleStatusSubscription.remove();
+      greetingStatusSubscription.remove();
+    };
+  }, [finishMiloVideo, greetingPlayer, handleMiloVideoError, idlePlayer]);
+
+  useEffect(() => {
     speechBubbleMotion.setValue(0);
 
     const animation = Animated.spring(speechBubbleMotion, {
@@ -826,25 +906,6 @@ export default function CompanionScreen() {
 
     return () => animation.stop();
   }, [activeMessage, speechBubbleMotion]);
-
-  const animateTap = () => {
-    tapScale.setValue(1);
-
-    Animated.sequence([
-      Animated.timing(tapScale, {
-        toValue: 1.08,
-        duration: 130,
-        easing: Easing.out(Easing.ease),
-        useNativeDriver: true,
-      }),
-      Animated.spring(tapScale, {
-        toValue: 1,
-        friction: 4,
-        tension: 110,
-        useNativeDriver: true,
-      }),
-    ]).start();
-  };
 
   const clearReactionTimeout = () => {
     if (reactionTimeoutRef.current) {
@@ -871,12 +932,22 @@ export default function CompanionScreen() {
   };
 
   const handleMiloTap = async () => {
-    animateTap();
-
     const currentIndex = tapMessageIndexRef.current % tapMessages.length;
     tapMessageIndexRef.current = (currentIndex + 1) % tapMessages.length;
 
     await updateMiloSpeech(tapMessages[currentIndex], companionData.mood);
+  };
+
+  const handleMiloPress = () => {
+    console.log('Milo tapped');
+
+    if (isMiloVideoPlayingRef.current) {
+      return;
+    }
+
+    resetInactivityTimer();
+    playMiloVideo('greeting');
+    void handleMiloTap();
   };
 
   const handleSpeak = async () => {
@@ -1003,6 +1074,8 @@ export default function CompanionScreen() {
     );
   };
 
+  const activePlayer = getActivePlayer();
+
   return (
     <ScreenContainer
       topPadding={14}
@@ -1050,31 +1123,36 @@ export default function CompanionScreen() {
         </View>
       </View>
 
-      <View style={[styles.roomCard, { height: roomCardHeight }]}>
-        <Animated.View style={[styles.roomBackWall, roomBackParallaxStyle]}>
-          <View style={styles.wallLightGlow} />
-          <View style={styles.roomWindowGlow} />
-          <View style={styles.windowLightBeam} />
-          <View style={styles.windowFrame}>
-            <View style={styles.windowPane} />
-            <View style={styles.windowPane} />
-            <View style={styles.windowDivider} />
-            <View style={styles.windowSill} />
-          </View>
-          <View style={styles.wallPoster}>
-            <View style={styles.posterSun} />
-            <View style={styles.posterHill} />
-          </View>
-          <View style={styles.wallShelf}>
-            <View style={styles.shelfBook} />
-            <View style={styles.shelfBookShort} />
-            <View style={styles.shelfPlant}>
-              <View style={styles.plantLeafLeft} />
-              <View style={styles.plantLeafRight} />
-            </View>
-          </View>
-          <View style={styles.wallBaseboard} />
-        </Animated.View>
+      <View style={[styles.roomCard, styles.miloStage, { height: roomCardHeight }]}>
+        <TouchableOpacity
+          activeOpacity={0.95}
+          onPress={handleMiloPress}
+          style={styles.miloStageMediaWrap}
+          accessibilityRole="button"
+          accessibilityLabel="Tap Milo"
+        >
+          <Image
+            source={miloIdleScene}
+            style={styles.miloStageMedia}
+            resizeMode="cover"
+          />
+
+          {isCompanionFocused &&
+            activeMiloVideo &&
+            activePlayer &&
+            !videoFailed && (
+              <VideoView
+                player={activePlayer}
+                style={[styles.miloStageMedia, styles.miloStageVideo]}
+                nativeControls={false}
+                contentFit="cover"
+                surfaceType="textureView"
+                useExoShutter={false}
+              />
+            )}
+
+          <View pointerEvents="none" style={styles.miloStageSoftOverlay} />
+        </TouchableOpacity>
 
         <Animated.View
           style={[styles.speechBubble, speechBubbleMotionStyle]}
@@ -1114,29 +1192,6 @@ export default function CompanionScreen() {
           ))}
         </View>
 
-        <Animated.View style={[styles.roomFloor, roomFloorParallaxStyle]}>
-          <View style={styles.floorBackCurve} />
-          <View style={styles.floorJunctionShadow} />
-          <View style={styles.floorLine} />
-          <View style={styles.floorPerspectiveLeft} />
-          <View style={styles.floorPerspectiveCenter} />
-          <View style={styles.floorPerspectiveRight} />
-          <View style={styles.floorBoardLeft} />
-          <View style={styles.floorBoardRight} />
-          <View style={styles.floorPlant}>
-            <View style={styles.floorPlantPot} />
-            <View style={styles.floorPlantLeafOne} />
-            <View style={styles.floorPlantLeafTwo} />
-            <View style={styles.floorPlantLeafThree} />
-          </View>
-          <Animated.View style={[styles.floorRug, floorRugMotionStyle]}>
-            <View style={styles.floorRugCenter} />
-          </Animated.View>
-          <Animated.View
-            style={[styles.floorContactShadow, floorShadowMotionStyle]}
-          />
-        </Animated.View>
-
         <View style={styles.tapMiloCard}>
           <TouchableOpacity
             activeOpacity={0.82}
@@ -1153,7 +1208,7 @@ export default function CompanionScreen() {
           </TouchableOpacity>
           <TouchableOpacity
             activeOpacity={0.86}
-            onPress={handleMiloTap}
+            onPress={handleMiloPress}
             accessibilityRole="button"
             accessibilityLabel="Tap Milo to talk"
           >
@@ -1161,29 +1216,6 @@ export default function CompanionScreen() {
           </TouchableOpacity>
         </View>
 
-        <View
-          style={[
-            styles.miloStage,
-            { right: moodPanelWidth + (compactWidth ? 18 : 26) },
-          ]}
-        >
-          <Animated.View style={[styles.miloFloat, floatingStyle]}>
-            <Animated.View style={{ transform: [{ scale: tapScale }] }}>
-              <TouchableOpacity
-                activeOpacity={0.9}
-                onPress={handleMiloTap}
-                accessibilityRole="button"
-                accessibilityLabel="Tap Milo"
-              >
-                <MiloMoodImage
-                  mood={activeMood}
-                  size={miloSize}
-                  style={styles.miloImage}
-                />
-              </TouchableOpacity>
-            </Animated.View>
-          </Animated.View>
-        </View>
       </View>
 
       <View style={styles.askCard}>
@@ -1560,7 +1592,7 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     borderWidth: 1,
     borderColor: '#EEF1EA',
-    zIndex: 8,
+    zIndex: 10,
     shadowColor: '#243024',
     shadowOffset: {
       width: 0,
@@ -1599,7 +1631,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: 18,
     right: 12,
-    zIndex: 7,
+    zIndex: 10,
   },
   moodCard: {
     minHeight: 108,
@@ -1867,7 +1899,7 @@ const styles = StyleSheet.create({
     paddingRight: 12,
     flexDirection: 'row',
     alignItems: 'center',
-    zIndex: 8,
+    zIndex: 10,
     borderWidth: 1,
     borderColor: '#EEF1EA',
     shadowColor: '#223322',
@@ -1894,20 +1926,35 @@ const styles = StyleSheet.create({
     fontWeight: '900',
   },
   miloStage: {
-    position: 'absolute',
-    left: 6,
-    bottom: 38,
-    height: 288,
-    alignItems: 'center',
-    justifyContent: 'flex-end',
-    zIndex: 5,
-  },
-  miloFloat: {
+    width: '100%',
+    height: 360,
+    borderRadius: 28,
+    overflow: 'hidden',
     alignItems: 'center',
     justifyContent: 'center',
+    position: 'relative',
   },
-  miloImage: {
-    marginBottom: -2,
+  miloStageMediaWrap: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: 28,
+    overflow: 'hidden',
+    zIndex: 0,
+    elevation: 0,
+  },
+  miloStageMedia: {
+    ...StyleSheet.absoluteFillObject,
+    width: '100%',
+    height: '100%',
+    zIndex: 1,
+  },
+  miloStageVideo: {
+    zIndex: 2,
+    elevation: 2,
+  },
+  miloStageSoftOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 3,
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
   },
   askCard: {
     backgroundColor: theme.colors.white,
