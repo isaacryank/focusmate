@@ -8,7 +8,11 @@ import {
   TouchableOpacity,
   Image,
   Alert,
+  Modal,
+  AppState,
+  type AppStateStatus,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
@@ -21,11 +25,18 @@ import { useFocus } from '../lib/FocusContext';
 import { getMiloImageSource } from '../components/milo/MiloMoodImage';
 import { getTopMiloRecommendedTask } from '../lib/miloSituationIntelligence';
 
-const POMODORO_MODES = {
+const MIN_DURATION_MINUTES = 1;
+const MAX_DURATION_MINUTES = 120;
+const MIN_LONG_BREAK_INTERVAL = 2;
+const MAX_LONG_BREAK_INTERVAL = 12;
+const DISTRACTION_THRESHOLD_MS = 15 * 1000;
+const MAX_LOGGED_FOCUS_KEYS = 20;
+const POMODORO_SESSION_STORAGE_KEY = '@focusmate/pomodoro_session_state';
+const POMODORO_LOGGED_FOCUS_STORAGE_KEY = '@focusmate/pomodoro_logged_focus_keys';
+
+const MODE_META = {
   focus: {
     label: 'Focus',
-    minutes: 25,
-    shortLabel: '25 min',
     title: 'Focus block',
     runningTitle: 'Focusing now',
     readyTitle: 'Ready to focus',
@@ -35,8 +46,6 @@ const POMODORO_MODES = {
   },
   shortBreak: {
     label: 'Short Break',
-    minutes: 5,
-    shortLabel: '5 min',
     title: 'Short break',
     runningTitle: 'Breathing break',
     readyTitle: 'Ready to rest',
@@ -46,8 +55,6 @@ const POMODORO_MODES = {
   },
   longBreak: {
     label: 'Long Break',
-    minutes: 15,
-    shortLabel: '15 min',
     title: 'Long break',
     runningTitle: 'Deep reset',
     readyTitle: 'Long break ready',
@@ -57,16 +64,200 @@ const POMODORO_MODES = {
   },
 } as const;
 
-type PomodoroMode = keyof typeof POMODORO_MODES;
+type PomodoroMode = keyof typeof MODE_META;
+
+type PomodoroPresetId = 'classic' | 'quick' | 'deep' | 'custom';
+
+type PomodoroSettings = {
+  focusMinutes: number;
+  shortBreakMinutes: number;
+  longBreakMinutes: number;
+  longBreakInterval: number;
+};
+
+type PersistedPomodoroSession = {
+  version: 1;
+  selectedPreset: PomodoroPresetId;
+  customSettings: PomodoroSettings;
+  currentMode: PomodoroMode;
+  isRunning: boolean;
+  endTimestamp: number | null;
+  startedAt: number | null;
+  completedFocusCount: number;
+  cycleProgressCount: number;
+  remainingMs: number;
+  wasDistracted: boolean;
+  focusLeftAt: number | null;
+  loggedFocusSessionKey: string | null;
+  savedAt: number;
+};
+
+type CompleteModeOptions = {
+  mode?: PomodoroMode;
+  settings?: PomodoroSettings;
+  completedFocusCount?: number;
+  cycleFocusCount?: number;
+  startedAt?: number | null;
+  playFeedback?: boolean;
+  showAlert?: boolean;
+};
+
+const CLASSIC_SETTINGS: PomodoroSettings = {
+  focusMinutes: 25,
+  shortBreakMinutes: 5,
+  longBreakMinutes: 15,
+  longBreakInterval: 4,
+};
+
+const POMODORO_PRESETS: Record<
+  PomodoroPresetId,
+  {
+    label: string;
+    summary: string;
+    helperText: string;
+    settings: PomodoroSettings;
+  }
+> = {
+  classic: {
+    label: 'Classic',
+    summary: '25 / 5 / 15',
+    helperText:
+      'The original Milo rhythm: 25 minutes of focus, short resets, and a long break after 4 focus blocks.',
+    settings: CLASSIC_SETTINGS,
+  },
+  quick: {
+    label: 'Quick Focus',
+    summary: '15 / 5 / 10',
+    helperText:
+      'Best for smaller tasks or low-energy days: short focus blocks with gentle breaks.',
+    settings: {
+      focusMinutes: 15,
+      shortBreakMinutes: 5,
+      longBreakMinutes: 10,
+      longBreakInterval: 4,
+    },
+  },
+  deep: {
+    label: 'Deep Focus',
+    summary: '50 / 10 / 20',
+    helperText:
+      'A longer rhythm for heavier study or build sessions, with more recovery between blocks.',
+    settings: {
+      focusMinutes: 50,
+      shortBreakMinutes: 10,
+      longBreakMinutes: 20,
+      longBreakInterval: 4,
+    },
+  },
+  custom: {
+    label: 'Custom',
+    summary: 'Your rhythm',
+    helperText:
+      'Tune each timer length to fit your current work session while Milo keeps the cycle balanced.',
+    settings: CLASSIC_SETTINGS,
+  },
+};
 
 const pomodoroModeOrder: PomodoroMode[] = ['focus', 'shortBreak', 'longBreak'];
+const pomodoroPresetOrder: PomodoroPresetId[] = [
+  'classic',
+  'quick',
+  'deep',
+  'custom',
+];
 
-function getModeSeconds(mode: PomodoroMode) {
-  return POMODORO_MODES[mode].minutes * 60;
+function clampNumber(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
 }
 
-function getSuggestedBreakMode(completedFocusCount: number): PomodoroMode {
-  return completedFocusCount % 4 === 0 ? 'longBreak' : 'shortBreak';
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+function getFiniteNumber(value: unknown, fallback: number) {
+  return isFiniteNumber(value) ? value : fallback;
+}
+
+function getTimestampOrNull(value: unknown) {
+  return isFiniteNumber(value) && value > 0 ? value : null;
+}
+
+function isPomodoroPresetId(value: unknown): value is PomodoroPresetId {
+  return (
+    typeof value === 'string' &&
+    pomodoroPresetOrder.includes(value as PomodoroPresetId)
+  );
+}
+
+function isPomodoroMode(value: unknown): value is PomodoroMode {
+  return (
+    typeof value === 'string' &&
+    pomodoroModeOrder.includes(value as PomodoroMode)
+  );
+}
+
+function sanitizePomodoroSettings(value: unknown): PomodoroSettings {
+  const source = isRecord(value) ? value : {};
+
+  return {
+    focusMinutes: Math.round(
+      clampNumber(
+        getFiniteNumber(source.focusMinutes, CLASSIC_SETTINGS.focusMinutes),
+        MIN_DURATION_MINUTES,
+        MAX_DURATION_MINUTES
+      )
+    ),
+    shortBreakMinutes: Math.round(
+      clampNumber(
+        getFiniteNumber(
+          source.shortBreakMinutes,
+          CLASSIC_SETTINGS.shortBreakMinutes
+        ),
+        MIN_DURATION_MINUTES,
+        MAX_DURATION_MINUTES
+      )
+    ),
+    longBreakMinutes: Math.round(
+      clampNumber(
+        getFiniteNumber(source.longBreakMinutes, CLASSIC_SETTINGS.longBreakMinutes),
+        MIN_DURATION_MINUTES,
+        MAX_DURATION_MINUTES
+      )
+    ),
+    longBreakInterval: Math.round(
+      clampNumber(
+        getFiniteNumber(
+          source.longBreakInterval,
+          CLASSIC_SETTINGS.longBreakInterval
+        ),
+        MIN_LONG_BREAK_INTERVAL,
+        MAX_LONG_BREAK_INTERVAL
+      )
+    ),
+  };
+}
+
+function getModeMinutes(mode: PomodoroMode, settings: PomodoroSettings) {
+  if (mode === 'focus') return settings.focusMinutes;
+  if (mode === 'shortBreak') return settings.shortBreakMinutes;
+  return settings.longBreakMinutes;
+}
+
+function getModeSeconds(mode: PomodoroMode, settings: PomodoroSettings) {
+  return getModeMinutes(mode, settings) * 60;
+}
+
+function getSuggestedBreakMode(
+  completedFocusCount: number,
+  longBreakInterval: number
+): PomodoroMode {
+  return completedFocusCount > 0 && completedFocusCount % longBreakInterval === 0
+    ? 'longBreak'
+    : 'shortBreak';
 }
 
 function getTodayDate() {
@@ -87,16 +278,43 @@ function formatSeconds(seconds: number) {
     .padStart(2, '0')}`;
 }
 
+function formatAwayDuration(awayMs: number) {
+  const totalSeconds = Math.max(0, Math.floor(awayMs / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  const minuteLabel = minutes === 1 ? 'minute' : 'minutes';
+  const secondLabel = seconds === 1 ? 'second' : 'seconds';
+
+  return `${minutes} ${minuteLabel} ${seconds} ${secondLabel}`;
+}
+
+function parseLoggedFocusKeys(value: string | null) {
+  if (!value) return [];
+
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed)
+      ? parsed.filter((item): item is string => typeof item === 'string')
+      : [];
+  } catch (error) {
+    console.log('Failed to parse logged focus keys:', error);
+    return [];
+  }
+}
+
 function ModeButton({
   mode,
+  settings,
   selected,
   onPress,
 }: {
   mode: PomodoroMode;
+  settings: PomodoroSettings;
   selected: boolean;
   onPress: () => void;
 }) {
-  const modeConfig = POMODORO_MODES[mode];
+  const modeConfig = MODE_META[mode];
+  const modeMinutes = getModeMinutes(mode, settings);
 
   return (
     <TouchableOpacity
@@ -114,9 +332,101 @@ function ModeButton({
         {modeConfig.label}
       </Text>
       <Text style={[styles.modeMinutes, selected && styles.modeMinutesActive]}>
-        {modeConfig.shortLabel}
+        {modeMinutes} min
       </Text>
     </TouchableOpacity>
+  );
+}
+
+function PresetButton({
+  presetId,
+  selected,
+  onPress,
+}: {
+  presetId: PomodoroPresetId;
+  selected: boolean;
+  onPress: () => void;
+}) {
+  const preset = POMODORO_PRESETS[presetId];
+
+  return (
+    <TouchableOpacity
+      activeOpacity={0.85}
+      onPress={onPress}
+      style={[styles.presetButton, selected && styles.presetButtonActive]}
+    >
+      <Text style={[styles.presetButtonLabel, selected && styles.presetButtonLabelActive]}>
+        {preset.label}
+      </Text>
+      <Text
+        style={[styles.presetButtonSummary, selected && styles.presetButtonSummaryActive]}
+      >
+        {preset.summary}
+      </Text>
+    </TouchableOpacity>
+  );
+}
+
+function CustomNumberControl({
+  label,
+  value,
+  unit,
+  min,
+  max,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  unit: string;
+  min: number;
+  max: number;
+  onChange: (value: number) => void;
+}) {
+  const canDecrease = value > min;
+  const canIncrease = value < max;
+
+  return (
+    <View style={styles.customControlRow}>
+      <View style={styles.customControlTextArea}>
+        <Text style={styles.customControlLabel}>{label}</Text>
+        <Text style={styles.customControlHint}>
+          {min}-{max} {unit}
+        </Text>
+      </View>
+
+      <View style={styles.stepper}>
+        <TouchableOpacity
+          activeOpacity={0.75}
+          disabled={!canDecrease}
+          style={[styles.stepperButton, !canDecrease && styles.stepperButtonDisabled]}
+          onPress={() => onChange(value - 1)}
+        >
+          <Ionicons
+            name="remove"
+            size={18}
+            color={canDecrease ? theme.colors.primaryDark : theme.colors.muted}
+          />
+        </TouchableOpacity>
+
+        <Text style={styles.stepperValue}>
+          {value}
+          <Text style={styles.stepperUnit}> {unit}</Text>
+        </Text>
+
+        <TouchableOpacity
+          activeOpacity={0.75}
+          disabled={!canIncrease}
+          style={[styles.stepperButton, !canIncrease && styles.stepperButtonDisabled]}
+          onPress={() => onChange(value + 1)}
+        >
+          <Ionicons
+            name="add"
+            size={18}
+            color={canIncrease ? theme.colors.primaryDark : theme.colors.muted}
+          />
+        </TouchableOpacity>
+      </View>
+    </View>
   );
 }
 
@@ -126,15 +436,45 @@ export default function FocusSessionScreen() {
   const { tasks } = useTasks();
   const { focusSessions, addFocusSession, totalFocusMinutes } = useFocus();
 
+  const [selectedPreset, setSelectedPreset] =
+    useState<PomodoroPresetId>('classic');
+  const [customSettings, setCustomSettings] =
+    useState<PomodoroSettings>(CLASSIC_SETTINGS);
   const [currentMode, setCurrentMode] = useState<PomodoroMode>('focus');
-  const [remainingSeconds, setRemainingSeconds] = useState(getModeSeconds('focus'));
+  const [remainingSeconds, setRemainingSeconds] = useState(
+    getModeSeconds('focus', CLASSIC_SETTINGS)
+  );
   const [isRunning, setIsRunning] = useState(false);
+  const [pomodoroCompletedFocusCount, setPomodoroCompletedFocusCount] =
+    useState(0);
+  const [cycleFocusCount, setCycleFocusCount] = useState(0);
+  const [dndReminderVisible, setDndReminderVisible] = useState(false);
+  const [focusWarningText, setFocusWarningText] = useState<string | null>(null);
+  const [wasDistracted, setWasDistracted] = useState(false);
+  const [hasRestoredPomodoroState, setHasRestoredPomodoroState] =
+    useState(false);
+
+  const selectedPresetRef = useRef<PomodoroPresetId>('classic');
+  const customSettingsRef = useRef<PomodoroSettings>(CLASSIC_SETTINGS);
+  const currentModeRef = useRef<PomodoroMode>('focus');
+  const isRunningRef = useRef(false);
+  const timerSettingsRef = useRef<PomodoroSettings>(CLASSIC_SETTINGS);
   const endTimestampRef = useRef<number | null>(null);
-  const remainingMsRef = useRef(getModeSeconds('focus') * 1000);
+  const remainingMsRef = useRef(getModeSeconds('focus', CLASSIC_SETTINGS) * 1000);
+  const startedAtRef = useRef<number | null>(null);
+  const focusLeftAtRef = useRef<number | null>(null);
+  const loggedFocusSessionKeyRef = useRef<string | null>(null);
+  const pomodoroCompletedFocusCountRef = useRef(0);
+  const cycleFocusCountRef = useRef(0);
+  const wasDistractedRef = useRef(false);
+  const appStateRef = useRef<AppStateStatus>(AppState.currentState);
   const completionHandledRef = useRef(false);
 
-  const currentModeConfig = POMODORO_MODES[currentMode];
-  const totalSeconds = getModeSeconds(currentMode);
+  const activePreset = POMODORO_PRESETS[selectedPreset];
+  const timerSettings =
+    selectedPreset === 'custom' ? customSettings : activePreset.settings;
+  const currentModeConfig = MODE_META[currentMode];
+  const totalSeconds = getModeSeconds(currentMode, timerSettings);
   const todayDate = getTodayDate();
 
   const todayFocusSessions = useMemo(() => {
@@ -146,16 +486,35 @@ export default function FocusSessionScreen() {
   const todayFocusMinutes = useMemo(() => {
     return todayFocusSessions.reduce((total, session) => total + session.minutes, 0);
   }, [todayFocusSessions]);
-  const completedFocusCount = todayFocusSessions.length;
-  const nextBreakAfterFocusMode = getSuggestedBreakMode(completedFocusCount + 1);
-  const focusBlocksInCycle = completedFocusCount % 4;
-  const cycleProgressCount =
-    focusBlocksInCycle === 0 && completedFocusCount > 0 && currentMode === 'longBreak'
-      ? 4
-      : focusBlocksInCycle;
-  const displayedBreakMode =
-    currentMode === 'focus' ? nextBreakAfterFocusMode : currentMode;
-  const breakSuggestionPrefix = currentMode === 'focus' ? 'Next' : 'Suggested';
+  const todayCompletedFocusCount = todayFocusSessions.length;
+  const completedFocusCount = Math.max(
+    todayCompletedFocusCount,
+    pomodoroCompletedFocusCount
+  );
+  const longBreakInterval = timerSettings.longBreakInterval;
+  const cycleProgressCount = Math.round(
+    clampNumber(cycleFocusCount, 0, longBreakInterval)
+  );
+  const nextBreakAfterFocusMode = getSuggestedBreakMode(
+    cycleProgressCount + 1,
+    longBreakInterval
+  );
+  const isLongBreakReady = cycleProgressCount >= longBreakInterval;
+  const cycleSuggestionText =
+    currentMode === 'focus'
+      ? isLongBreakReady
+        ? 'Suggested: Long Break'
+        : cycleProgressCount === 0 && !isRunning
+        ? 'Suggested: Start Focus'
+        : `Next: ${MODE_META[nextBreakAfterFocusMode].label}`
+      : currentMode === 'longBreak' && isLongBreakReady
+      ? 'Suggested: Long Break'
+      : `Current: ${currentModeConfig.label}`;
+  const selectedPresetSummary = `${timerSettings.focusMinutes}/${timerSettings.shortBreakMinutes}/${timerSettings.longBreakMinutes}`;
+  const selectedPresetHelper =
+    selectedPreset === 'custom'
+      ? `Custom set to ${selectedPresetSummary} minutes, with a long break every ${timerSettings.longBreakInterval} focus blocks.`
+      : activePreset.helperText;
 
   const routeTaskId =
     typeof route.params?.taskId === 'string' ? route.params.taskId : undefined;
@@ -194,44 +553,225 @@ export default function FocusSessionScreen() {
       ? 'Stay with one small step. Milo is guarding your focus.'
       : 'Rest gently. Breaks help your brain come back stronger.'
     : currentMode === 'focus'
-    ? `${POMODORO_MODES[nextBreakAfterFocusMode].label} comes after this focus block.`
+    ? isLongBreakReady
+      ? 'Your long break is ready before another focus block.'
+      : cycleProgressCount === 0
+      ? 'Start with one clean focus block. Milo will suggest breaks as you go.'
+      : `${MODE_META[nextBreakAfterFocusMode].label} comes after this focus block.`
     : `${currentModeConfig.label} is ready. Press start when you want to rest.`;
 
-  const resetTimerForMode = useCallback((mode: PomodoroMode) => {
-    const nextSeconds = getModeSeconds(mode);
+  useEffect(() => {
+    selectedPresetRef.current = selectedPreset;
+    customSettingsRef.current = customSettings;
+    currentModeRef.current = currentMode;
+    isRunningRef.current = isRunning;
+    timerSettingsRef.current = timerSettings;
+    pomodoroCompletedFocusCountRef.current = completedFocusCount;
+    cycleFocusCountRef.current = cycleProgressCount;
+    wasDistractedRef.current = wasDistracted;
+  }, [
+    completedFocusCount,
+    currentMode,
+    customSettings,
+    cycleProgressCount,
+    isRunning,
+    selectedPreset,
+    timerSettings,
+    wasDistracted,
+  ]);
 
-    endTimestampRef.current = null;
-    remainingMsRef.current = nextSeconds * 1000;
-    completionHandledRef.current = false;
-    setIsRunning(false);
-    setRemainingSeconds(nextSeconds);
+  useEffect(() => {
+    if (!hasRestoredPomodoroState) return;
+
+    if (todayCompletedFocusCount > pomodoroCompletedFocusCount) {
+      setPomodoroCompletedFocusCount(todayCompletedFocusCount);
+    }
+  }, [
+    hasRestoredPomodoroState,
+    pomodoroCompletedFocusCount,
+    todayCompletedFocusCount,
+  ]);
+
+  useEffect(() => {
+    if (cycleFocusCount > longBreakInterval) {
+      setCycleFocusCount(longBreakInterval);
+    }
+  }, [cycleFocusCount, longBreakInterval]);
+
+  const persistPomodoroState = useCallback(
+    async (overrides: Partial<PersistedPomodoroSession> = {}) => {
+      const running = overrides.isRunning ?? isRunningRef.current;
+      const endTimestamp =
+        overrides.endTimestamp !== undefined
+          ? overrides.endTimestamp
+          : endTimestampRef.current;
+      const remainingMs =
+        overrides.remainingMs ??
+        (running && endTimestamp
+          ? Math.max(endTimestamp - Date.now(), 0)
+          : remainingMsRef.current);
+
+      const payload: PersistedPomodoroSession = {
+        version: 1,
+        selectedPreset: selectedPresetRef.current,
+        customSettings: customSettingsRef.current,
+        currentMode: currentModeRef.current,
+        isRunning: running,
+        endTimestamp,
+        startedAt: startedAtRef.current,
+        completedFocusCount: pomodoroCompletedFocusCountRef.current,
+        cycleProgressCount: cycleFocusCountRef.current,
+        remainingMs,
+        wasDistracted: wasDistractedRef.current,
+        focusLeftAt: focusLeftAtRef.current,
+        loggedFocusSessionKey: loggedFocusSessionKeyRef.current,
+        savedAt: Date.now(),
+        ...overrides,
+      };
+
+      try {
+        await AsyncStorage.setItem(
+          POMODORO_SESSION_STORAGE_KEY,
+          JSON.stringify({ ...payload, version: 1, savedAt: Date.now() })
+        );
+      } catch (error) {
+        console.log('Failed to save Pomodoro session:', error);
+      }
+    },
+    []
+  );
+
+  const updateCompletedFocusCount = useCallback((value: number) => {
+    const nextValue = Math.max(0, Math.round(value));
+    pomodoroCompletedFocusCountRef.current = nextValue;
+    setPomodoroCompletedFocusCount(nextValue);
   }, []);
 
+  const updateCycleFocusCount = useCallback(
+    (value: number, settings: PomodoroSettings = timerSettingsRef.current) => {
+      const nextValue = Math.round(
+        clampNumber(value, 0, settings.longBreakInterval)
+      );
+
+      cycleFocusCountRef.current = nextValue;
+      setCycleFocusCount(nextValue);
+    },
+    []
+  );
+
+  const logFocusSessionOnce = useCallback(
+    async (minutes: number, startedAt: number | null) => {
+      const logStartedAt = startedAt ?? startedAtRef.current ?? Date.now();
+      const logKey = `${logStartedAt}:${minutes}`;
+
+      if (loggedFocusSessionKeyRef.current === logKey) return;
+
+      try {
+        const storedKeys = parseLoggedFocusKeys(
+          await AsyncStorage.getItem(POMODORO_LOGGED_FOCUS_STORAGE_KEY)
+        );
+
+        if (storedKeys.includes(logKey)) {
+          loggedFocusSessionKeyRef.current = logKey;
+          return;
+        }
+
+        loggedFocusSessionKeyRef.current = logKey;
+        await AsyncStorage.setItem(
+          POMODORO_LOGGED_FOCUS_STORAGE_KEY,
+          JSON.stringify([logKey, ...storedKeys].slice(0, MAX_LOGGED_FOCUS_KEYS))
+        );
+        await addFocusSession(minutes);
+      } catch (error) {
+        console.log('Failed to log Pomodoro focus session:', error);
+      }
+    },
+    [addFocusSession]
+  );
+
+  const resetTimerForMode = useCallback(
+    (mode: PomodoroMode, settings: PomodoroSettings = timerSettingsRef.current) => {
+      const nextSeconds = getModeSeconds(mode, settings);
+
+      endTimestampRef.current = null;
+      remainingMsRef.current = nextSeconds * 1000;
+      startedAtRef.current = null;
+      focusLeftAtRef.current = null;
+      isRunningRef.current = false;
+      wasDistractedRef.current = false;
+      completionHandledRef.current = false;
+      setIsRunning(false);
+      setRemainingSeconds(nextSeconds);
+      setDndReminderVisible(false);
+      setFocusWarningText(null);
+      setWasDistracted(false);
+    },
+    []
+  );
+
   const changeMode = useCallback(
-    (mode: PomodoroMode) => {
+    (mode: PomodoroMode, settings: PomodoroSettings = timerSettingsRef.current) => {
+      currentModeRef.current = mode;
       setCurrentMode(mode);
-      resetTimerForMode(mode);
+      resetTimerForMode(mode, settings);
     },
     [resetTimerForMode]
   );
 
-  const completeCurrentMode = useCallback(() => {
+  const completeCurrentMode = useCallback(async (options: CompleteModeOptions = {}) => {
     if (completionHandledRef.current) return;
 
     completionHandledRef.current = true;
     endTimestampRef.current = null;
     remainingMsRef.current = 0;
+    isRunningRef.current = false;
+    focusLeftAtRef.current = null;
     setIsRunning(false);
     setRemainingSeconds(0);
+    setDndReminderVisible(false);
 
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    const completedMode = options.mode ?? currentModeRef.current;
+    const settings = options.settings ?? timerSettingsRef.current;
+    const startingCompletedFocusCount =
+      options.completedFocusCount ?? pomodoroCompletedFocusCountRef.current;
+    const startingCycleFocusCount = Math.round(
+      clampNumber(
+        options.cycleFocusCount ?? cycleFocusCountRef.current,
+        0,
+        settings.longBreakInterval
+      )
+    );
+    const sessionStartedAt = options.startedAt ?? startedAtRef.current ?? Date.now();
+    const shouldShowAlert = options.showAlert !== false;
 
-    if (currentMode === 'focus') {
-      const nextCompletedFocusCount = completedFocusCount + 1;
-      const suggestedBreakMode = getSuggestedBreakMode(nextCompletedFocusCount);
-      const suggestedBreak = POMODORO_MODES[suggestedBreakMode];
+    if (options.playFeedback !== false) {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    }
 
-      addFocusSession(POMODORO_MODES.focus.minutes);
+    if (completedMode === 'focus') {
+      const nextCompletedFocusCount = Math.max(
+        0,
+        Math.round(startingCompletedFocusCount)
+      );
+      const loggedCompletedFocusCount = nextCompletedFocusCount + 1;
+      const nextCycleFocusCount = Math.min(
+        startingCycleFocusCount + 1,
+        settings.longBreakInterval
+      );
+      const suggestedBreakMode =
+        nextCycleFocusCount >= settings.longBreakInterval
+          ? 'longBreak'
+          : 'shortBreak';
+      const suggestedBreak = MODE_META[suggestedBreakMode];
+
+      await logFocusSessionOnce(settings.focusMinutes, sessionStartedAt);
+      updateCompletedFocusCount(loggedCompletedFocusCount);
+      updateCycleFocusCount(nextCycleFocusCount, settings);
+      startedAtRef.current = null;
+      wasDistractedRef.current = false;
+      setWasDistracted(false);
+      setFocusWarningText(null);
+      changeMode(suggestedBreakMode, settings);
       Speech.speak(
         `Focus session completed. Great work. Milo suggests a ${suggestedBreak.label}.`,
         {
@@ -239,51 +779,373 @@ export default function FocusSessionScreen() {
           pitch: 1.08,
         }
       );
-      changeMode(suggestedBreakMode);
 
-      Alert.alert(
-        'Focus block complete',
-        `Milo logged 25 focus minutes. ${
-          suggestedBreakMode === 'longBreak'
-            ? 'That makes 4 focus blocks, so take a Long Break.'
-            : 'Take a Short Break before the next block.'
-        }`
-      );
+      if (shouldShowAlert) {
+        Alert.alert(
+          'Focus block complete',
+          `Milo logged ${settings.focusMinutes} focus minutes. ${
+            suggestedBreakMode === 'longBreak'
+              ? `That makes ${settings.longBreakInterval} focus blocks, so take a Long Break.`
+              : 'Take a Short Break before the next block.'
+          }`
+        );
+      }
+
+      await persistPomodoroState({
+        currentMode: suggestedBreakMode,
+        isRunning: false,
+        endTimestamp: null,
+        startedAt: null,
+        completedFocusCount: loggedCompletedFocusCount,
+        cycleProgressCount: nextCycleFocusCount,
+        remainingMs: getModeSeconds(suggestedBreakMode, settings) * 1000,
+        wasDistracted: false,
+        focusLeftAt: null,
+      });
       return;
     }
+
+    if (completedMode === 'longBreak') {
+      updateCycleFocusCount(0, settings);
+    }
+
+    startedAtRef.current = null;
+    changeMode('focus', settings);
 
     Speech.speak('Break completed. Milo is ready for the next focus block.', {
       rate: 0.95,
       pitch: 1.08,
     });
-    changeMode('focus');
 
-    Alert.alert(
-      'Break complete',
-      'Nice reset. Milo is ready when you want to start another focus block.'
-    );
-  }, [addFocusSession, changeMode, completedFocusCount, currentMode]);
+    if (shouldShowAlert) {
+      Alert.alert(
+        'Break complete',
+        'Nice reset. Milo is ready when you want to start another focus block.'
+      );
+    }
+
+    await persistPomodoroState({
+      currentMode: 'focus',
+      isRunning: false,
+      endTimestamp: null,
+      startedAt: null,
+      cycleProgressCount: completedMode === 'longBreak' ? 0 : cycleFocusCountRef.current,
+      remainingMs: getModeSeconds('focus', settings) * 1000,
+      focusLeftAt: null,
+    });
+  }, [
+    changeMode,
+    logFocusSessionOnce,
+    persistPomodoroState,
+    updateCompletedFocusCount,
+    updateCycleFocusCount,
+  ]);
+
+  const syncRunningTimer = useCallback(async () => {
+    if (!isRunningRef.current || !endTimestampRef.current) return;
+
+    const nextRemainingMs = Math.max(endTimestampRef.current - Date.now(), 0);
+    remainingMsRef.current = nextRemainingMs;
+    setRemainingSeconds(Math.ceil(nextRemainingMs / 1000));
+
+    if (nextRemainingMs === 0) {
+      await completeCurrentMode();
+    }
+  }, [completeCurrentMode]);
+
+  const handleReturnToApp = useCallback(() => {
+    const now = Date.now();
+    const focusLeftAt = focusLeftAtRef.current;
+
+    if (isRunningRef.current && currentModeRef.current === 'focus' && focusLeftAt) {
+      const awayMs = now - focusLeftAt;
+
+      if (awayMs > DISTRACTION_THRESHOLD_MS) {
+        wasDistractedRef.current = true;
+        setWasDistracted(true);
+        setFocusWarningText(
+          `Milo noticed you left Focus Mode for ${formatAwayDuration(
+            awayMs
+          )}. Lets continue clean focus.`
+        );
+      }
+
+      focusLeftAtRef.current = null;
+      persistPomodoroState({
+        focusLeftAt: null,
+        wasDistracted: wasDistractedRef.current,
+      });
+    }
+
+    syncRunningTimer();
+  }, [persistPomodoroState, syncRunningTimer]);
 
   useEffect(() => {
-    if (!isRunning) return;
+    let isMounted = true;
 
-    const syncRemainingTime = () => {
-      if (!endTimestampRef.current) return;
+    const restorePomodoroState = async () => {
+      try {
+        const storedState = await AsyncStorage.getItem(POMODORO_SESSION_STORAGE_KEY);
 
-      const nextRemainingMs = Math.max(endTimestampRef.current - Date.now(), 0);
-      remainingMsRef.current = nextRemainingMs;
-      setRemainingSeconds(Math.ceil(nextRemainingMs / 1000));
+        if (!isMounted) return;
 
-      if (nextRemainingMs === 0) {
-        completeCurrentMode();
+        if (!storedState) {
+          setHasRestoredPomodoroState(true);
+          return;
+        }
+
+        const parsed = JSON.parse(storedState) as unknown;
+        const stored = isRecord(parsed) ? parsed : {};
+        const restoredPreset = isPomodoroPresetId(stored.selectedPreset)
+          ? stored.selectedPreset
+          : 'classic';
+        const restoredCustomSettings = sanitizePomodoroSettings(
+          stored.customSettings
+        );
+        const restoredSettings =
+          restoredPreset === 'custom'
+            ? restoredCustomSettings
+            : POMODORO_PRESETS[restoredPreset].settings;
+        const restoredMode = isPomodoroMode(stored.currentMode)
+          ? stored.currentMode
+          : 'focus';
+        const restoredTotalMs = getModeSeconds(restoredMode, restoredSettings) * 1000;
+        const restoredRemainingMs = clampNumber(
+          getFiniteNumber(stored.remainingMs, restoredTotalMs),
+          0,
+          restoredTotalMs
+        );
+        const restoredStartedAt = getTimestampOrNull(stored.startedAt);
+        const restoredEndTimestamp = getTimestampOrNull(stored.endTimestamp);
+        const restoredCompletedFocusCount = Math.max(
+          0,
+          Math.round(getFiniteNumber(stored.completedFocusCount, 0))
+        );
+        const restoredCycleProgressCount = Math.round(
+          clampNumber(
+            getFiniteNumber(stored.cycleProgressCount, 0),
+            0,
+            restoredSettings.longBreakInterval
+          )
+        );
+        const restoredWasDistracted = Boolean(stored.wasDistracted);
+        const restoredFocusLeftAt = getTimestampOrNull(stored.focusLeftAt);
+        const restoredLoggedKey =
+          typeof stored.loggedFocusSessionKey === 'string'
+            ? stored.loggedFocusSessionKey
+            : null;
+
+        selectedPresetRef.current = restoredPreset;
+        customSettingsRef.current = restoredCustomSettings;
+        currentModeRef.current = restoredMode;
+        timerSettingsRef.current = restoredSettings;
+        startedAtRef.current = restoredStartedAt;
+        focusLeftAtRef.current = restoredFocusLeftAt;
+        loggedFocusSessionKeyRef.current = restoredLoggedKey;
+        pomodoroCompletedFocusCountRef.current = restoredCompletedFocusCount;
+        cycleFocusCountRef.current = restoredCycleProgressCount;
+        wasDistractedRef.current = restoredWasDistracted;
+
+        setSelectedPreset(restoredPreset);
+        setCustomSettings(restoredCustomSettings);
+        setCurrentMode(restoredMode);
+        setPomodoroCompletedFocusCount(restoredCompletedFocusCount);
+        setCycleFocusCount(restoredCycleProgressCount);
+        setWasDistracted(restoredWasDistracted);
+        setFocusWarningText(null);
+
+        const shouldResumeRunning = Boolean(stored.isRunning && restoredEndTimestamp);
+
+        if (shouldResumeRunning && restoredEndTimestamp) {
+          const nextRemainingMs = Math.max(restoredEndTimestamp - Date.now(), 0);
+
+          if (nextRemainingMs === 0) {
+            endTimestampRef.current = null;
+            remainingMsRef.current = 0;
+            isRunningRef.current = false;
+            setIsRunning(false);
+            setRemainingSeconds(0);
+            setDndReminderVisible(false);
+            await completeCurrentMode({
+              mode: restoredMode,
+              settings: restoredSettings,
+              completedFocusCount: restoredCompletedFocusCount,
+              cycleFocusCount: restoredCycleProgressCount,
+              startedAt: restoredStartedAt,
+              playFeedback: false,
+            });
+            setHasRestoredPomodoroState(true);
+            return;
+          }
+
+          endTimestampRef.current = restoredEndTimestamp;
+          remainingMsRef.current = nextRemainingMs;
+          isRunningRef.current = true;
+          setIsRunning(true);
+          setRemainingSeconds(Math.ceil(nextRemainingMs / 1000));
+          setDndReminderVisible(false);
+
+          if (restoredMode === 'focus' && restoredFocusLeftAt) {
+            const awayMs = Date.now() - restoredFocusLeftAt;
+
+            if (awayMs > DISTRACTION_THRESHOLD_MS) {
+              wasDistractedRef.current = true;
+              setWasDistracted(true);
+              setFocusWarningText(
+                `Milo noticed you left Focus Mode for ${formatAwayDuration(
+                  awayMs
+                )}. Lets continue clean focus.`
+              );
+            }
+
+            focusLeftAtRef.current = null;
+          }
+        } else {
+          endTimestampRef.current = null;
+          remainingMsRef.current = restoredRemainingMs;
+          isRunningRef.current = false;
+          setIsRunning(false);
+          setRemainingSeconds(Math.ceil(restoredRemainingMs / 1000));
+          setDndReminderVisible(false);
+        }
+
+        setHasRestoredPomodoroState(true);
+      } catch (error) {
+        console.log('Failed to restore Pomodoro session:', error);
+
+        if (isMounted) {
+          setHasRestoredPomodoroState(true);
+        }
       }
     };
 
-    syncRemainingTime();
-    const timer = setInterval(syncRemainingTime, 250);
+    restorePomodoroState();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!hasRestoredPomodoroState) return;
+
+    persistPomodoroState();
+  }, [
+    currentMode,
+    customSettings,
+    cycleProgressCount,
+    hasRestoredPomodoroState,
+    isRunning,
+    persistPomodoroState,
+    pomodoroCompletedFocusCount,
+    selectedPreset,
+    wasDistracted,
+  ]);
+
+  useEffect(() => {
+    if (!hasRestoredPomodoroState || !isRunning) return;
+
+    syncRunningTimer();
+    const timer = setInterval(() => {
+      syncRunningTimer();
+    }, 250);
 
     return () => clearInterval(timer);
-  }, [completeCurrentMode, isRunning]);
+  }, [hasRestoredPomodoroState, isRunning, syncRunningTimer]);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener(
+      'change',
+      (nextAppState: AppStateStatus) => {
+        if (!hasRestoredPomodoroState) {
+          appStateRef.current = nextAppState;
+          return;
+        }
+
+        const previousAppState = appStateRef.current;
+        const leavingActiveState =
+          previousAppState === 'active' && nextAppState !== 'active';
+        const returningToActiveState =
+          previousAppState !== 'active' && nextAppState === 'active';
+
+        if (
+          leavingActiveState &&
+          isRunningRef.current &&
+          currentModeRef.current === 'focus'
+        ) {
+          const focusLeftAt = focusLeftAtRef.current ?? Date.now();
+          focusLeftAtRef.current = focusLeftAt;
+          persistPomodoroState({ focusLeftAt });
+        }
+
+        if (returningToActiveState) {
+          handleReturnToApp();
+        }
+
+        appStateRef.current = nextAppState;
+      }
+    );
+
+    return () => subscription.remove();
+  }, [handleReturnToApp, hasRestoredPomodoroState, persistPomodoroState]);
+
+  const handleSelectPreset = (presetId: PomodoroPresetId) => {
+    if (presetId === selectedPreset) return;
+
+    if (isRunning) {
+      Alert.alert(
+        'Timer is running',
+        'Pause or reset the current timer before changing the timer preset.'
+      );
+      return;
+    }
+
+    const nextSettings =
+      presetId === 'custom' ? customSettings : POMODORO_PRESETS[presetId].settings;
+    const nextCycleFocusCount = Math.round(
+      clampNumber(cycleProgressCount, 0, nextSettings.longBreakInterval)
+    );
+
+    selectedPresetRef.current = presetId;
+    timerSettingsRef.current = nextSettings;
+    setSelectedPreset(presetId);
+    updateCycleFocusCount(nextCycleFocusCount, nextSettings);
+    resetTimerForMode(currentMode, nextSettings);
+  };
+
+  const handleChangeCustomSetting = (
+    settingName: keyof PomodoroSettings,
+    value: number
+  ) => {
+    if (isRunning) {
+      Alert.alert(
+        'Timer is running',
+        'Pause or reset the current timer before changing custom timer settings.'
+      );
+      return;
+    }
+
+    const min =
+      settingName === 'longBreakInterval'
+        ? MIN_LONG_BREAK_INTERVAL
+        : MIN_DURATION_MINUTES;
+    const max =
+      settingName === 'longBreakInterval'
+        ? MAX_LONG_BREAK_INTERVAL
+        : MAX_DURATION_MINUTES;
+    const nextSettings = {
+      ...customSettings,
+      [settingName]: clampNumber(value, min, max),
+    };
+
+    customSettingsRef.current = nextSettings;
+    selectedPresetRef.current = 'custom';
+    timerSettingsRef.current = nextSettings;
+    setSelectedPreset('custom');
+    setCustomSettings(nextSettings);
+    updateCycleFocusCount(cycleProgressCount, nextSettings);
+    resetTimerForMode(currentMode, nextSettings);
+  };
 
   const handleSelectMode = (mode: PomodoroMode) => {
     if (mode === currentMode) return;
@@ -291,12 +1153,71 @@ export default function FocusSessionScreen() {
     if (isRunning) {
       Alert.alert(
         'Timer is running',
-        'Pause or reset the current timer before changing Pomodoro modes.'
+        'Pause or reset the current timer before changing the current session.'
       );
       return;
     }
 
     changeMode(mode);
+  };
+
+  const startTimer = async () => {
+    if (isRunningRef.current) return;
+
+    let startingRemainingMs = remainingMsRef.current;
+    const startingFromEndedTimer =
+      remainingMsRef.current <= 0 || remainingSeconds === 0;
+
+    if (startingFromEndedTimer) {
+      startingRemainingMs = totalSeconds * 1000;
+      remainingMsRef.current = startingRemainingMs;
+      setRemainingSeconds(totalSeconds);
+    }
+
+    const now = Date.now();
+    const startingFreshSession = !startedAtRef.current || startingFromEndedTimer;
+
+    if (startingFreshSession) {
+      startedAtRef.current = now;
+      focusLeftAtRef.current = null;
+      loggedFocusSessionKeyRef.current = null;
+
+      if (currentMode === 'focus') {
+        wasDistractedRef.current = false;
+        setWasDistracted(false);
+        setFocusWarningText(null);
+      }
+    }
+
+    completionHandledRef.current = false;
+    endTimestampRef.current = now + startingRemainingMs;
+    isRunningRef.current = true;
+    setIsRunning(true);
+    setDndReminderVisible(false);
+
+    Speech.speak(currentModeConfig.startSpeech, {
+      rate: 0.95,
+      pitch: 1.08,
+    });
+
+    await persistPomodoroState({
+      isRunning: true,
+      endTimestamp: endTimestampRef.current,
+      startedAt: startedAtRef.current,
+      remainingMs: startingRemainingMs,
+      wasDistracted: wasDistractedRef.current,
+      focusLeftAt: null,
+      loggedFocusSessionKey: loggedFocusSessionKeyRef.current,
+    });
+  };
+
+  const handleDndReminderStart = async () => {
+    setDndReminderVisible(false);
+    await startTimer();
+  };
+
+  const handleContinueFocus = () => {
+    setFocusWarningText(null);
   };
 
   const handleStartPause = async () => {
@@ -309,39 +1230,57 @@ export default function FocusSessionScreen() {
 
       remainingMsRef.current = pausedRemainingMs;
       endTimestampRef.current = null;
+      isRunningRef.current = false;
       setRemainingSeconds(Math.ceil(pausedRemainingMs / 1000));
       setIsRunning(false);
+      setDndReminderVisible(false);
+      await persistPomodoroState({
+        isRunning: false,
+        endTimestamp: null,
+        remainingMs: pausedRemainingMs,
+      });
       return;
     }
 
-    if (remainingMsRef.current <= 0 || remainingSeconds === 0) {
-      remainingMsRef.current = totalSeconds * 1000;
-      setRemainingSeconds(totalSeconds);
+    const startingFromEndedTimer =
+      remainingMsRef.current <= 0 || remainingSeconds === 0;
+    const startingFreshSession = !startedAtRef.current || startingFromEndedTimer;
+
+    if (currentMode === 'focus' && startingFreshSession) {
+      setDndReminderVisible(true);
+      return;
     }
 
-    completionHandledRef.current = false;
-    endTimestampRef.current = Date.now() + remainingMsRef.current;
-    setIsRunning(true);
-
-    Speech.speak(currentModeConfig.startSpeech, {
-      rate: 0.95,
-      pitch: 1.08,
-    });
+    await startTimer();
   };
 
   const handleReset = async () => {
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     resetTimerForMode(currentMode);
+    await persistPomodoroState({
+      isRunning: false,
+      endTimestamp: null,
+      startedAt: null,
+      remainingMs: getModeSeconds(currentMode, timerSettings) * 1000,
+      wasDistracted: false,
+      focusLeftAt: null,
+    });
   };
 
   const handleSkip = async () => {
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
-    const nextMode = currentMode === 'focus' ? 'shortBreak' : 'focus';
+    const skippedMode = currentMode;
+    const nextMode = skippedMode === 'focus' ? 'shortBreak' : 'focus';
+
+    if (skippedMode === 'longBreak') {
+      updateCycleFocusCount(0, timerSettings);
+    }
+
     changeMode(nextMode);
 
     Speech.speak(
-      currentMode === 'focus'
+      skippedMode === 'focus'
         ? 'Focus block skipped. Milo will not count this one.'
         : 'Break skipped. Milo is ready for focus.',
       {
@@ -349,10 +1288,93 @@ export default function FocusSessionScreen() {
         pitch: 1.08,
       }
     );
+
+    await persistPomodoroState({
+      currentMode: nextMode,
+      isRunning: false,
+      endTimestamp: null,
+      startedAt: null,
+      cycleProgressCount: skippedMode === 'longBreak' ? 0 : cycleFocusCountRef.current,
+      remainingMs: getModeSeconds(nextMode, timerSettings) * 1000,
+      focusLeftAt: null,
+      wasDistracted: false,
+    });
   };
 
   return (
     <SafeAreaView style={styles.safeArea}>
+      <Modal
+        animationType="fade"
+        transparent
+        visible={dndReminderVisible}
+        onRequestClose={() => {}}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.focusModalCard}>
+            <View style={styles.modalAccentBar} />
+            <View style={styles.modalBadge}>
+              <Text style={styles.modalBadgeText}>Milo</Text>
+            </View>
+            <Text style={styles.modalTitle}>Milo Focus Guard</Text>
+            <Text style={styles.modalMessage}>
+              For better focus, turn on Do Not Disturb and stay with Milo until
+              the timer ends.
+            </Text>
+            <Text style={styles.modalMessage}>
+              DND is optional. You can continue without it.
+            </Text>
+
+            <View style={styles.modalButtonStack}>
+              <TouchableOpacity
+                activeOpacity={0.88}
+                style={styles.modalPrimaryButton}
+                onPress={handleDndReminderStart}
+              >
+                <Text style={styles.modalPrimaryButtonText}>Ill turn it on</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                activeOpacity={0.82}
+                style={styles.modalSecondaryButton}
+                onPress={handleDndReminderStart}
+              >
+                <Text style={styles.modalSecondaryButtonText}>
+                  Continue without DND
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        animationType="fade"
+        transparent
+        visible={Boolean(focusWarningText)}
+        onRequestClose={() => {}}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.focusModalCard}>
+            <View style={styles.modalAccentBar} />
+            <View style={styles.modalBadge}>
+              <Text style={styles.modalBadgeText}>Milo</Text>
+            </View>
+            <Text style={styles.modalTitle}>Clean focus reminder</Text>
+            <Text style={styles.modalMessage}>{focusWarningText}</Text>
+
+            <View style={styles.modalButtonStack}>
+              <TouchableOpacity
+                activeOpacity={0.88}
+                style={styles.modalPrimaryButton}
+                onPress={handleContinueFocus}
+              >
+                <Text style={styles.modalPrimaryButtonText}>Continue Focus</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       <ScrollView
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.content}
@@ -367,7 +1389,8 @@ export default function FocusSessionScreen() {
             <Text style={styles.heroLabel}>Milo Focus Mode</Text>
             <Text style={styles.heroTitle}>Pomodoro timer</Text>
             <Text style={styles.heroSubtitle}>
-              Focus for 25 minutes, then let Milo guide the right break.
+              Focus for {timerSettings.focusMinutes} minutes, then let Milo guide the right
+              break.
             </Text>
           </View>
 
@@ -395,6 +1418,84 @@ export default function FocusSessionScreen() {
             </Text>
             <Text style={styles.analyticsLabel}>Total Minutes</Text>
           </View>
+        </View>
+
+        <View style={styles.presetCard}>
+          <View style={styles.presetHeaderRow}>
+            <View>
+              <Text style={styles.presetLabel}>Timer Preset</Text>
+              <Text style={styles.presetTitle}>{activePreset.label}</Text>
+              <Text style={styles.presetDescription}>
+                Timer Preset = duration package.
+              </Text>
+            </View>
+
+            <View style={styles.presetSummaryBadge}>
+              <Ionicons name="timer" size={15} color={theme.colors.primaryDark} />
+              <Text style={styles.presetSummaryBadgeText}>
+                {selectedPresetSummary}
+              </Text>
+            </View>
+          </View>
+
+          <View style={styles.presetGrid}>
+            {pomodoroPresetOrder.map((presetId) => (
+              <PresetButton
+                key={presetId}
+                presetId={presetId}
+                selected={selectedPreset === presetId}
+                onPress={() => handleSelectPreset(presetId)}
+              />
+            ))}
+          </View>
+
+          <Text style={styles.presetHelperText}>{selectedPresetHelper}</Text>
+
+          {selectedPreset === 'custom' ? (
+            <View style={styles.customSettingsPanel}>
+              <CustomNumberControl
+                label="Focus duration"
+                value={customSettings.focusMinutes}
+                unit="min"
+                min={MIN_DURATION_MINUTES}
+                max={MAX_DURATION_MINUTES}
+                onChange={(value) => handleChangeCustomSetting('focusMinutes', value)}
+              />
+
+              <CustomNumberControl
+                label="Short break"
+                value={customSettings.shortBreakMinutes}
+                unit="min"
+                min={MIN_DURATION_MINUTES}
+                max={MAX_DURATION_MINUTES}
+                onChange={(value) =>
+                  handleChangeCustomSetting('shortBreakMinutes', value)
+                }
+              />
+
+              <CustomNumberControl
+                label="Long break"
+                value={customSettings.longBreakMinutes}
+                unit="min"
+                min={MIN_DURATION_MINUTES}
+                max={MAX_DURATION_MINUTES}
+                onChange={(value) =>
+                  handleChangeCustomSetting('longBreakMinutes', value)
+                }
+              />
+
+              <CustomNumberControl
+                label="Long break interval"
+                value={customSettings.longBreakInterval}
+                unit="blocks"
+                min={MIN_LONG_BREAK_INTERVAL}
+                max={MAX_LONG_BREAK_INTERVAL}
+                onChange={(value) =>
+                  handleChangeCustomSetting('longBreakInterval', value)
+                }
+              />
+            </View>
+          ) : null}
         </View>
 
         <View style={styles.timerCard}>
@@ -480,15 +1581,22 @@ export default function FocusSessionScreen() {
               <Text style={styles.skipButtonText}>Skip</Text>
             </TouchableOpacity>
           </View>
+
         </View>
 
-        <Text style={styles.sectionTitle}>Pomodoro Mode</Text>
+        <View style={styles.sectionHeaderBlock}>
+          <Text style={styles.sectionTitle}>Current Session</Text>
+          <Text style={styles.sectionHelperText}>
+            Current Session = Focus / Short Break / Long Break.
+          </Text>
+        </View>
 
         <View style={styles.modeRow}>
           {pomodoroModeOrder.map((mode) => (
             <ModeButton
               key={mode}
               mode={mode}
+              settings={timerSettings}
               selected={currentMode === mode}
               onPress={() => handleSelectMode(mode)}
             />
@@ -499,19 +1607,21 @@ export default function FocusSessionScreen() {
           <View style={styles.cycleTopRow}>
             <View>
               <Text style={styles.cycleLabel}>Cycle Progress</Text>
-              <Text style={styles.cycleTitle}>{cycleProgressCount}/4 focus blocks</Text>
+              <Text style={styles.cycleTitle}>
+                {cycleProgressCount}/{longBreakInterval} focus blocks
+              </Text>
             </View>
 
             <View style={styles.breakSuggestionBadge}>
               <Ionicons name="leaf" size={16} color={theme.colors.primaryDark} />
               <Text style={styles.breakSuggestionText}>
-                {breakSuggestionPrefix}: {POMODORO_MODES[displayedBreakMode].label}
+                {cycleSuggestionText}
               </Text>
             </View>
           </View>
 
           <View style={styles.cycleDotsRow}>
-            {[0, 1, 2, 3].map((index) => (
+            {Array.from({ length: longBreakInterval }, (_, index) => (
               <View
                 key={index}
                 style={[
@@ -585,7 +1695,9 @@ export default function FocusSessionScreen() {
 
           <View style={styles.tipRow}>
             <Ionicons name="checkmark-circle" size={18} color={theme.colors.primaryDark} />
-            <Text style={styles.tipText}>After 4 focus blocks, take a long break.</Text>
+            <Text style={styles.tipText}>
+              After {longBreakInterval} focus blocks, take a long break.
+            </Text>
           </View>
         </View>
 
@@ -673,6 +1785,159 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     fontSize: 10,
     textAlign: 'center',
+  },
+  presetCard: {
+    backgroundColor: theme.colors.surface,
+    borderRadius: theme.radius.xl,
+    padding: 16,
+    marginBottom: 18,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    ...theme.shadowSoft,
+  },
+  presetHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  presetLabel: {
+    color: theme.colors.primaryDark,
+    fontWeight: '900',
+    fontSize: 12,
+  },
+  presetTitle: {
+    marginTop: 4,
+    color: theme.colors.text,
+    fontSize: 20,
+    fontWeight: '900',
+  },
+  presetDescription: {
+    marginTop: 3,
+    color: theme.colors.muted,
+    fontWeight: '700',
+    fontSize: 11,
+  },
+  presetSummaryBadge: {
+    backgroundColor: theme.colors.primarySoft,
+    borderRadius: theme.radius.pill,
+    paddingHorizontal: 11,
+    paddingVertical: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  presetSummaryBadgeText: {
+    marginLeft: 5,
+    color: theme.colors.primaryDark,
+    fontWeight: '900',
+    fontSize: 12,
+  },
+  presetGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginTop: 14,
+    marginHorizontal: -4,
+  },
+  presetButton: {
+    flexGrow: 1,
+    flexBasis: '47%',
+    minHeight: 58,
+    borderRadius: theme.radius.md,
+    backgroundColor: theme.colors.backgroundSoft,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    justifyContent: 'center',
+    marginHorizontal: 4,
+    marginBottom: 8,
+  },
+  presetButtonActive: {
+    backgroundColor: theme.colors.primary,
+    borderColor: theme.colors.primary,
+  },
+  presetButtonLabel: {
+    color: theme.colors.text,
+    fontWeight: '900',
+    fontSize: 13,
+  },
+  presetButtonLabelActive: {
+    color: '#FFFFFF',
+  },
+  presetButtonSummary: {
+    marginTop: 4,
+    color: theme.colors.muted,
+    fontWeight: '800',
+    fontSize: 11,
+  },
+  presetButtonSummaryActive: {
+    color: '#FFFFFF',
+  },
+  presetHelperText: {
+    marginTop: 2,
+    color: theme.colors.textSoft,
+    fontWeight: '600',
+    lineHeight: 20,
+  },
+  customSettingsPanel: {
+    marginTop: 12,
+    paddingTop: 4,
+    borderTopWidth: 1,
+    borderTopColor: theme.colors.border,
+  },
+  customControlRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 10,
+  },
+  customControlTextArea: {
+    flex: 1,
+    paddingRight: 10,
+  },
+  customControlLabel: {
+    color: theme.colors.text,
+    fontWeight: '900',
+    fontSize: 13,
+  },
+  customControlHint: {
+    marginTop: 3,
+    color: theme.colors.muted,
+    fontWeight: '700',
+    fontSize: 11,
+  },
+  stepper: {
+    width: 154,
+    height: 42,
+    borderRadius: theme.radius.pill,
+    backgroundColor: theme.colors.surfaceSoft,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 4,
+  },
+  stepperButton: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: theme.colors.primarySoft,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  stepperButtonDisabled: {
+    backgroundColor: theme.colors.background,
+  },
+  stepperValue: {
+    flex: 1,
+    color: theme.colors.text,
+    fontWeight: '900',
+    fontSize: 14,
+    textAlign: 'center',
+  },
+  stepperUnit: {
+    color: theme.colors.muted,
+    fontSize: 10,
   },
   timerCard: {
     backgroundColor: theme.colors.surface,
@@ -802,11 +2067,97 @@ const styles = StyleSheet.create({
     color: theme.colors.textSoft,
     fontWeight: '900',
   },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(34, 40, 49, 0.42)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 24,
+  },
+  focusModalCard: {
+    width: '100%',
+    maxWidth: 360,
+    borderRadius: theme.radius.xl,
+    backgroundColor: theme.colors.surface,
+    padding: 22,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    ...theme.shadow,
+  },
+  modalAccentBar: {
+    height: 5,
+    borderRadius: 999,
+    backgroundColor: theme.colors.primary,
+    marginBottom: 16,
+  },
+  modalBadge: {
+    alignSelf: 'flex-start',
+    borderRadius: theme.radius.pill,
+    backgroundColor: theme.colors.primarySoft,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    marginBottom: 12,
+  },
+  modalBadgeText: {
+    color: theme.colors.primaryDark,
+    fontWeight: '900',
+    fontSize: 12,
+  },
+  modalTitle: {
+    color: theme.colors.text,
+    fontSize: 20,
+    fontWeight: '900',
+    marginBottom: 8,
+  },
+  modalMessage: {
+    color: theme.colors.textSoft,
+    fontWeight: '700',
+    lineHeight: 20,
+    marginTop: 4,
+  },
+  modalButtonStack: {
+    marginTop: 18,
+  },
+  modalPrimaryButton: {
+    height: 48,
+    borderRadius: theme.radius.md,
+    backgroundColor: theme.colors.primary,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalPrimaryButtonText: {
+    color: '#FFFFFF',
+    fontWeight: '900',
+    fontSize: 14,
+  },
+  modalSecondaryButton: {
+    height: 46,
+    borderRadius: theme.radius.md,
+    backgroundColor: theme.colors.primarySoft,
+    borderWidth: 1,
+    borderColor: '#CDEFD9',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: 10,
+  },
+  modalSecondaryButtonText: {
+    color: theme.colors.primaryDark,
+    fontWeight: '900',
+    fontSize: 14,
+  },
+  sectionHeaderBlock: {
+    marginBottom: 13,
+  },
   sectionTitle: {
     color: theme.colors.text,
     fontSize: 20,
     fontWeight: '900',
-    marginBottom: 13,
+  },
+  sectionHelperText: {
+    marginTop: 4,
+    color: theme.colors.muted,
+    fontWeight: '700',
+    lineHeight: 18,
   },
   modeRow: {
     flexDirection: 'row',
