@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -21,7 +21,53 @@ import { useFocus } from '../lib/FocusContext';
 import { getMiloImageSource } from '../components/milo/MiloMoodImage';
 import { getTopMiloRecommendedTask } from '../lib/miloSituationIntelligence';
 
-const focusOptions = [5, 15, 25, 45];
+const POMODORO_MODES = {
+  focus: {
+    label: 'Focus',
+    minutes: 25,
+    shortLabel: '25 min',
+    title: 'Focus block',
+    runningTitle: 'Focusing now',
+    readyTitle: 'Ready to focus',
+    accentColor: theme.colors.primary,
+    softColor: theme.colors.primarySoft,
+    startSpeech: 'Focus mode started. Choose one task and stay with it.',
+  },
+  shortBreak: {
+    label: 'Short Break',
+    minutes: 5,
+    shortLabel: '5 min',
+    title: 'Short break',
+    runningTitle: 'Breathing break',
+    readyTitle: 'Ready to rest',
+    accentColor: theme.colors.blue,
+    softColor: theme.colors.blueSoft,
+    startSpeech: 'Short break started. Take a gentle reset.',
+  },
+  longBreak: {
+    label: 'Long Break',
+    minutes: 15,
+    shortLabel: '15 min',
+    title: 'Long break',
+    runningTitle: 'Deep reset',
+    readyTitle: 'Long break ready',
+    accentColor: theme.colors.purple,
+    softColor: theme.colors.purpleSoft,
+    startSpeech: 'Long break started. Milo says you earned this rest.',
+  },
+} as const;
+
+type PomodoroMode = keyof typeof POMODORO_MODES;
+
+const pomodoroModeOrder: PomodoroMode[] = ['focus', 'shortBreak', 'longBreak'];
+
+function getModeSeconds(mode: PomodoroMode) {
+  return POMODORO_MODES[mode].minutes * 60;
+}
+
+function getSuggestedBreakMode(completedFocusCount: number): PomodoroMode {
+  return completedFocusCount % 4 === 0 ? 'longBreak' : 'shortBreak';
+}
 
 function getTodayDate() {
   const today = new Date();
@@ -41,23 +87,34 @@ function formatSeconds(seconds: number) {
     .padStart(2, '0')}`;
 }
 
-function OptionButton({
-  minutes,
+function ModeButton({
+  mode,
   selected,
   onPress,
 }: {
-  minutes: number;
+  mode: PomodoroMode;
   selected: boolean;
   onPress: () => void;
 }) {
+  const modeConfig = POMODORO_MODES[mode];
+
   return (
     <TouchableOpacity
       activeOpacity={0.85}
       onPress={onPress}
-      style={[styles.optionButton, selected && styles.optionButtonActive]}
+      style={[
+        styles.modeButton,
+        selected && {
+          backgroundColor: modeConfig.accentColor,
+          borderColor: modeConfig.accentColor,
+        },
+      ]}
     >
-      <Text style={[styles.optionText, selected && styles.optionTextActive]}>
-        {minutes} min
+      <Text style={[styles.modeLabel, selected && styles.modeLabelActive]}>
+        {modeConfig.label}
+      </Text>
+      <Text style={[styles.modeMinutes, selected && styles.modeMinutesActive]}>
+        {modeConfig.shortLabel}
       </Text>
     </TouchableOpacity>
   );
@@ -69,11 +126,15 @@ export default function FocusSessionScreen() {
   const { tasks } = useTasks();
   const { focusSessions, addFocusSession, totalFocusMinutes } = useFocus();
 
-  const [selectedMinutes, setSelectedMinutes] = useState(25);
-  const [remainingSeconds, setRemainingSeconds] = useState(25 * 60);
+  const [currentMode, setCurrentMode] = useState<PomodoroMode>('focus');
+  const [remainingSeconds, setRemainingSeconds] = useState(getModeSeconds('focus'));
   const [isRunning, setIsRunning] = useState(false);
+  const endTimestampRef = useRef<number | null>(null);
+  const remainingMsRef = useRef(getModeSeconds('focus') * 1000);
+  const completionHandledRef = useRef(false);
 
-  const totalSeconds = selectedMinutes * 60;
+  const currentModeConfig = POMODORO_MODES[currentMode];
+  const totalSeconds = getModeSeconds(currentMode);
   const todayDate = getTodayDate();
 
   const todayFocusSessions = useMemo(() => {
@@ -85,6 +146,16 @@ export default function FocusSessionScreen() {
   const todayFocusMinutes = useMemo(() => {
     return todayFocusSessions.reduce((total, session) => total + session.minutes, 0);
   }, [todayFocusSessions]);
+  const completedFocusCount = todayFocusSessions.length;
+  const nextBreakAfterFocusMode = getSuggestedBreakMode(completedFocusCount + 1);
+  const focusBlocksInCycle = completedFocusCount % 4;
+  const cycleProgressCount =
+    focusBlocksInCycle === 0 && completedFocusCount > 0 && currentMode === 'longBreak'
+      ? 4
+      : focusBlocksInCycle;
+  const displayedBreakMode =
+    currentMode === 'focus' ? nextBreakAfterFocusMode : currentMode;
+  const breakSuggestionPrefix = currentMode === 'focus' ? 'Next' : 'Suggested';
 
   const routeTaskId =
     typeof route.params?.taskId === 'string' ? route.params.taskId : undefined;
@@ -101,84 +172,183 @@ export default function FocusSessionScreen() {
     return getTopMiloRecommendedTask(tasks, new Date());
   }, [routeTaskId, tasks]);
 
-  const progress = totalSeconds === 0 ? 0 : 1 - remainingSeconds / totalSeconds;
+  const progress =
+    totalSeconds === 0
+      ? 0
+      : Math.min(1, Math.max(0, 1 - remainingSeconds / totalSeconds));
   const progressPercent = Math.round(progress * 100);
 
   const miloImage =
-    remainingSeconds === 0
+    remainingSeconds === 0 && !isRunning
       ? getMiloImageSource('celebrating')
       : isRunning
-      ? getMiloImageSource('focused')
-      : getMiloImageSource('sleepy');
+      ? currentMode === 'focus'
+        ? getMiloImageSource('focused')
+        : getMiloImageSource('happy')
+      : currentMode === 'focus'
+      ? getMiloImageSource('sleepy')
+      : getMiloImageSource('waving');
 
   const miloMessage = isRunning
-    ? 'Stay with one small step.'
-    : remainingSeconds === 0 || todayFocusSessions.length > 0
-    ? 'Great focus. Milo is proud.'
-    : 'Milo will guard your focus.';
+    ? currentMode === 'focus'
+      ? 'Stay with one small step. Milo is guarding your focus.'
+      : 'Rest gently. Breaks help your brain come back stronger.'
+    : currentMode === 'focus'
+    ? `${POMODORO_MODES[nextBreakAfterFocusMode].label} comes after this focus block.`
+    : `${currentModeConfig.label} is ready. Press start when you want to rest.`;
 
-  useEffect(() => {
-    if (!isRunning) return;
+  const resetTimerForMode = useCallback((mode: PomodoroMode) => {
+    const nextSeconds = getModeSeconds(mode);
 
-    const timer = setInterval(() => {
-      setRemainingSeconds((current) => Math.max(current - 1, 0));
-    }, 1000);
-
-    return () => clearInterval(timer);
-  }, [isRunning]);
-
-  useEffect(() => {
-    if (!isRunning || remainingSeconds !== 0) return;
-
+    endTimestampRef.current = null;
+    remainingMsRef.current = nextSeconds * 1000;
+    completionHandledRef.current = false;
     setIsRunning(false);
-    addFocusSession(selectedMinutes);
+    setRemainingSeconds(nextSeconds);
+  }, []);
+
+  const changeMode = useCallback(
+    (mode: PomodoroMode) => {
+      setCurrentMode(mode);
+      resetTimerForMode(mode);
+    },
+    [resetTimerForMode]
+  );
+
+  const completeCurrentMode = useCallback(() => {
+    if (completionHandledRef.current) return;
+
+    completionHandledRef.current = true;
+    endTimestampRef.current = null;
+    remainingMsRef.current = 0;
+    setIsRunning(false);
+    setRemainingSeconds(0);
 
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    Speech.speak('Focus session completed. Great work!', {
-      rate: 0.95,
-      pitch: 1.08,
-    });
 
-    Alert.alert(
-      'Focus session complete',
-      'Milo is proud of you. This session has been saved in your analytics.'
-    );
-  }, [isRunning, remainingSeconds, selectedMinutes, addFocusSession]);
+    if (currentMode === 'focus') {
+      const nextCompletedFocusCount = completedFocusCount + 1;
+      const suggestedBreakMode = getSuggestedBreakMode(nextCompletedFocusCount);
+      const suggestedBreak = POMODORO_MODES[suggestedBreakMode];
 
-  const handleSelectMinutes = (minutes: number) => {
-    if (isRunning) {
+      addFocusSession(POMODORO_MODES.focus.minutes);
+      Speech.speak(
+        `Focus session completed. Great work. Milo suggests a ${suggestedBreak.label}.`,
+        {
+          rate: 0.95,
+          pitch: 1.08,
+        }
+      );
+      changeMode(suggestedBreakMode);
+
       Alert.alert(
-        'Timer is running',
-        'Pause or reset the current focus session before changing the duration.'
+        'Focus block complete',
+        `Milo logged 25 focus minutes. ${
+          suggestedBreakMode === 'longBreak'
+            ? 'That makes 4 focus blocks, so take a Long Break.'
+            : 'Take a Short Break before the next block.'
+        }`
       );
       return;
     }
 
-    setSelectedMinutes(minutes);
-    setRemainingSeconds(minutes * 60);
+    Speech.speak('Break completed. Milo is ready for the next focus block.', {
+      rate: 0.95,
+      pitch: 1.08,
+    });
+    changeMode('focus');
+
+    Alert.alert(
+      'Break complete',
+      'Nice reset. Milo is ready when you want to start another focus block.'
+    );
+  }, [addFocusSession, changeMode, completedFocusCount, currentMode]);
+
+  useEffect(() => {
+    if (!isRunning) return;
+
+    const syncRemainingTime = () => {
+      if (!endTimestampRef.current) return;
+
+      const nextRemainingMs = Math.max(endTimestampRef.current - Date.now(), 0);
+      remainingMsRef.current = nextRemainingMs;
+      setRemainingSeconds(Math.ceil(nextRemainingMs / 1000));
+
+      if (nextRemainingMs === 0) {
+        completeCurrentMode();
+      }
+    };
+
+    syncRemainingTime();
+    const timer = setInterval(syncRemainingTime, 250);
+
+    return () => clearInterval(timer);
+  }, [completeCurrentMode, isRunning]);
+
+  const handleSelectMode = (mode: PomodoroMode) => {
+    if (mode === currentMode) return;
+
+    if (isRunning) {
+      Alert.alert(
+        'Timer is running',
+        'Pause or reset the current timer before changing Pomodoro modes.'
+      );
+      return;
+    }
+
+    changeMode(mode);
   };
 
   const handleStartPause = async () => {
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 
-    if (remainingSeconds === 0) {
+    if (isRunning) {
+      const pausedRemainingMs = endTimestampRef.current
+        ? Math.max(endTimestampRef.current - Date.now(), 0)
+        : remainingMsRef.current;
+
+      remainingMsRef.current = pausedRemainingMs;
+      endTimestampRef.current = null;
+      setRemainingSeconds(Math.ceil(pausedRemainingMs / 1000));
+      setIsRunning(false);
+      return;
+    }
+
+    if (remainingMsRef.current <= 0 || remainingSeconds === 0) {
+      remainingMsRef.current = totalSeconds * 1000;
       setRemainingSeconds(totalSeconds);
     }
 
-    if (!isRunning) {
-      Speech.speak('Focus mode started. Choose one task and stay with it.', {
-        rate: 0.95,
-        pitch: 1.08,
-      });
-    }
+    completionHandledRef.current = false;
+    endTimestampRef.current = Date.now() + remainingMsRef.current;
+    setIsRunning(true);
 
-    setIsRunning((current) => !current);
+    Speech.speak(currentModeConfig.startSpeech, {
+      rate: 0.95,
+      pitch: 1.08,
+    });
   };
 
   const handleReset = async () => {
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    setIsRunning(false);
-    setRemainingSeconds(totalSeconds);
+    resetTimerForMode(currentMode);
+  };
+
+  const handleSkip = async () => {
+    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+
+    const nextMode = currentMode === 'focus' ? 'shortBreak' : 'focus';
+    changeMode(nextMode);
+
+    Speech.speak(
+      currentMode === 'focus'
+        ? 'Focus block skipped. Milo will not count this one.'
+        : 'Break skipped. Milo is ready for focus.',
+      {
+        rate: 0.95,
+        pitch: 1.08,
+      }
+    );
   };
 
   return (
@@ -195,9 +365,9 @@ export default function FocusSessionScreen() {
         >
           <View style={styles.heroTextArea}>
             <Text style={styles.heroLabel}>Milo Focus Mode</Text>
-            <Text style={styles.heroTitle}>Stay focused</Text>
+            <Text style={styles.heroTitle}>Pomodoro timer</Text>
             <Text style={styles.heroSubtitle}>
-              Pick one task, start the timer, and let Milo keep you company.
+              Focus for 25 minutes, then let Milo guide the right break.
             </Text>
           </View>
 
@@ -208,15 +378,15 @@ export default function FocusSessionScreen() {
 
         <View style={styles.analyticsRow}>
           <View style={styles.analyticsCard}>
-            <Text style={styles.analyticsNumber}>{todayFocusSessions.length}</Text>
-            <Text style={styles.analyticsLabel}>Today Sessions</Text>
+            <Text style={styles.analyticsNumber}>{completedFocusCount}</Text>
+            <Text style={styles.analyticsLabel}>Focus Blocks</Text>
           </View>
 
           <View style={styles.analyticsCard}>
             <Text style={[styles.analyticsNumber, { color: theme.colors.blue }]}>
               {todayFocusMinutes}
             </Text>
-            <Text style={styles.analyticsLabel}>Today Minutes</Text>
+            <Text style={styles.analyticsLabel}>Focus Minutes</Text>
           </View>
 
           <View style={styles.analyticsCard}>
@@ -230,9 +400,11 @@ export default function FocusSessionScreen() {
         <View style={styles.timerCard}>
           <View style={styles.timerTopRow}>
             <View>
-              <Text style={styles.timerLabel}>Current Session</Text>
+              <Text style={[styles.timerLabel, { color: currentModeConfig.accentColor }]}>
+                {currentModeConfig.title}
+              </Text>
               <Text style={styles.timerTitle}>
-                {isRunning ? 'Focusing now' : 'Ready to focus'}
+                {isRunning ? currentModeConfig.runningTitle : currentModeConfig.readyTitle}
               </Text>
             </View>
 
@@ -246,13 +418,32 @@ export default function FocusSessionScreen() {
             </TouchableOpacity>
           </View>
 
-          <View style={styles.timerCircle}>
+          <View
+            style={[
+              styles.timerCircle,
+              {
+                backgroundColor: currentModeConfig.softColor,
+              },
+            ]}
+          >
             <Text style={styles.timerText}>{formatSeconds(remainingSeconds)}</Text>
-            <Text style={styles.timerSubText}>{progressPercent}% complete</Text>
+            <Text
+              style={[styles.timerSubText, { color: currentModeConfig.accentColor }]}
+            >
+              {progressPercent}% complete
+            </Text>
           </View>
 
           <View style={styles.progressTrack}>
-            <View style={[styles.progressFill, { width: `${progressPercent}%` }]} />
+            <View
+              style={[
+                styles.progressFill,
+                {
+                  width: `${progressPercent}%`,
+                  backgroundColor: currentModeConfig.accentColor,
+                },
+              ]}
+            />
           </View>
 
           <View style={styles.buttonRow}>
@@ -279,20 +470,57 @@ export default function FocusSessionScreen() {
               <Ionicons name="refresh" size={21} color={theme.colors.primaryDark} />
               <Text style={styles.resetButtonText}>Reset</Text>
             </TouchableOpacity>
+
+            <TouchableOpacity
+              activeOpacity={0.85}
+              style={styles.skipButton}
+              onPress={handleSkip}
+            >
+              <Ionicons name="play-skip-forward" size={20} color={theme.colors.textSoft} />
+              <Text style={styles.skipButtonText}>Skip</Text>
+            </TouchableOpacity>
           </View>
         </View>
 
-        <Text style={styles.sectionTitle}>Choose Focus Duration</Text>
+        <Text style={styles.sectionTitle}>Pomodoro Mode</Text>
 
-        <View style={styles.optionsRow}>
-          {focusOptions.map((minutes) => (
-            <OptionButton
-              key={minutes}
-              minutes={minutes}
-              selected={selectedMinutes === minutes}
-              onPress={() => handleSelectMinutes(minutes)}
+        <View style={styles.modeRow}>
+          {pomodoroModeOrder.map((mode) => (
+            <ModeButton
+              key={mode}
+              mode={mode}
+              selected={currentMode === mode}
+              onPress={() => handleSelectMode(mode)}
             />
           ))}
+        </View>
+
+        <View style={styles.cycleCard}>
+          <View style={styles.cycleTopRow}>
+            <View>
+              <Text style={styles.cycleLabel}>Cycle Progress</Text>
+              <Text style={styles.cycleTitle}>{cycleProgressCount}/4 focus blocks</Text>
+            </View>
+
+            <View style={styles.breakSuggestionBadge}>
+              <Ionicons name="leaf" size={16} color={theme.colors.primaryDark} />
+              <Text style={styles.breakSuggestionText}>
+                {breakSuggestionPrefix}: {POMODORO_MODES[displayedBreakMode].label}
+              </Text>
+            </View>
+          </View>
+
+          <View style={styles.cycleDotsRow}>
+            {[0, 1, 2, 3].map((index) => (
+              <View
+                key={index}
+                style={[
+                  styles.cycleDot,
+                  index < cycleProgressCount && styles.cycleDotActive,
+                ]}
+              />
+            ))}
+          </View>
         </View>
 
         <View style={styles.miloMessageCard}>
@@ -357,7 +585,7 @@ export default function FocusSessionScreen() {
 
           <View style={styles.tipRow}>
             <Ionicons name="checkmark-circle" size={18} color={theme.colors.primaryDark} />
-            <Text style={styles.tipText}>After the timer ends, take a short break.</Text>
+            <Text style={styles.tipText}>After 4 focus blocks, take a long break.</Text>
           </View>
         </View>
 
@@ -544,17 +772,34 @@ const styles = StyleSheet.create({
     fontSize: 15,
   },
   resetButton: {
-    width: 116,
+    width: 88,
     height: 56,
     borderRadius: theme.radius.md,
     backgroundColor: theme.colors.primarySoft,
     justifyContent: 'center',
     alignItems: 'center',
     flexDirection: 'row',
+    marginRight: 8,
   },
   resetButtonText: {
     marginLeft: 6,
     color: theme.colors.primaryDark,
+    fontWeight: '900',
+  },
+  skipButton: {
+    width: 82,
+    height: 56,
+    borderRadius: theme.radius.md,
+    backgroundColor: theme.colors.backgroundSoft,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    justifyContent: 'center',
+    alignItems: 'center',
+    flexDirection: 'row',
+  },
+  skipButtonText: {
+    marginLeft: 5,
+    color: theme.colors.textSoft,
     fontWeight: '900',
   },
   sectionTitle: {
@@ -563,32 +808,93 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     marginBottom: 13,
   },
-  optionsRow: {
+  modeRow: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
     marginBottom: 18,
   },
-  optionButton: {
-    paddingHorizontal: 16,
-    paddingVertical: 11,
-    borderRadius: 999,
+  modeButton: {
+    flex: 1,
+    minHeight: 66,
+    borderRadius: theme.radius.lg,
     backgroundColor: theme.colors.surface,
     borderWidth: 1,
     borderColor: theme.colors.border,
-    marginRight: 10,
-    marginBottom: 10,
+    paddingHorizontal: 8,
+    paddingVertical: 11,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 8,
   },
-  optionButtonActive: {
-    backgroundColor: theme.colors.primary,
-    borderColor: theme.colors.primary,
-  },
-  optionText: {
-    color: theme.colors.muted,
+  modeLabel: {
+    color: theme.colors.text,
     fontWeight: '900',
-    fontSize: 13,
+    fontSize: 12,
+    textAlign: 'center',
   },
-  optionTextActive: {
+  modeLabelActive: {
     color: '#FFFFFF',
+  },
+  modeMinutes: {
+    marginTop: 4,
+    color: theme.colors.muted,
+    fontWeight: '800',
+    fontSize: 11,
+  },
+  modeMinutesActive: {
+    color: '#FFFFFF',
+  },
+  cycleCard: {
+    backgroundColor: theme.colors.surface,
+    borderRadius: theme.radius.xl,
+    padding: 16,
+    marginBottom: 18,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    ...theme.shadowSoft,
+  },
+  cycleTopRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  cycleLabel: {
+    color: theme.colors.primaryDark,
+    fontWeight: '900',
+    fontSize: 12,
+  },
+  cycleTitle: {
+    marginTop: 4,
+    color: theme.colors.text,
+    fontWeight: '900',
+    fontSize: 18,
+  },
+  breakSuggestionBadge: {
+    backgroundColor: theme.colors.primarySoft,
+    borderRadius: 999,
+    paddingHorizontal: 11,
+    paddingVertical: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  breakSuggestionText: {
+    marginLeft: 5,
+    color: theme.colors.primaryDark,
+    fontWeight: '900',
+    fontSize: 11,
+  },
+  cycleDotsRow: {
+    flexDirection: 'row',
+    marginTop: 14,
+  },
+  cycleDot: {
+    flex: 1,
+    height: 9,
+    borderRadius: 999,
+    backgroundColor: theme.colors.background,
+    marginRight: 7,
+  },
+  cycleDotActive: {
+    backgroundColor: theme.colors.primary,
   },
   miloMessageCard: {
     backgroundColor: theme.colors.surface,
