@@ -24,6 +24,7 @@ import { useTasks } from '../lib/TaskContext';
 import { useFocus } from '../lib/FocusContext';
 import { getMiloImageSource } from '../components/milo/MiloMoodImage';
 import { getTopMiloRecommendedTask } from '../lib/miloSituationIntelligence';
+import { type Task } from '../types/task';
 
 const MIN_DURATION_MINUTES = 1;
 const MAX_DURATION_MINUTES = 120;
@@ -89,6 +90,9 @@ type PersistedPomodoroSession = {
   wasDistracted: boolean;
   focusLeftAt: number | null;
   loggedFocusSessionKey: string | null;
+  selectedFocusTaskId: string | null;
+  selectedFocusTaskTitle: string | null;
+  focusWithoutTaskSelected: boolean;
   savedAt: number;
 };
 
@@ -100,6 +104,13 @@ type CompleteModeOptions = {
   startedAt?: number | null;
   playFeedback?: boolean;
   showAlert?: boolean;
+};
+
+type FocusSessionSummary = {
+  durationMinutes: number;
+  taskTitle: string | null;
+  wasDistracted: boolean;
+  miloMessage: string;
 };
 
 const CLASSIC_SETTINGS: PomodoroSettings = {
@@ -302,6 +313,83 @@ function parseLoggedFocusKeys(value: string | null) {
   }
 }
 
+function formatTitleCase(value: string) {
+  if (!value) return value;
+  return `${value.charAt(0).toUpperCase()}${value.slice(1)}`;
+}
+
+function parseTaskDueTimeMinutes(dueTime?: string) {
+  const trimmedTime = dueTime?.trim();
+  if (!trimmedTime) return 23 * 60 + 59;
+
+  const match = trimmedTime.match(/^(\d{1,2})(?::(\d{2}))?\s*(AM|PM)?$/i);
+  if (!match) return 23 * 60 + 59;
+
+  let hours = Number(match[1]);
+  const minutes = Number(match[2] ?? '0');
+  const meridiem = match[3]?.toUpperCase();
+
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) {
+    return 23 * 60 + 59;
+  }
+
+  if (meridiem === 'PM' && hours < 12) hours += 12;
+  if (meridiem === 'AM' && hours === 12) hours = 0;
+
+  if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) {
+    return 23 * 60 + 59;
+  }
+
+  return hours * 60 + minutes;
+}
+
+function getTaskDueSortTime(task: Task) {
+  if (!task.dueDate) return Number.MAX_SAFE_INTEGER;
+
+  const dateParts = task.dueDate.split('-').map((part) => Number(part));
+  if (
+    dateParts.length !== 3 ||
+    dateParts.some((part) => !Number.isFinite(part))
+  ) {
+    return Number.MAX_SAFE_INTEGER;
+  }
+
+  const [year, month, day] = dateParts;
+  const date = new Date(year, month - 1, day);
+  if (!Number.isFinite(date.getTime())) return Number.MAX_SAFE_INTEGER;
+
+  return date.getTime() + parseTaskDueTimeMinutes(task.dueTime) * 60 * 1000;
+}
+
+function getFocusTaskMetaText(task: Task) {
+  const typeText = formatTitleCase(task.plannerType);
+  const priorityText = `${formatTitleCase(task.priority)} priority`;
+  const dueText = [task.dueDate, task.dueTime].filter(Boolean).join(' ');
+
+  return dueText
+    ? `${typeText} - ${priorityText} - ${dueText}`
+    : `${typeText} - ${priorityText}`;
+}
+
+function getFocusSummaryMiloMessage(
+  wasDistracted: boolean,
+  taskTitle: string | null
+) {
+  if (wasDistracted && taskTitle) {
+    return `You came back and finished ${taskTitle}. Lets aim for a cleaner focus next time.`;
+  }
+
+  if (wasDistracted) {
+    return 'You came back and finished. Lets aim for a cleaner focus next time.';
+  }
+
+  if (taskTitle) {
+    return `Great job! You completed a clean focus session for ${taskTitle}.`;
+  }
+
+  return 'Great job! You completed a clean focus session.';
+}
+
 function ModeButton({
   mode,
   settings,
@@ -448,9 +536,21 @@ export default function FocusSessionScreen() {
   const [pomodoroCompletedFocusCount, setPomodoroCompletedFocusCount] =
     useState(0);
   const [cycleFocusCount, setCycleFocusCount] = useState(0);
+  const [taskPickerVisible, setTaskPickerVisible] = useState(false);
   const [dndReminderVisible, setDndReminderVisible] = useState(false);
   const [focusWarningText, setFocusWarningText] = useState<string | null>(null);
   const [wasDistracted, setWasDistracted] = useState(false);
+  const [selectedFocusTaskId, setSelectedFocusTaskId] = useState<string | null>(
+    null
+  );
+  const [selectedFocusTaskTitle, setSelectedFocusTaskTitle] = useState<
+    string | null
+  >(null);
+  const [focusWithoutTaskSelected, setFocusWithoutTaskSelected] =
+    useState(false);
+  const [focusSummary, setFocusSummary] = useState<FocusSessionSummary | null>(
+    null
+  );
   const [hasRestoredPomodoroState, setHasRestoredPomodoroState] =
     useState(false);
 
@@ -464,6 +564,9 @@ export default function FocusSessionScreen() {
   const startedAtRef = useRef<number | null>(null);
   const focusLeftAtRef = useRef<number | null>(null);
   const loggedFocusSessionKeyRef = useRef<string | null>(null);
+  const selectedFocusTaskIdRef = useRef<string | null>(null);
+  const selectedFocusTaskTitleRef = useRef<string | null>(null);
+  const focusWithoutTaskSelectedRef = useRef(false);
   const pomodoroCompletedFocusCountRef = useRef(0);
   const cycleFocusCountRef = useRef(0);
   const wasDistractedRef = useRef(false);
@@ -531,6 +634,35 @@ export default function FocusSessionScreen() {
     return getTopMiloRecommendedTask(tasks, new Date());
   }, [routeTaskId, tasks]);
 
+  const incompleteFocusTasks = useMemo(() => {
+    return tasks
+      .filter((task) => task.status !== 'completed')
+      .sort((a, b) => {
+        const dueDifference = getTaskDueSortTime(a) - getTaskDueSortTime(b);
+        if (dueDifference !== 0) return dueDifference;
+
+        return a.createdAt.localeCompare(b.createdAt);
+      });
+  }, [tasks]);
+
+  const selectedFocusTask = useMemo(() => {
+    if (!selectedFocusTaskId) return undefined;
+    return tasks.find((task) => task.id === selectedFocusTaskId);
+  }, [selectedFocusTaskId, tasks]);
+
+  const selectedFocusTaskDisplayTitle =
+    selectedFocusTask?.title || selectedFocusTaskTitle;
+  const focusTaskDisplayText = selectedFocusTaskDisplayTitle
+    ? selectedFocusTaskDisplayTitle
+    : focusWithoutTaskSelected
+    ? 'Focus without task'
+    : 'Choose before starting';
+  const focusTaskHelperText = selectedFocusTaskDisplayTitle
+    ? 'This focus block is tied to one task.'
+    : focusWithoutTaskSelected
+    ? 'Milo will track this as a general focus block.'
+    : 'Pick a task when you press Start.';
+
   const progress =
     totalSeconds === 0
       ? 0
@@ -561,6 +693,15 @@ export default function FocusSessionScreen() {
     : `${currentModeConfig.label} is ready. Press start when you want to rest.`;
 
   useEffect(() => {
+    if (!selectedFocusTask || selectedFocusTask.title === selectedFocusTaskTitle) {
+      return;
+    }
+
+    selectedFocusTaskTitleRef.current = selectedFocusTask.title;
+    setSelectedFocusTaskTitle(selectedFocusTask.title);
+  }, [selectedFocusTask, selectedFocusTaskTitle]);
+
+  useEffect(() => {
     selectedPresetRef.current = selectedPreset;
     customSettingsRef.current = customSettings;
     currentModeRef.current = currentMode;
@@ -569,13 +710,19 @@ export default function FocusSessionScreen() {
     pomodoroCompletedFocusCountRef.current = completedFocusCount;
     cycleFocusCountRef.current = cycleProgressCount;
     wasDistractedRef.current = wasDistracted;
+    selectedFocusTaskIdRef.current = selectedFocusTaskId;
+    selectedFocusTaskTitleRef.current = selectedFocusTaskTitle;
+    focusWithoutTaskSelectedRef.current = focusWithoutTaskSelected;
   }, [
     completedFocusCount,
     currentMode,
     customSettings,
     cycleProgressCount,
+    focusWithoutTaskSelected,
     isRunning,
     selectedPreset,
+    selectedFocusTaskId,
+    selectedFocusTaskTitle,
     timerSettings,
     wasDistracted,
   ]);
@@ -625,6 +772,9 @@ export default function FocusSessionScreen() {
         wasDistracted: wasDistractedRef.current,
         focusLeftAt: focusLeftAtRef.current,
         loggedFocusSessionKey: loggedFocusSessionKeyRef.current,
+        selectedFocusTaskId: selectedFocusTaskIdRef.current,
+        selectedFocusTaskTitle: selectedFocusTaskTitleRef.current,
+        focusWithoutTaskSelected: focusWithoutTaskSelectedRef.current,
         savedAt: Date.now(),
         ...overrides,
       };
@@ -658,6 +808,26 @@ export default function FocusSessionScreen() {
     },
     []
   );
+
+  const clearFocusTaskSelection = useCallback(() => {
+    selectedFocusTaskIdRef.current = null;
+    selectedFocusTaskTitleRef.current = null;
+    focusWithoutTaskSelectedRef.current = false;
+    setSelectedFocusTaskId(null);
+    setSelectedFocusTaskTitle(null);
+    setFocusWithoutTaskSelected(false);
+  }, []);
+
+  const selectFocusTask = useCallback((task: Task | null) => {
+    const taskTitle = task?.title.trim() || null;
+
+    selectedFocusTaskIdRef.current = task?.id ?? null;
+    selectedFocusTaskTitleRef.current = taskTitle;
+    focusWithoutTaskSelectedRef.current = !task;
+    setSelectedFocusTaskId(task?.id ?? null);
+    setSelectedFocusTaskTitle(taskTitle);
+    setFocusWithoutTaskSelected(!task);
+  }, []);
 
   const logFocusSessionOnce = useCallback(
     async (minutes: number, startedAt: number | null) => {
@@ -702,6 +872,7 @@ export default function FocusSessionScreen() {
       completionHandledRef.current = false;
       setIsRunning(false);
       setRemainingSeconds(nextSeconds);
+      setTaskPickerVisible(false);
       setDndReminderVisible(false);
       setFocusWarningText(null);
       setWasDistracted(false);
@@ -763,6 +934,18 @@ export default function FocusSessionScreen() {
           ? 'longBreak'
           : 'shortBreak';
       const suggestedBreak = MODE_META[suggestedBreakMode];
+      const completedWasDistracted = wasDistractedRef.current;
+      const completedTaskTitle =
+        selectedFocusTaskTitleRef.current?.trim() || null;
+      const summary: FocusSessionSummary = {
+        durationMinutes: settings.focusMinutes,
+        taskTitle: completedTaskTitle,
+        wasDistracted: completedWasDistracted,
+        miloMessage: getFocusSummaryMiloMessage(
+          completedWasDistracted,
+          completedTaskTitle
+        ),
+      };
 
       await logFocusSessionOnce(settings.focusMinutes, sessionStartedAt);
       updateCompletedFocusCount(loggedCompletedFocusCount);
@@ -781,14 +964,7 @@ export default function FocusSessionScreen() {
       );
 
       if (shouldShowAlert) {
-        Alert.alert(
-          'Focus block complete',
-          `Milo logged ${settings.focusMinutes} focus minutes. ${
-            suggestedBreakMode === 'longBreak'
-              ? `That makes ${settings.longBreakInterval} focus blocks, so take a Long Break.`
-              : 'Take a Short Break before the next block.'
-          }`
-        );
+        setFocusSummary(summary);
       }
 
       await persistPomodoroState({
@@ -934,6 +1110,28 @@ export default function FocusSessionScreen() {
           typeof stored.loggedFocusSessionKey === 'string'
             ? stored.loggedFocusSessionKey
             : null;
+        const restoredSelectedFocusTaskId =
+          typeof stored.selectedFocusTaskId === 'string'
+            ? stored.selectedFocusTaskId
+            : null;
+        const restoredSelectedFocusTaskTitle =
+          typeof stored.selectedFocusTaskTitle === 'string'
+            ? stored.selectedFocusTaskTitle
+            : null;
+        const restoredFocusWithoutTaskSelected = Boolean(
+          stored.focusWithoutTaskSelected
+        );
+        const shouldRestoreFocusTaskSelection =
+          restoredMode === 'focus' && Boolean(restoredStartedAt);
+        const nextSelectedFocusTaskId = shouldRestoreFocusTaskSelection
+          ? restoredSelectedFocusTaskId
+          : null;
+        const nextSelectedFocusTaskTitle = shouldRestoreFocusTaskSelection
+          ? restoredSelectedFocusTaskTitle
+          : null;
+        const nextFocusWithoutTaskSelected = shouldRestoreFocusTaskSelection
+          ? restoredFocusWithoutTaskSelected
+          : false;
 
         selectedPresetRef.current = restoredPreset;
         customSettingsRef.current = restoredCustomSettings;
@@ -942,6 +1140,9 @@ export default function FocusSessionScreen() {
         startedAtRef.current = restoredStartedAt;
         focusLeftAtRef.current = restoredFocusLeftAt;
         loggedFocusSessionKeyRef.current = restoredLoggedKey;
+        selectedFocusTaskIdRef.current = nextSelectedFocusTaskId;
+        selectedFocusTaskTitleRef.current = nextSelectedFocusTaskTitle;
+        focusWithoutTaskSelectedRef.current = nextFocusWithoutTaskSelected;
         pomodoroCompletedFocusCountRef.current = restoredCompletedFocusCount;
         cycleFocusCountRef.current = restoredCycleProgressCount;
         wasDistractedRef.current = restoredWasDistracted;
@@ -952,6 +1153,10 @@ export default function FocusSessionScreen() {
         setPomodoroCompletedFocusCount(restoredCompletedFocusCount);
         setCycleFocusCount(restoredCycleProgressCount);
         setWasDistracted(restoredWasDistracted);
+        setSelectedFocusTaskId(nextSelectedFocusTaskId);
+        setSelectedFocusTaskTitle(nextSelectedFocusTaskTitle);
+        setFocusWithoutTaskSelected(nextFocusWithoutTaskSelected);
+        setTaskPickerVisible(false);
         setFocusWarningText(null);
 
         const shouldResumeRunning = Boolean(stored.isRunning && restoredEndTimestamp);
@@ -960,6 +1165,15 @@ export default function FocusSessionScreen() {
           const nextRemainingMs = Math.max(restoredEndTimestamp - Date.now(), 0);
 
           if (nextRemainingMs === 0) {
+            if (restoredMode === 'focus' && restoredFocusLeftAt) {
+              const awayMs = Date.now() - restoredFocusLeftAt;
+
+              if (awayMs > DISTRACTION_THRESHOLD_MS) {
+                wasDistractedRef.current = true;
+                setWasDistracted(true);
+              }
+            }
+
             endTimestampRef.current = null;
             remainingMsRef.current = 0;
             isRunningRef.current = false;
@@ -1034,11 +1248,14 @@ export default function FocusSessionScreen() {
     currentMode,
     customSettings,
     cycleProgressCount,
+    focusWithoutTaskSelected,
     hasRestoredPomodoroState,
     isRunning,
     persistPomodoroState,
     pomodoroCompletedFocusCount,
     selectedPreset,
+    selectedFocusTaskId,
+    selectedFocusTaskTitle,
     wasDistracted,
   ]);
 
@@ -1108,6 +1325,8 @@ export default function FocusSessionScreen() {
 
     selectedPresetRef.current = presetId;
     timerSettingsRef.current = nextSettings;
+    clearFocusTaskSelection();
+    setFocusSummary(null);
     setSelectedPreset(presetId);
     updateCycleFocusCount(nextCycleFocusCount, nextSettings);
     resetTimerForMode(currentMode, nextSettings);
@@ -1141,6 +1360,8 @@ export default function FocusSessionScreen() {
     customSettingsRef.current = nextSettings;
     selectedPresetRef.current = 'custom';
     timerSettingsRef.current = nextSettings;
+    clearFocusTaskSelection();
+    setFocusSummary(null);
     setSelectedPreset('custom');
     setCustomSettings(nextSettings);
     updateCycleFocusCount(cycleProgressCount, nextSettings);
@@ -1158,6 +1379,8 @@ export default function FocusSessionScreen() {
       return;
     }
 
+    clearFocusTaskSelection();
+    setFocusSummary(null);
     changeMode(mode);
   };
 
@@ -1216,6 +1439,37 @@ export default function FocusSessionScreen() {
     await startTimer();
   };
 
+  const continueToDndReminder = () => {
+    setTaskPickerVisible(false);
+    setDndReminderVisible(true);
+  };
+
+  const handleChooseFocusTask = (task: Task) => {
+    selectFocusTask(task);
+    continueToDndReminder();
+  };
+
+  const handleChooseFocusWithoutTask = () => {
+    selectFocusTask(null);
+    continueToDndReminder();
+  };
+
+  const handleDismissFocusSummary = async () => {
+    setFocusSummary(null);
+    clearFocusTaskSelection();
+    wasDistractedRef.current = false;
+    focusLeftAtRef.current = null;
+    setWasDistracted(false);
+    setFocusWarningText(null);
+    await persistPomodoroState({
+      wasDistracted: false,
+      focusLeftAt: null,
+      selectedFocusTaskId: null,
+      selectedFocusTaskTitle: null,
+      focusWithoutTaskSelected: false,
+    });
+  };
+
   const handleContinueFocus = () => {
     setFocusWarningText(null);
   };
@@ -1247,7 +1501,7 @@ export default function FocusSessionScreen() {
     const startingFreshSession = !startedAtRef.current || startingFromEndedTimer;
 
     if (currentMode === 'focus' && startingFreshSession) {
-      setDndReminderVisible(true);
+      setTaskPickerVisible(true);
       return;
     }
 
@@ -1256,6 +1510,8 @@ export default function FocusSessionScreen() {
 
   const handleReset = async () => {
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setFocusSummary(null);
+    clearFocusTaskSelection();
     resetTimerForMode(currentMode);
     await persistPomodoroState({
       isRunning: false,
@@ -1264,6 +1520,9 @@ export default function FocusSessionScreen() {
       remainingMs: getModeSeconds(currentMode, timerSettings) * 1000,
       wasDistracted: false,
       focusLeftAt: null,
+      selectedFocusTaskId: null,
+      selectedFocusTaskTitle: null,
+      focusWithoutTaskSelected: false,
     });
   };
 
@@ -1277,6 +1536,8 @@ export default function FocusSessionScreen() {
       updateCycleFocusCount(0, timerSettings);
     }
 
+    setFocusSummary(null);
+    clearFocusTaskSelection();
     changeMode(nextMode);
 
     Speech.speak(
@@ -1298,11 +1559,92 @@ export default function FocusSessionScreen() {
       remainingMs: getModeSeconds(nextMode, timerSettings) * 1000,
       focusLeftAt: null,
       wasDistracted: false,
+      selectedFocusTaskId: null,
+      selectedFocusTaskTitle: null,
+      focusWithoutTaskSelected: false,
     });
   };
 
   return (
     <SafeAreaView style={styles.safeArea}>
+      <Modal
+        animationType="fade"
+        transparent
+        visible={taskPickerVisible}
+        onRequestClose={() => setTaskPickerVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.focusModalCard}>
+            <View style={styles.modalAccentBar} />
+            <View style={styles.modalBadge}>
+              <Text style={styles.modalBadgeText}>Focus Task</Text>
+            </View>
+            <Text style={styles.modalTitle}>Choose one task</Text>
+            <Text style={styles.modalMessage}>
+              Pick an incomplete FocusMate item for this focus block, or start a
+              general focus session.
+            </Text>
+
+            <ScrollView
+              style={styles.taskPickerList}
+              contentContainerStyle={styles.taskPickerListContent}
+              showsVerticalScrollIndicator={false}
+            >
+              {incompleteFocusTasks.length > 0 ? (
+                incompleteFocusTasks.map((task) => (
+                  <TouchableOpacity
+                    key={task.id}
+                    activeOpacity={0.86}
+                    style={styles.taskPickerItem}
+                    onPress={() => handleChooseFocusTask(task)}
+                  >
+                    <View style={styles.taskPickerIcon}>
+                      <MaterialCommunityIcons
+                        name="checkbox-marked-circle-outline"
+                        size={20}
+                        color={theme.colors.primaryDark}
+                      />
+                    </View>
+
+                    <View style={styles.taskPickerTextArea}>
+                      <Text style={styles.taskPickerTitle} numberOfLines={2}>
+                        {task.title}
+                      </Text>
+                      <Text style={styles.taskPickerMeta} numberOfLines={1}>
+                        {getFocusTaskMetaText(task)}
+                      </Text>
+                    </View>
+                  </TouchableOpacity>
+                ))
+              ) : (
+                <View style={styles.emptyTaskPickerState}>
+                  <Ionicons
+                    name="leaf-outline"
+                    size={24}
+                    color={theme.colors.primaryDark}
+                  />
+                  <Text style={styles.emptyTaskPickerText}>
+                    No incomplete tasks right now.
+                  </Text>
+                </View>
+              )}
+            </ScrollView>
+
+            <View style={styles.modalButtonStack}>
+              <TouchableOpacity
+                activeOpacity={0.88}
+                style={styles.modalPrimaryButton}
+                onPress={handleChooseFocusWithoutTask}
+              >
+                <Text style={styles.modalPrimaryButtonText}>
+                  Focus without task
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       <Modal
         animationType="fade"
         transparent
@@ -1369,6 +1711,85 @@ export default function FocusSessionScreen() {
                 onPress={handleContinueFocus}
               >
                 <Text style={styles.modalPrimaryButtonText}>Continue Focus</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        animationType="fade"
+        transparent
+        visible={Boolean(focusSummary)}
+        onRequestClose={() => {}}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.focusModalCard}>
+            <View style={styles.modalAccentBar} />
+            <View style={styles.modalBadge}>
+              <Text style={styles.modalBadgeText}>Session Summary</Text>
+            </View>
+            <Text style={styles.modalTitle}>Focus completed</Text>
+
+            {focusSummary ? (
+              <>
+                <View style={styles.summaryRows}>
+                  <View style={styles.summaryRow}>
+                    <Text style={styles.summaryLabel}>Duration</Text>
+                    <Text style={styles.summaryValue}>
+                      {focusSummary.durationMinutes} min
+                    </Text>
+                  </View>
+
+                  <View style={styles.summaryRow}>
+                    <Text style={styles.summaryLabel}>Task</Text>
+                    <Text style={styles.summaryValue} numberOfLines={2}>
+                      {focusSummary.taskTitle || 'Focus without task'}
+                    </Text>
+                  </View>
+
+                  <View style={styles.summaryRow}>
+                    <Text style={styles.summaryLabel}>Status</Text>
+                    <View
+                      style={[
+                        styles.summaryStatusBadge,
+                        focusSummary.wasDistracted &&
+                          styles.summaryStatusBadgeDistracted,
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.summaryStatusText,
+                          focusSummary.wasDistracted &&
+                            styles.summaryStatusTextDistracted,
+                        ]}
+                      >
+                        {focusSummary.wasDistracted ? 'Distracted' : 'Clean'}
+                      </Text>
+                    </View>
+                  </View>
+                </View>
+
+                <View style={styles.summaryMiloBox}>
+                  <Image
+                    source={getMiloImageSource('celebrating')}
+                    style={styles.summaryMiloImage}
+                    resizeMode="contain"
+                  />
+                  <Text style={styles.summaryMiloText}>
+                    {focusSummary.miloMessage}
+                  </Text>
+                </View>
+              </>
+            ) : null}
+
+            <View style={styles.modalButtonStack}>
+              <TouchableOpacity
+                activeOpacity={0.88}
+                style={styles.modalPrimaryButton}
+                onPress={handleDismissFocusSummary}
+              >
+                <Text style={styles.modalPrimaryButtonText}>Done</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -1517,6 +1938,32 @@ export default function FocusSessionScreen() {
               <Ionicons name="stats-chart" size={16} color={theme.colors.primaryDark} />
               <Text style={styles.sessionBadgeText}>Analytics</Text>
             </TouchableOpacity>
+          </View>
+
+          <View style={styles.focusTaskStrip}>
+            <View style={styles.focusTaskIcon}>
+              <MaterialCommunityIcons
+                name={
+                  selectedFocusTaskDisplayTitle
+                    ? 'target'
+                    : focusWithoutTaskSelected
+                    ? 'timer-sand'
+                    : 'format-list-checks'
+                }
+                size={18}
+                color={theme.colors.primaryDark}
+              />
+            </View>
+
+            <View style={styles.focusTaskTextArea}>
+              <Text style={styles.focusTaskLabel}>Focus task</Text>
+              <Text style={styles.focusTaskTitle} numberOfLines={2}>
+                {focusTaskDisplayText}
+              </Text>
+              <Text style={styles.focusTaskHelper} numberOfLines={1}>
+                {focusTaskHelperText}
+              </Text>
+            </View>
           </View>
 
           <View
@@ -1978,6 +2425,45 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     fontSize: 12,
   },
+  focusTaskStrip: {
+    marginTop: 16,
+    borderRadius: theme.radius.lg,
+    backgroundColor: theme.colors.backgroundSoft,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    padding: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  focusTaskIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 14,
+    backgroundColor: theme.colors.primarySoft,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 10,
+  },
+  focusTaskTextArea: {
+    flex: 1,
+  },
+  focusTaskLabel: {
+    color: theme.colors.primaryDark,
+    fontWeight: '900',
+    fontSize: 11,
+  },
+  focusTaskTitle: {
+    marginTop: 2,
+    color: theme.colors.text,
+    fontWeight: '900',
+    fontSize: 15,
+  },
+  focusTaskHelper: {
+    marginTop: 3,
+    color: theme.colors.muted,
+    fontWeight: '700',
+    fontSize: 11,
+  },
   timerCircle: {
     width: 210,
     height: 210,
@@ -2144,6 +2630,128 @@ const styles = StyleSheet.create({
     color: theme.colors.primaryDark,
     fontWeight: '900',
     fontSize: 14,
+  },
+  taskPickerList: {
+    maxHeight: 260,
+    marginTop: 14,
+  },
+  taskPickerListContent: {
+    paddingBottom: 2,
+  },
+  taskPickerItem: {
+    minHeight: 66,
+    borderRadius: theme.radius.lg,
+    backgroundColor: theme.colors.backgroundSoft,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginBottom: 9,
+  },
+  taskPickerIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 14,
+    backgroundColor: theme.colors.primarySoft,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 10,
+  },
+  taskPickerTextArea: {
+    flex: 1,
+  },
+  taskPickerTitle: {
+    color: theme.colors.text,
+    fontWeight: '900',
+    fontSize: 14,
+    lineHeight: 18,
+  },
+  taskPickerMeta: {
+    marginTop: 4,
+    color: theme.colors.muted,
+    fontWeight: '700',
+    fontSize: 11,
+  },
+  emptyTaskPickerState: {
+    minHeight: 92,
+    borderRadius: theme.radius.lg,
+    backgroundColor: theme.colors.primarySoft,
+    borderWidth: 1,
+    borderColor: '#CDEFD9',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 14,
+  },
+  emptyTaskPickerText: {
+    marginTop: 8,
+    color: theme.colors.primaryDark,
+    fontWeight: '900',
+    textAlign: 'center',
+  },
+  summaryRows: {
+    marginTop: 8,
+    borderRadius: theme.radius.lg,
+    backgroundColor: theme.colors.backgroundSoft,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    padding: 12,
+  },
+  summaryRow: {
+    minHeight: 34,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  summaryLabel: {
+    color: theme.colors.muted,
+    fontWeight: '900',
+    fontSize: 12,
+    marginRight: 12,
+  },
+  summaryValue: {
+    flex: 1,
+    color: theme.colors.text,
+    fontWeight: '900',
+    fontSize: 13,
+    textAlign: 'right',
+  },
+  summaryStatusBadge: {
+    borderRadius: theme.radius.pill,
+    backgroundColor: theme.colors.successSoft,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  summaryStatusBadgeDistracted: {
+    backgroundColor: theme.colors.yellowSoft,
+  },
+  summaryStatusText: {
+    color: theme.colors.success,
+    fontWeight: '900',
+    fontSize: 12,
+  },
+  summaryStatusTextDistracted: {
+    color: theme.colors.textSoft,
+  },
+  summaryMiloBox: {
+    marginTop: 14,
+    borderRadius: theme.radius.lg,
+    backgroundColor: theme.colors.primarySoft,
+    padding: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  summaryMiloImage: {
+    width: 58,
+    height: 58,
+    marginRight: 10,
+  },
+  summaryMiloText: {
+    flex: 1,
+    color: theme.colors.primaryDark,
+    fontWeight: '800',
+    lineHeight: 19,
   },
   sectionHeaderBlock: {
     marginBottom: 13,
