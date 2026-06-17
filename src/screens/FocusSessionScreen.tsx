@@ -1,4 +1,11 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import {
   View,
   Text,
@@ -9,7 +16,12 @@ import {
   Image,
   Alert,
   Modal,
+  TextInput,
+  KeyboardAvoidingView,
+  Platform,
   AppState,
+  Animated,
+  useWindowDimensions,
   type AppStateStatus,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -34,6 +46,7 @@ const DISTRACTION_THRESHOLD_MS = 15 * 1000;
 const MAX_LOGGED_FOCUS_KEYS = 20;
 const POMODORO_SESSION_STORAGE_KEY = '@focusmate/pomodoro_session_state';
 const POMODORO_LOGGED_FOCUS_STORAGE_KEY = '@focusmate/pomodoro_logged_focus_keys';
+const SAVED_POMODORO_PRESETS_STORAGE_KEY = '@focusmate/saved_pomodoro_presets';
 
 const MODE_META = {
   focus: {
@@ -67,13 +80,42 @@ const MODE_META = {
 
 type PomodoroMode = keyof typeof MODE_META;
 
-type PomodoroPresetId = 'classic' | 'quick' | 'deep' | 'custom';
+type BuiltInPomodoroPresetId = 'classic' | 'quick' | 'deep' | 'custom';
+type PomodoroPresetId = BuiltInPomodoroPresetId | `saved:${string}`;
 
 type PomodoroSettings = {
   focusMinutes: number;
   shortBreakMinutes: number;
   longBreakMinutes: number;
   longBreakInterval: number;
+};
+
+type CustomTimerField = keyof PomodoroSettings;
+type IoniconName = React.ComponentProps<typeof Ionicons>['name'];
+type MaterialIconName = React.ComponentProps<typeof MaterialCommunityIcons>['name'];
+
+type SavedPomodoroPreset = {
+  id: string;
+  name: string;
+  settings: PomodoroSettings;
+  createdAt: number;
+};
+
+type PresetVisualMeta = {
+  icon: IoniconName;
+  color: string;
+  softColor: string;
+};
+
+type PomodoroPresetOption = {
+  id: PomodoroPresetId;
+  label: string;
+  summary: string;
+  helperText: string;
+  settings: PomodoroSettings;
+  visual: PresetVisualMeta;
+  isCustom?: boolean;
+  isSaved?: boolean;
 };
 
 type PersistedPomodoroSession = {
@@ -120,8 +162,50 @@ const CLASSIC_SETTINGS: PomodoroSettings = {
   longBreakInterval: 4,
 };
 
+const CUSTOM_TIMER_FIELD_ORDER: CustomTimerField[] = [
+  'focusMinutes',
+  'shortBreakMinutes',
+  'longBreakMinutes',
+  'longBreakInterval',
+];
+
+const CUSTOM_TIMER_FIELD_META: Record<
+  CustomTimerField,
+  {
+    label: string;
+    unit: string;
+    min: number;
+    max: number;
+  }
+> = {
+  focusMinutes: {
+    label: 'Focus',
+    unit: 'min',
+    min: MIN_DURATION_MINUTES,
+    max: MAX_DURATION_MINUTES,
+  },
+  shortBreakMinutes: {
+    label: 'Short break',
+    unit: 'min',
+    min: MIN_DURATION_MINUTES,
+    max: MAX_DURATION_MINUTES,
+  },
+  longBreakMinutes: {
+    label: 'Long break',
+    unit: 'min',
+    min: MIN_DURATION_MINUTES,
+    max: MAX_DURATION_MINUTES,
+  },
+  longBreakInterval: {
+    label: 'Long break every',
+    unit: 'blocks',
+    min: MIN_LONG_BREAK_INTERVAL,
+    max: MAX_LONG_BREAK_INTERVAL,
+  },
+};
+
 const POMODORO_PRESETS: Record<
-  PomodoroPresetId,
+  BuiltInPomodoroPresetId,
   {
     label: string;
     summary: string;
@@ -170,12 +254,44 @@ const POMODORO_PRESETS: Record<
 };
 
 const pomodoroModeOrder: PomodoroMode[] = ['focus', 'shortBreak', 'longBreak'];
-const pomodoroPresetOrder: PomodoroPresetId[] = [
+const builtInPomodoroPresetOrder: BuiltInPomodoroPresetId[] = [
   'classic',
   'quick',
   'deep',
   'custom',
 ];
+
+const PRESET_VISUAL_META: Record<
+  BuiltInPomodoroPresetId,
+  PresetVisualMeta
+> = {
+  classic: {
+    icon: 'timer-outline',
+    color: theme.colors.primaryDark,
+    softColor: theme.colors.primarySoft,
+  },
+  quick: {
+    icon: 'flash-outline',
+    color: theme.colors.blue,
+    softColor: theme.colors.blueSoft,
+  },
+  deep: {
+    icon: 'leaf-outline',
+    color: theme.colors.primaryDark,
+    softColor: theme.colors.primarySoft,
+  },
+  custom: {
+    icon: 'star-outline',
+    color: theme.colors.yellow,
+    softColor: theme.colors.yellowSoft,
+  },
+};
+
+const SAVED_PRESET_VISUAL_META: PresetVisualMeta = {
+  icon: 'rocket-outline',
+  color: theme.colors.primaryDark,
+  softColor: theme.colors.primarySoft,
+};
 
 function clampNumber(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
@@ -197,10 +313,19 @@ function getTimestampOrNull(value: unknown) {
   return isFiniteNumber(value) && value > 0 ? value : null;
 }
 
-function isPomodoroPresetId(value: unknown): value is PomodoroPresetId {
+function isBuiltInPomodoroPresetId(
+  value: unknown
+): value is BuiltInPomodoroPresetId {
   return (
     typeof value === 'string' &&
-    pomodoroPresetOrder.includes(value as PomodoroPresetId)
+    builtInPomodoroPresetOrder.includes(value as BuiltInPomodoroPresetId)
+  );
+}
+
+function isPomodoroPresetId(value: unknown): value is PomodoroPresetId {
+  return (
+    isBuiltInPomodoroPresetId(value) ||
+    (typeof value === 'string' && value.startsWith('saved:') && value.length > 6)
   );
 }
 
@@ -252,6 +377,155 @@ function sanitizePomodoroSettings(value: unknown): PomodoroSettings {
   };
 }
 
+function sanitizeSavedPreset(value: unknown): SavedPomodoroPreset | null {
+  if (!isRecord(value)) return null;
+
+  const id = typeof value.id === 'string' ? value.id.trim() : '';
+  const name = typeof value.name === 'string' ? value.name.trim() : '';
+
+  if (!id || !name) return null;
+
+  return {
+    id,
+    name,
+    settings: sanitizePomodoroSettings(value.settings),
+    createdAt: getFiniteNumber(value.createdAt, Date.now()),
+  };
+}
+
+function parseSavedPomodoroPresets(value: string | null) {
+  if (!value) return [];
+
+  try {
+    const parsed = JSON.parse(value);
+    if (!Array.isArray(parsed)) return [];
+
+    return parsed
+      .map(sanitizeSavedPreset)
+      .filter((preset): preset is SavedPomodoroPreset => Boolean(preset));
+  } catch (error) {
+    console.log('Failed to parse saved Pomodoro presets:', error);
+    return [];
+  }
+}
+
+function createSavedPresetId() {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function getSavedPresetStorageId(presetId: PomodoroPresetId) {
+  return presetId.startsWith('saved:') ? presetId.slice(6) : null;
+}
+
+function getSavedPresetByPresetId(
+  presetId: PomodoroPresetId,
+  savedPresets: SavedPomodoroPreset[]
+) {
+  const savedPresetId = getSavedPresetStorageId(presetId);
+  if (!savedPresetId) return undefined;
+
+  return savedPresets.find((preset) => preset.id === savedPresetId);
+}
+
+function createPresetOptions(
+  customSettings: PomodoroSettings,
+  savedPresets: SavedPomodoroPreset[]
+): PomodoroPresetOption[] {
+  const builtinOptions: PomodoroPresetOption[] = builtInPomodoroPresetOrder
+    .filter((presetId) => presetId !== 'custom')
+    .map((presetId) => ({
+      id: presetId,
+      label: POMODORO_PRESETS[presetId].label,
+      summary: POMODORO_PRESETS[presetId].summary,
+      helperText: POMODORO_PRESETS[presetId].helperText,
+      settings: POMODORO_PRESETS[presetId].settings,
+      visual: PRESET_VISUAL_META[presetId],
+    }));
+
+  const savedOptions: PomodoroPresetOption[] = savedPresets.map((preset) => ({
+    id: `saved:${preset.id}` as const,
+    label: preset.name,
+    summary: `${preset.settings.focusMinutes} / ${preset.settings.shortBreakMinutes} / ${preset.settings.longBreakMinutes}`,
+    helperText: 'A saved Milo rhythm for focused work.',
+    settings: preset.settings,
+    visual: SAVED_PRESET_VISUAL_META,
+    isSaved: true,
+  }));
+
+  return [
+    ...builtinOptions,
+    ...savedOptions,
+    {
+      id: 'custom',
+      label: POMODORO_PRESETS.custom.label,
+      summary: POMODORO_PRESETS.custom.summary,
+      helperText: POMODORO_PRESETS.custom.helperText,
+      settings: customSettings,
+      visual: PRESET_VISUAL_META.custom,
+      isCustom: true,
+    },
+  ];
+}
+
+function resolvePresetOption(
+  presetId: PomodoroPresetId,
+  customSettings: PomodoroSettings,
+  savedPresets: SavedPomodoroPreset[]
+) {
+  const presetOptions = createPresetOptions(customSettings, savedPresets);
+
+  return (
+    presetOptions.find((presetOption) => presetOption.id === presetId) ??
+    {
+      id: 'classic',
+      label: POMODORO_PRESETS.classic.label,
+      summary: POMODORO_PRESETS.classic.summary,
+      helperText: POMODORO_PRESETS.classic.helperText,
+      settings: POMODORO_PRESETS.classic.settings,
+      visual: PRESET_VISUAL_META.classic,
+    }
+  );
+}
+
+function createCustomTimerDraftTexts(
+  settings: PomodoroSettings
+): Record<CustomTimerField, string> {
+  return {
+    focusMinutes: String(settings.focusMinutes),
+    shortBreakMinutes: String(settings.shortBreakMinutes),
+    longBreakMinutes: String(settings.longBreakMinutes),
+    longBreakInterval: String(settings.longBreakInterval),
+  };
+}
+
+function sanitizeNumberInputText(value: string) {
+  return value.replace(/[^0-9]/g, '');
+}
+
+function parseCustomTimerDraftValue(
+  field: CustomTimerField,
+  value: string,
+  fallback: number
+) {
+  const meta = CUSTOM_TIMER_FIELD_META[field];
+  const parsedValue = Number(value);
+  const nextValue = Number.isFinite(parsedValue) ? parsedValue : fallback;
+
+  return Math.round(clampNumber(nextValue, meta.min, meta.max));
+}
+
+function getPresetDisplayName(
+  presetId: PomodoroPresetId,
+  savedPresets: SavedPomodoroPreset[] = []
+) {
+  if (presetId === 'classic') return 'Classic Pomodoro';
+  if (presetId === 'quick') return 'Quick Focus';
+  if (presetId === 'deep') return 'Deep Focus';
+  const savedPreset = getSavedPresetByPresetId(presetId, savedPresets);
+  if (savedPreset) return savedPreset.name;
+  return 'Custom Rhythm';
+}
+
 function getModeMinutes(mode: PomodoroMode, settings: PomodoroSettings) {
   if (mode === 'focus') return settings.focusMinutes;
   if (mode === 'shortBreak') return settings.shortBreakMinutes;
@@ -271,13 +545,62 @@ function getSuggestedBreakMode(
     : 'shortBreak';
 }
 
-function getTodayDate() {
-  const today = new Date();
-  const year = today.getFullYear();
-  const month = `${today.getMonth() + 1}`.padStart(2, '0');
-  const day = `${today.getDate()}`.padStart(2, '0');
+function getCurrentCycleBlock(
+  mode: PomodoroMode,
+  cycleFocusCount: number,
+  longBreakInterval: number
+) {
+  const safeCycleFocusCount = Math.round(
+    clampNumber(cycleFocusCount, 0, longBreakInterval)
+  );
+
+  if (mode === 'focus') {
+    return Math.round(clampNumber(safeCycleFocusCount + 1, 1, longBreakInterval));
+  }
+
+  return Math.round(clampNumber(safeCycleFocusCount, 1, longBreakInterval));
+}
+
+function getNextSessionType(
+  mode: PomodoroMode,
+  cycleFocusCount: number,
+  longBreakInterval: number
+): { nextMode: PomodoroMode; nextCycleFocusCount: number } {
+  const safeCycleFocusCount = Math.round(
+    clampNumber(cycleFocusCount, 0, longBreakInterval)
+  );
+
+  if (mode === 'focus') {
+    const nextCycleFocusCount = Math.min(
+      safeCycleFocusCount + 1,
+      longBreakInterval
+    );
+
+    return {
+      nextMode:
+        nextCycleFocusCount >= longBreakInterval ? 'longBreak' : 'shortBreak',
+      nextCycleFocusCount,
+    };
+  }
+
+  if (mode === 'longBreak') {
+    return { nextMode: 'focus', nextCycleFocusCount: 0 };
+  }
+
+  return { nextMode: 'focus', nextCycleFocusCount: safeCycleFocusCount };
+}
+
+function getDateKeyFromTimestamp(timestamp: number) {
+  const date = new Date(timestamp);
+  const year = date.getFullYear();
+  const month = `${date.getMonth() + 1}`.padStart(2, '0');
+  const day = `${date.getDate()}`.padStart(2, '0');
 
   return `${year}-${month}-${day}`;
+}
+
+function getTodayDate() {
+  return getDateKeyFromTimestamp(Date.now());
 }
 
 function formatSeconds(seconds: number) {
@@ -361,6 +684,23 @@ function getTaskDueSortTime(task: Task) {
   return date.getTime() + parseTaskDueTimeMinutes(task.dueTime) * 60 * 1000;
 }
 
+function getFocusTaskPickerRank(task: Task, nowMs: number, todayDate: string) {
+  const dueSortTime = getTaskDueSortTime(task);
+  let rank = 0;
+
+  if (dueSortTime < nowMs) rank -= 5000;
+  if (task.dueDate === todayDate) rank -= 3200;
+  if (dueSortTime >= nowMs && dueSortTime - nowMs <= 2 * 60 * 60 * 1000) {
+    rank -= 2600;
+  }
+  if (task.priority === 'high') rank -= 1800;
+  if (task.priority === 'medium') rank -= 700;
+  if (task.plannerType === 'meeting') rank -= 450;
+  if (task.plannerType === 'date') rank -= 250;
+
+  return rank;
+}
+
 function getFocusTaskMetaText(task: Task) {
   const typeText = formatTitleCase(task.plannerType);
   const priorityText = `${formatTitleCase(task.priority)} priority`;
@@ -376,11 +716,11 @@ function getFocusSummaryMiloMessage(
   taskTitle: string | null
 ) {
   if (wasDistracted && taskTitle) {
-    return `You came back and finished ${taskTitle}. Lets aim for a cleaner focus next time.`;
+    return `You came back and finished ${taskTitle}. Let's aim for a cleaner focus next time.`;
   }
 
   if (wasDistracted) {
-    return 'You came back and finished. Lets aim for a cleaner focus next time.';
+    return "You came back and finished. Let's aim for a cleaner focus next time.";
   }
 
   if (taskTitle) {
@@ -427,100 +767,84 @@ function ModeButton({
 }
 
 function PresetButton({
-  presetId,
+  preset,
   selected,
   onPress,
 }: {
-  presetId: PomodoroPresetId;
+  preset: PomodoroPresetOption;
   selected: boolean;
   onPress: () => void;
 }) {
-  const preset = POMODORO_PRESETS[presetId];
+  const selectedProgress = useRef(new Animated.Value(selected ? 1 : 0)).current;
+
+  useEffect(() => {
+    Animated.spring(selectedProgress, {
+      toValue: selected ? 1 : 0,
+      useNativeDriver: true,
+      friction: 8,
+      tension: 90,
+    }).start();
+  }, [selected, selectedProgress]);
+
+  const animatedStyle = {
+    transform: [
+      {
+        translateY: selectedProgress.interpolate({
+          inputRange: [0, 1],
+          outputRange: [0, -6],
+        }),
+      },
+      {
+        scale: selectedProgress.interpolate({
+          inputRange: [0, 1],
+          outputRange: [1, 1.04],
+        }),
+      },
+    ],
+  };
 
   return (
-    <TouchableOpacity
-      activeOpacity={0.85}
-      onPress={onPress}
-      style={[styles.presetButton, selected && styles.presetButtonActive]}
-    >
-      <Text style={[styles.presetButtonLabel, selected && styles.presetButtonLabelActive]}>
-        {preset.label}
-      </Text>
-      <Text
-        style={[styles.presetButtonSummary, selected && styles.presetButtonSummaryActive]}
+    <Animated.View style={[styles.presetChoiceAnimated, animatedStyle]}>
+      <TouchableOpacity
+        activeOpacity={0.85}
+        onPress={onPress}
+        style={[styles.presetChoiceCard, selected && styles.presetChoiceCardActive]}
       >
-        {preset.summary}
-      </Text>
-    </TouchableOpacity>
-  );
-}
+        {selected ? (
+          <View style={styles.presetCheckBadge}>
+            <Ionicons name="checkmark" size={13} color="#FFFFFF" />
+          </View>
+        ) : null}
 
-function CustomNumberControl({
-  label,
-  value,
-  unit,
-  min,
-  max,
-  onChange,
-}: {
-  label: string;
-  value: number;
-  unit: string;
-  min: number;
-  max: number;
-  onChange: (value: number) => void;
-}) {
-  const canDecrease = value > min;
-  const canIncrease = value < max;
-
-  return (
-    <View style={styles.customControlRow}>
-      <View style={styles.customControlTextArea}>
-        <Text style={styles.customControlLabel}>{label}</Text>
-        <Text style={styles.customControlHint}>
-          {min}-{max} {unit}
-        </Text>
-      </View>
-
-      <View style={styles.stepper}>
-        <TouchableOpacity
-          activeOpacity={0.75}
-          disabled={!canDecrease}
-          style={[styles.stepperButton, !canDecrease && styles.stepperButtonDisabled]}
-          onPress={() => onChange(value - 1)}
+        <View
+          style={[
+            styles.presetIconBubble,
+            { backgroundColor: preset.visual.softColor },
+          ]}
         >
           <Ionicons
-            name="remove"
-            size={18}
-            color={canDecrease ? theme.colors.primaryDark : theme.colors.muted}
+            name={preset.visual.icon}
+            size={24}
+            color={preset.visual.color}
           />
-        </TouchableOpacity>
+        </View>
 
-        <Text style={styles.stepperValue}>
-          {value}
-          <Text style={styles.stepperUnit}> {unit}</Text>
+        <Text style={styles.presetChoiceLabel} numberOfLines={2}>
+          {preset.label}
         </Text>
 
-        <TouchableOpacity
-          activeOpacity={0.75}
-          disabled={!canIncrease}
-          style={[styles.stepperButton, !canIncrease && styles.stepperButtonDisabled]}
-          onPress={() => onChange(value + 1)}
-        >
-          <Ionicons
-            name="add"
-            size={18}
-            color={canIncrease ? theme.colors.primaryDark : theme.colors.muted}
-          />
-        </TouchableOpacity>
-      </View>
-    </View>
+        <Text style={styles.presetChoiceSummary} numberOfLines={1}>
+          {preset.summary}
+        </Text>
+      </TouchableOpacity>
+    </Animated.View>
   );
 }
 
 export default function FocusSessionScreen() {
   const navigation = useNavigation<any>();
   const route = useRoute<any>();
+  const { height: windowHeight, width: windowWidth } = useWindowDimensions();
   const { tasks } = useTasks();
   const { focusSessions, addFocusSession, totalFocusMinutes } = useFocus();
 
@@ -553,6 +877,17 @@ export default function FocusSessionScreen() {
   );
   const [hasRestoredPomodoroState, setHasRestoredPomodoroState] =
     useState(false);
+  const [focusBlockVisible, setFocusBlockVisible] = useState(false);
+  const [customEditorVisible, setCustomEditorVisible] = useState(false);
+  const [customDraftTexts, setCustomDraftTexts] = useState<
+    Record<CustomTimerField, string>
+  >(() => createCustomTimerDraftTexts(CLASSIC_SETTINGS));
+  const [savedPresets, setSavedPresets] = useState<SavedPomodoroPreset[]>([]);
+  const [presetManagerVisible, setPresetManagerVisible] = useState(false);
+  const [presetDraftName, setPresetDraftName] = useState('');
+  const [presetDraftTexts, setPresetDraftTexts] = useState<
+    Record<CustomTimerField, string>
+  >(() => createCustomTimerDraftTexts(CLASSIC_SETTINGS));
 
   const selectedPresetRef = useRef<PomodoroPresetId>('classic');
   const customSettingsRef = useRef<PomodoroSettings>(CLASSIC_SETTINGS);
@@ -573,12 +908,22 @@ export default function FocusSessionScreen() {
   const appStateRef = useRef<AppStateStatus>(AppState.currentState);
   const completionHandledRef = useRef(false);
 
-  const activePreset = POMODORO_PRESETS[selectedPreset];
-  const timerSettings =
-    selectedPreset === 'custom' ? customSettings : activePreset.settings;
+  useLayoutEffect(() => {
+    navigation.setOptions({ headerShown: false });
+  }, [navigation]);
+
+  const presetOptions = useMemo(
+    () => createPresetOptions(customSettings, savedPresets),
+    [customSettings, savedPresets]
+  );
+  const activePreset =
+    presetOptions.find((presetOption) => presetOption.id === selectedPreset) ??
+    resolvePresetOption('classic', customSettings, savedPresets);
+  const timerSettings = activePreset.settings;
   const currentModeConfig = MODE_META[currentMode];
   const totalSeconds = getModeSeconds(currentMode, timerSettings);
   const todayDate = getTodayDate();
+  const compactFocusBlock = windowHeight < 720 || windowWidth < 360;
 
   const todayFocusSessions = useMemo(() => {
     return focusSessions.filter(
@@ -613,11 +958,101 @@ export default function FocusSessionScreen() {
       : currentMode === 'longBreak' && isLongBreakReady
       ? 'Suggested: Long Break'
       : `Current: ${currentModeConfig.label}`;
-  const selectedPresetSummary = `${timerSettings.focusMinutes}/${timerSettings.shortBreakMinutes}/${timerSettings.longBreakMinutes}`;
-  const selectedPresetHelper =
+  const selectedPresetDisplayName = getPresetDisplayName(
+    selectedPreset,
+    savedPresets
+  );
+  const presetDetailValueItems: Array<{
+    icon: MaterialIconName;
+    label: string;
+    value: string;
+  }> =
     selectedPreset === 'custom'
-      ? `Custom set to ${selectedPresetSummary} minutes, with a long break every ${timerSettings.longBreakInterval} focus blocks.`
-      : activePreset.helperText;
+      ? [
+          {
+            icon: 'timer-outline',
+            label: 'Focus',
+            value: `${customSettings.focusMinutes} min`,
+          },
+          {
+            icon: 'coffee-outline',
+            label: 'Short',
+            value: `${customSettings.shortBreakMinutes} min`,
+          },
+          {
+            icon: 'tree-outline',
+            label: 'Long',
+            value: `${customSettings.longBreakMinutes} min`,
+          },
+          {
+            icon: 'sync',
+            label: 'Every',
+            value: `${customSettings.longBreakInterval} blocks`,
+          },
+        ]
+      : [
+          {
+            icon: 'timer-outline',
+            label: 'Focus',
+            value: `${timerSettings.focusMinutes} min`,
+          },
+          {
+            icon: 'coffee-outline',
+            label: 'Short',
+            value: `${timerSettings.shortBreakMinutes} min`,
+          },
+          {
+            icon: 'tree-outline',
+            label: 'Long',
+            value: `${timerSettings.longBreakMinutes} min`,
+          },
+        ];
+  const selectedPresetCycleText = `Long break every ${timerSettings.longBreakInterval} focus blocks`;
+  const selectedPresetDetailNote =
+    selectedPreset === 'quick'
+      ? 'Short, lightweight focus sessions for quick wins.'
+      : selectedPreset === 'deep'
+      ? 'For long study sessions and deep work.'
+      : selectedPreset === 'custom'
+      ? 'A flexible timer that matches your flow and rhythm.'
+      : activePreset.isSaved
+      ? 'A saved timer rhythm for focused work with Milo.'
+      : 'Balanced study rhythm for daily focus.';
+  const focusBlockNumber = getCurrentCycleBlock(
+    currentMode,
+    cycleProgressCount,
+    longBreakInterval
+  );
+  const focusBlockStatusText =
+    currentMode === 'focus'
+      ? isRunning
+        ? 'Focus in progress'
+        : 'Focus paused'
+      : currentMode === 'shortBreak'
+      ? 'Short break'
+      : 'Long break';
+  const focusBlockMiloMood =
+    wasDistracted && currentMode === 'focus'
+      ? 'worried'
+      : currentMode !== 'focus'
+      ? 'happy'
+      : !isRunning
+      ? 'sleepy'
+      : selectedPreset === 'deep' || timerSettings.focusMinutes >= 50
+      ? 'focused'
+      : 'waving';
+  const focusBlockMiloMessage =
+    wasDistracted && currentMode === 'focus'
+      ? 'Milo noticed a drift. Come back gently.'
+      : currentMode !== 'focus'
+      ? 'Break time! Recharge with Milo.'
+      : !isRunning
+      ? 'You paused. Ready when you are.'
+      : selectedPreset === 'deep' || timerSettings.focusMinutes >= 50
+      ? 'Stay with me - deep work starts now.'
+      : cycleProgressCount > 0
+      ? 'Breathe. One block at a time.'
+      : 'Small steps, strong focus.';
 
   const routeTaskId =
     typeof route.params?.taskId === 'string' ? route.params.taskId : undefined;
@@ -635,15 +1070,27 @@ export default function FocusSessionScreen() {
   }, [routeTaskId, tasks]);
 
   const incompleteFocusTasks = useMemo(() => {
+    const nowMs = Date.now();
+
     return tasks
       .filter((task) => task.status !== 'completed')
       .sort((a, b) => {
+        const rankDifference =
+          getFocusTaskPickerRank(a, nowMs, todayDate) -
+          getFocusTaskPickerRank(b, nowMs, todayDate);
+        if (rankDifference !== 0) return rankDifference;
+
         const dueDifference = getTaskDueSortTime(a) - getTaskDueSortTime(b);
         if (dueDifference !== 0) return dueDifference;
 
+        if (a.priority !== b.priority) {
+          const priorityWeight = { high: 0, medium: 1, low: 2 };
+          return priorityWeight[a.priority] - priorityWeight[b.priority];
+        }
+
         return a.createdAt.localeCompare(b.createdAt);
       });
-  }, [tasks]);
+  }, [tasks, todayDate]);
 
   const selectedFocusTask = useMemo(() => {
     if (!selectedFocusTaskId) return undefined;
@@ -876,6 +1323,7 @@ export default function FocusSessionScreen() {
       setDndReminderVisible(false);
       setFocusWarningText(null);
       setWasDistracted(false);
+      setFocusBlockVisible(false);
     },
     []
   );
@@ -900,6 +1348,7 @@ export default function FocusSessionScreen() {
     setIsRunning(false);
     setRemainingSeconds(0);
     setDndReminderVisible(false);
+    setFocusBlockVisible(false);
 
     const completedMode = options.mode ?? currentModeRef.current;
     const settings = options.settings ?? timerSettingsRef.current;
@@ -1042,7 +1491,7 @@ export default function FocusSessionScreen() {
         setFocusWarningText(
           `Milo noticed you left Focus Mode for ${formatAwayDuration(
             awayMs
-          )}. Lets continue clean focus.`
+          )}. Let's continue clean focus.`
         );
       }
 
@@ -1061,9 +1510,16 @@ export default function FocusSessionScreen() {
 
     const restorePomodoroState = async () => {
       try {
-        const storedState = await AsyncStorage.getItem(POMODORO_SESSION_STORAGE_KEY);
+        const [storedState, storedSavedPresets] = await Promise.all([
+          AsyncStorage.getItem(POMODORO_SESSION_STORAGE_KEY),
+          AsyncStorage.getItem(SAVED_POMODORO_PRESETS_STORAGE_KEY),
+        ]);
+        const restoredSavedPresets =
+          parseSavedPomodoroPresets(storedSavedPresets);
 
         if (!isMounted) return;
+
+        setSavedPresets(restoredSavedPresets);
 
         if (!storedState) {
           setHasRestoredPomodoroState(true);
@@ -1072,16 +1528,22 @@ export default function FocusSessionScreen() {
 
         const parsed = JSON.parse(storedState) as unknown;
         const stored = isRecord(parsed) ? parsed : {};
-        const restoredPreset = isPomodoroPresetId(stored.selectedPreset)
-          ? stored.selectedPreset
-          : 'classic';
         const restoredCustomSettings = sanitizePomodoroSettings(
           stored.customSettings
         );
-        const restoredSettings =
-          restoredPreset === 'custom'
-            ? restoredCustomSettings
-            : POMODORO_PRESETS[restoredPreset].settings;
+        const storedPreset = isPomodoroPresetId(stored.selectedPreset)
+          ? stored.selectedPreset
+          : 'classic';
+        const restoredPreset =
+          getSavedPresetStorageId(storedPreset) &&
+          !getSavedPresetByPresetId(storedPreset, restoredSavedPresets)
+            ? 'classic'
+            : storedPreset;
+        const restoredSettings = resolvePresetOption(
+          restoredPreset,
+          restoredCustomSettings,
+          restoredSavedPresets
+        ).settings;
         const restoredMode = isPomodoroMode(stored.currentMode)
           ? stored.currentMode
           : 'focus';
@@ -1097,9 +1559,15 @@ export default function FocusSessionScreen() {
           0,
           Math.round(getFiniteNumber(stored.completedFocusCount, 0))
         );
+        const restoredSavedAt = getTimestampOrNull(stored.savedAt);
+        const shouldRestoreCycleProgress =
+          !restoredSavedAt ||
+          getDateKeyFromTimestamp(restoredSavedAt) === getTodayDate();
         const restoredCycleProgressCount = Math.round(
           clampNumber(
-            getFiniteNumber(stored.cycleProgressCount, 0),
+            shouldRestoreCycleProgress
+              ? getFiniteNumber(stored.cycleProgressCount, 0)
+              : 0,
             0,
             restoredSettings.longBreakInterval
           )
@@ -1180,6 +1648,7 @@ export default function FocusSessionScreen() {
             setIsRunning(false);
             setRemainingSeconds(0);
             setDndReminderVisible(false);
+            setFocusBlockVisible(false);
             await completeCurrentMode({
               mode: restoredMode,
               settings: restoredSettings,
@@ -1198,6 +1667,7 @@ export default function FocusSessionScreen() {
           setIsRunning(true);
           setRemainingSeconds(Math.ceil(nextRemainingMs / 1000));
           setDndReminderVisible(false);
+          setFocusBlockVisible(true);
 
           if (restoredMode === 'focus' && restoredFocusLeftAt) {
             const awayMs = Date.now() - restoredFocusLeftAt;
@@ -1208,7 +1678,7 @@ export default function FocusSessionScreen() {
               setFocusWarningText(
                 `Milo noticed you left Focus Mode for ${formatAwayDuration(
                   awayMs
-                )}. Lets continue clean focus.`
+                )}. Let's continue clean focus.`
               );
             }
 
@@ -1221,6 +1691,7 @@ export default function FocusSessionScreen() {
           setIsRunning(false);
           setRemainingSeconds(Math.ceil(restoredRemainingMs / 1000));
           setDndReminderVisible(false);
+          setFocusBlockVisible(Boolean(restoredStartedAt) && restoredRemainingMs > 0);
         }
 
         setHasRestoredPomodoroState(true);
@@ -1317,8 +1788,10 @@ export default function FocusSessionScreen() {
       return;
     }
 
-    const nextSettings =
-      presetId === 'custom' ? customSettings : POMODORO_PRESETS[presetId].settings;
+    const nextPresetOption =
+      presetOptions.find((presetOption) => presetOption.id === presetId) ??
+      resolvePresetOption('classic', customSettings, savedPresets);
+    const nextSettings = nextPresetOption.settings;
     const nextCycleFocusCount = Math.round(
       clampNumber(cycleProgressCount, 0, nextSettings.longBreakInterval)
     );
@@ -1332,30 +1805,31 @@ export default function FocusSessionScreen() {
     resetTimerForMode(currentMode, nextSettings);
   };
 
-  const handleChangeCustomSetting = (
-    settingName: keyof PomodoroSettings,
-    value: number
-  ) => {
+  const persistSavedPresets = async (nextPresets: SavedPomodoroPreset[]) => {
+    try {
+      await AsyncStorage.setItem(
+        SAVED_POMODORO_PRESETS_STORAGE_KEY,
+        JSON.stringify(nextPresets)
+      );
+    } catch (error) {
+      console.log('Failed to save custom Pomodoro presets:', error);
+      Alert.alert(
+        'Preset not saved',
+        'Milo could not save this preset locally. Please try again.'
+      );
+    }
+  };
+
+  const applyCustomSettings = (nextSettingsValue: PomodoroSettings) => {
     if (isRunning) {
       Alert.alert(
         'Timer is running',
         'Pause or reset the current timer before changing custom timer settings.'
       );
-      return;
+      return false;
     }
 
-    const min =
-      settingName === 'longBreakInterval'
-        ? MIN_LONG_BREAK_INTERVAL
-        : MIN_DURATION_MINUTES;
-    const max =
-      settingName === 'longBreakInterval'
-        ? MAX_LONG_BREAK_INTERVAL
-        : MAX_DURATION_MINUTES;
-    const nextSettings = {
-      ...customSettings,
-      [settingName]: clampNumber(value, min, max),
-    };
+    const nextSettings = sanitizePomodoroSettings(nextSettingsValue);
 
     customSettingsRef.current = nextSettings;
     selectedPresetRef.current = 'custom';
@@ -1366,6 +1840,238 @@ export default function FocusSessionScreen() {
     setCustomSettings(nextSettings);
     updateCycleFocusCount(cycleProgressCount, nextSettings);
     resetTimerForMode(currentMode, nextSettings);
+    return true;
+  };
+
+  const handleOpenCustomEditor = () => {
+    if (isRunning) {
+      Alert.alert(
+        'Timer is running',
+        'Pause or reset the current timer before changing custom timer settings.'
+      );
+      return;
+    }
+
+    setCustomDraftTexts(createCustomTimerDraftTexts(customSettings));
+    setCustomEditorVisible(true);
+  };
+
+  const handleOpenPresetManager = () => {
+    if (isRunning) {
+      Alert.alert(
+        'Timer is running',
+        'Pause or reset the current timer before managing presets.'
+      );
+      return;
+    }
+
+    setPresetDraftName('');
+    setPresetDraftTexts(createCustomTimerDraftTexts(timerSettings));
+    setPresetManagerVisible(true);
+  };
+
+  const handleChangeCustomDraftText = (
+    field: CustomTimerField,
+    value: string
+  ) => {
+    setCustomDraftTexts((currentDraft) => ({
+      ...currentDraft,
+      [field]: sanitizeNumberInputText(value),
+    }));
+  };
+
+  const handleAdjustCustomDraftValue = (
+    field: CustomTimerField,
+    delta: number
+  ) => {
+    const currentValue = parseCustomTimerDraftValue(
+      field,
+      customDraftTexts[field],
+      customSettings[field]
+    );
+    const meta = CUSTOM_TIMER_FIELD_META[field];
+    const nextValue = Math.round(
+      clampNumber(currentValue + delta, meta.min, meta.max)
+    );
+
+    setCustomDraftTexts((currentDraft) => ({
+      ...currentDraft,
+      [field]: String(nextValue),
+    }));
+  };
+
+  const handleCancelCustomEditor = () => {
+    setCustomDraftTexts(createCustomTimerDraftTexts(customSettings));
+    setCustomEditorVisible(false);
+  };
+
+  const handleChangePresetDraftText = (
+    field: CustomTimerField,
+    value: string
+  ) => {
+    setPresetDraftTexts((currentDraft) => ({
+      ...currentDraft,
+      [field]: sanitizeNumberInputText(value),
+    }));
+  };
+
+  const handleAdjustPresetDraftValue = (
+    field: CustomTimerField,
+    delta: number
+  ) => {
+    const currentValue = parseCustomTimerDraftValue(
+      field,
+      presetDraftTexts[field],
+      timerSettings[field]
+    );
+    const meta = CUSTOM_TIMER_FIELD_META[field];
+    const nextValue = Math.round(
+      clampNumber(currentValue + delta, meta.min, meta.max)
+    );
+
+    setPresetDraftTexts((currentDraft) => ({
+      ...currentDraft,
+      [field]: String(nextValue),
+    }));
+  };
+
+  const handleCancelPresetManager = () => {
+    setPresetDraftName('');
+    setPresetDraftTexts(createCustomTimerDraftTexts(timerSettings));
+    setPresetManagerVisible(false);
+  };
+
+  const handleSaveCustomEditor = () => {
+    const nextSettings = {
+      focusMinutes: parseCustomTimerDraftValue(
+        'focusMinutes',
+        customDraftTexts.focusMinutes,
+        customSettings.focusMinutes
+      ),
+      shortBreakMinutes: parseCustomTimerDraftValue(
+        'shortBreakMinutes',
+        customDraftTexts.shortBreakMinutes,
+        customSettings.shortBreakMinutes
+      ),
+      longBreakMinutes: parseCustomTimerDraftValue(
+        'longBreakMinutes',
+        customDraftTexts.longBreakMinutes,
+        customSettings.longBreakMinutes
+      ),
+      longBreakInterval: parseCustomTimerDraftValue(
+        'longBreakInterval',
+        customDraftTexts.longBreakInterval,
+        customSettings.longBreakInterval
+      ),
+    };
+
+    const didApply = applyCustomSettings(nextSettings);
+
+    if (didApply) {
+      setCustomEditorVisible(false);
+    }
+  };
+
+  const handleSaveManagedPreset = async () => {
+    const name = presetDraftName.trim();
+
+    if (!name) {
+      Alert.alert('Name your preset', 'Give this timer rhythm a short name.');
+      return;
+    }
+
+    const nextSettings = {
+      focusMinutes: parseCustomTimerDraftValue(
+        'focusMinutes',
+        presetDraftTexts.focusMinutes,
+        timerSettings.focusMinutes
+      ),
+      shortBreakMinutes: parseCustomTimerDraftValue(
+        'shortBreakMinutes',
+        presetDraftTexts.shortBreakMinutes,
+        timerSettings.shortBreakMinutes
+      ),
+      longBreakMinutes: parseCustomTimerDraftValue(
+        'longBreakMinutes',
+        presetDraftTexts.longBreakMinutes,
+        timerSettings.longBreakMinutes
+      ),
+      longBreakInterval: parseCustomTimerDraftValue(
+        'longBreakInterval',
+        presetDraftTexts.longBreakInterval,
+        timerSettings.longBreakInterval
+      ),
+    };
+    const nextPreset: SavedPomodoroPreset = {
+      id: createSavedPresetId(),
+      name,
+      settings: nextSettings,
+      createdAt: Date.now(),
+    };
+    const nextSavedPresets = [...savedPresets, nextPreset];
+    const nextPresetId: PomodoroPresetId = `saved:${nextPreset.id}`;
+    const nextCycleFocusCount = Math.round(
+      clampNumber(cycleProgressCount, 0, nextSettings.longBreakInterval)
+    );
+
+    setSavedPresets(nextSavedPresets);
+    selectedPresetRef.current = nextPresetId;
+    timerSettingsRef.current = nextSettings;
+    clearFocusTaskSelection();
+    setFocusSummary(null);
+    setSelectedPreset(nextPresetId);
+    updateCycleFocusCount(nextCycleFocusCount, nextSettings);
+    resetTimerForMode(currentMode, nextSettings);
+    setPresetManagerVisible(false);
+    setPresetDraftName('');
+    setPresetDraftTexts(createCustomTimerDraftTexts(nextSettings));
+
+    await persistSavedPresets(nextSavedPresets);
+  };
+
+  const handleDeleteSelectedSavedPreset = () => {
+    const selectedSavedPreset = getSavedPresetByPresetId(
+      selectedPreset,
+      savedPresets
+    );
+
+    if (!selectedSavedPreset) return;
+
+    if (isRunning) {
+      Alert.alert(
+        'Timer is running',
+        'Pause or reset the current timer before deleting a saved preset.'
+      );
+      return;
+    }
+
+    Alert.alert(
+      'Delete this preset?',
+      `Remove ${selectedSavedPreset.name} from your saved timer presets?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            const nextSavedPresets = savedPresets.filter(
+              (savedPreset) => savedPreset.id !== selectedSavedPreset.id
+            );
+
+            setSavedPresets(nextSavedPresets);
+            selectedPresetRef.current = 'classic';
+            timerSettingsRef.current = CLASSIC_SETTINGS;
+            clearFocusTaskSelection();
+            setFocusSummary(null);
+            setSelectedPreset('classic');
+            updateCycleFocusCount(cycleProgressCount, CLASSIC_SETTINGS);
+            resetTimerForMode(currentMode, CLASSIC_SETTINGS);
+
+            await persistSavedPresets(nextSavedPresets);
+          },
+        },
+      ]
+    );
   };
 
   const handleSelectMode = (mode: PomodoroMode) => {
@@ -1417,6 +2123,7 @@ export default function FocusSessionScreen() {
     isRunningRef.current = true;
     setIsRunning(true);
     setDndReminderVisible(false);
+    setFocusBlockVisible(true);
 
     Speech.speak(currentModeConfig.startSpeech, {
       rate: 0.95,
@@ -1500,12 +2207,37 @@ export default function FocusSessionScreen() {
       remainingMsRef.current <= 0 || remainingSeconds === 0;
     const startingFreshSession = !startedAtRef.current || startingFromEndedTimer;
 
-    if (currentMode === 'focus' && startingFreshSession) {
+    if (
+      currentMode === 'focus' &&
+      startingFreshSession &&
+      !selectedFocusTaskIdRef.current &&
+      !focusWithoutTaskSelectedRef.current
+    ) {
       setTaskPickerVisible(true);
       return;
     }
 
     await startTimer();
+  };
+
+  const handleStartFocusFromPresetDetails = async () => {
+    if (currentMode !== 'focus') {
+      if (isRunning) {
+        Alert.alert(
+          'Timer is running',
+          'Pause or reset the current timer before starting a focus block.'
+        );
+        return;
+      }
+
+      clearFocusTaskSelection();
+      setFocusSummary(null);
+      changeMode('focus', timerSettings);
+      setTaskPickerVisible(true);
+      return;
+    }
+
+    await handleStartPause();
   };
 
   const handleReset = async () => {
@@ -1526,18 +2258,68 @@ export default function FocusSessionScreen() {
     });
   };
 
+  const handleResetFocusBlock = async () => {
+    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+
+    const nextRemainingMs = getModeSeconds(currentMode, timerSettings) * 1000;
+
+    endTimestampRef.current = null;
+    remainingMsRef.current = nextRemainingMs;
+    startedAtRef.current = null;
+    focusLeftAtRef.current = null;
+    isRunningRef.current = false;
+    wasDistractedRef.current = false;
+    completionHandledRef.current = false;
+    setFocusSummary(null);
+    setIsRunning(false);
+    setRemainingSeconds(Math.ceil(nextRemainingMs / 1000));
+    setDndReminderVisible(false);
+    setFocusWarningText(null);
+    setWasDistracted(false);
+    setFocusBlockVisible(true);
+
+    await persistPomodoroState({
+      isRunning: false,
+      endTimestamp: null,
+      startedAt: null,
+      remainingMs: nextRemainingMs,
+      wasDistracted: false,
+      focusLeftAt: null,
+    });
+  };
+
+  const handleStopFocusBlock = async () => {
+    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    setFocusSummary(null);
+    clearFocusTaskSelection();
+    changeMode('focus', timerSettings);
+    await persistPomodoroState({
+      currentMode: 'focus',
+      isRunning: false,
+      endTimestamp: null,
+      startedAt: null,
+      remainingMs: getModeSeconds('focus', timerSettings) * 1000,
+      wasDistracted: false,
+      focusLeftAt: null,
+      selectedFocusTaskId: null,
+      selectedFocusTaskTitle: null,
+      focusWithoutTaskSelected: false,
+    });
+  };
+
   const handleSkip = async () => {
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
     const skippedMode = currentMode;
-    const nextMode = skippedMode === 'focus' ? 'shortBreak' : 'focus';
-
-    if (skippedMode === 'longBreak') {
-      updateCycleFocusCount(0, timerSettings);
-    }
+    const { nextMode, nextCycleFocusCount } = getNextSessionType(
+      skippedMode,
+      cycleFocusCountRef.current,
+      timerSettings.longBreakInterval
+    );
 
     setFocusSummary(null);
     clearFocusTaskSelection();
+    updateCycleFocusCount(nextCycleFocusCount, timerSettings);
     changeMode(nextMode);
 
     Speech.speak(
@@ -1555,13 +2337,64 @@ export default function FocusSessionScreen() {
       isRunning: false,
       endTimestamp: null,
       startedAt: null,
-      cycleProgressCount: skippedMode === 'longBreak' ? 0 : cycleFocusCountRef.current,
+      cycleProgressCount: nextCycleFocusCount,
       remainingMs: getModeSeconds(nextMode, timerSettings) * 1000,
       focusLeftAt: null,
       wasDistracted: false,
       selectedFocusTaskId: null,
       selectedFocusTaskTitle: null,
       focusWithoutTaskSelected: false,
+    });
+  };
+
+  const handleSkipFocusBlock = async () => {
+    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+
+    const skippedMode = currentMode;
+    const { nextMode, nextCycleFocusCount } = getNextSessionType(
+      skippedMode,
+      cycleFocusCountRef.current,
+      timerSettings.longBreakInterval
+    );
+    const nextRemainingMs = getModeSeconds(nextMode, timerSettings) * 1000;
+
+    currentModeRef.current = nextMode;
+    endTimestampRef.current = null;
+    remainingMsRef.current = nextRemainingMs;
+    startedAtRef.current = null;
+    focusLeftAtRef.current = null;
+    isRunningRef.current = false;
+    wasDistractedRef.current = false;
+    completionHandledRef.current = false;
+    setFocusSummary(null);
+    setCurrentMode(nextMode);
+    updateCycleFocusCount(nextCycleFocusCount, timerSettings);
+    setIsRunning(false);
+    setRemainingSeconds(Math.ceil(nextRemainingMs / 1000));
+    setDndReminderVisible(false);
+    setFocusWarningText(null);
+    setWasDistracted(false);
+    setFocusBlockVisible(true);
+
+    Speech.speak(
+      skippedMode === 'focus'
+        ? 'Focus block skipped. Milo will not count this one.'
+        : 'Break skipped. Milo is ready for focus.',
+      {
+        rate: 0.95,
+        pitch: 1.08,
+      }
+    );
+
+    await persistPomodoroState({
+      currentMode: nextMode,
+      isRunning: false,
+      endTimestamp: null,
+      startedAt: null,
+      cycleProgressCount: nextCycleFocusCount,
+      remainingMs: nextRemainingMs,
+      focusLeftAt: null,
+      wasDistracted: false,
     });
   };
 
@@ -1574,7 +2407,7 @@ export default function FocusSessionScreen() {
         onRequestClose={() => setTaskPickerVisible(false)}
       >
         <View style={styles.modalOverlay}>
-          <View style={styles.focusModalCard}>
+          <View style={[styles.focusModalCard, styles.taskPickerModalCard]}>
             <View style={styles.modalAccentBar} />
             <View style={styles.modalBadge}>
               <Text style={styles.modalBadgeText}>Focus Task</Text>
@@ -1588,7 +2421,7 @@ export default function FocusSessionScreen() {
             <ScrollView
               style={styles.taskPickerList}
               contentContainerStyle={styles.taskPickerListContent}
-              showsVerticalScrollIndicator={false}
+              showsVerticalScrollIndicator={incompleteFocusTasks.length > 3}
             >
               {incompleteFocusTasks.length > 0 ? (
                 incompleteFocusTasks.map((task) => (
@@ -1672,7 +2505,7 @@ export default function FocusSessionScreen() {
                 style={styles.modalPrimaryButton}
                 onPress={handleDndReminderStart}
               >
-                <Text style={styles.modalPrimaryButtonText}>Ill turn it on</Text>
+                <Text style={styles.modalPrimaryButtonText}>I'll turn it on</Text>
               </TouchableOpacity>
 
               <TouchableOpacity
@@ -1687,6 +2520,195 @@ export default function FocusSessionScreen() {
             </View>
           </View>
         </View>
+      </Modal>
+
+      <Modal
+        animationType="fade"
+        transparent
+        visible={focusBlockVisible}
+        onRequestClose={() => {}}
+      >
+        <ScrollView
+          style={styles.focusBlockOverlayScroll}
+          contentContainerStyle={styles.focusBlockOverlay}
+          showsVerticalScrollIndicator={false}
+        >
+          <View
+            style={[
+              styles.focusBlockCard,
+              compactFocusBlock && styles.focusBlockCardCompact,
+            ]}
+          >
+            <View style={styles.focusModalLeafOne} />
+            <View style={styles.focusModalLeafTwo} />
+            <View style={styles.focusModalLeafThree} />
+
+            <View style={styles.focusBlockStatusPill}>
+              <Ionicons name="leaf-outline" size={18} color={theme.colors.primaryDark} />
+              <Text style={styles.focusBlockStatusText}>
+                {focusBlockStatusText}
+              </Text>
+            </View>
+
+            <Text
+              style={[
+                styles.focusBlockTimer,
+                compactFocusBlock && styles.focusBlockTimerCompact,
+              ]}
+              adjustsFontSizeToFit
+              minimumFontScale={0.86}
+            >
+              {formatSeconds(remainingSeconds)}
+            </Text>
+
+            <View
+              style={[
+                styles.focusBlockPresetIcon,
+                { backgroundColor: activePreset.visual.softColor },
+                compactFocusBlock && styles.focusBlockPresetIconCompact,
+              ]}
+            >
+              <Ionicons
+                name={activePreset.visual.icon}
+                size={compactFocusBlock ? 22 : 26}
+                color={activePreset.visual.color}
+              />
+            </View>
+
+            <Text
+              style={[
+                styles.focusBlockPresetName,
+                compactFocusBlock && styles.focusBlockPresetNameCompact,
+              ]}
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.78}
+            >
+              {selectedPresetDisplayName}
+            </Text>
+
+            <View style={styles.focusBlockTaskChip}>
+              <MaterialCommunityIcons
+                name={selectedFocusTaskDisplayTitle ? 'file-document-outline' : 'timer-sand'}
+                size={17}
+                color={theme.colors.primaryDark}
+              />
+              <Text style={styles.focusBlockTaskText} numberOfLines={1}>
+                {selectedFocusTaskDisplayTitle || 'Focus without task'}
+              </Text>
+            </View>
+
+            <View style={styles.focusBlockCycleArea}>
+              <Text style={styles.focusBlockCycleText}>
+                Block {focusBlockNumber} of {longBreakInterval}
+              </Text>
+
+              <View style={styles.focusBlockDotsRow}>
+                {Array.from({ length: longBreakInterval }, (_, index) => (
+                  <View
+                    key={index}
+                    style={[
+                      styles.focusBlockDot,
+                      index < focusBlockNumber && styles.focusBlockDotActive,
+                    ]}
+                  />
+                ))}
+              </View>
+            </View>
+
+            <View
+              style={[
+                styles.focusBlockMessageStage,
+                compactFocusBlock && styles.focusBlockMessageStageCompact,
+              ]}
+            >
+              <View style={styles.focusBlockMessageHillBack} />
+              <View style={styles.focusBlockMessageHillFront} />
+              <Image
+                source={getMiloImageSource(focusBlockMiloMood)}
+                style={[
+                  styles.focusBlockMiloImage,
+                  compactFocusBlock && styles.focusBlockMiloImageCompact,
+                ]}
+                resizeMode="contain"
+              />
+              <View
+                style={[
+                  styles.focusBlockMiloMessage,
+                  compactFocusBlock && styles.focusBlockMiloMessageCompact,
+                ]}
+              >
+                <Text style={styles.focusBlockMiloMessageText}>
+                  {focusBlockMiloMessage}
+                </Text>
+              </View>
+            </View>
+
+            <TouchableOpacity
+              activeOpacity={0.9}
+              style={[
+                styles.focusBlockPrimaryButton,
+                compactFocusBlock && styles.focusBlockPrimaryButtonCompact,
+              ]}
+              onPress={handleStartPause}
+            >
+              <View style={styles.focusBlockPrimaryIcon}>
+                <Ionicons
+                  name={isRunning ? 'pause' : 'play'}
+                  size={22}
+                  color={theme.colors.primary}
+                />
+              </View>
+              <Text style={styles.focusBlockPrimaryButtonText}>
+                {isRunning ? 'Pause' : currentMode === 'focus' ? 'Resume' : 'Start Break'}
+              </Text>
+            </TouchableOpacity>
+
+            <View
+              style={[
+                styles.focusBlockSecondaryRow,
+                compactFocusBlock && styles.focusBlockSecondaryRowCompact,
+              ]}
+            >
+              <TouchableOpacity
+                activeOpacity={0.85}
+                style={styles.focusBlockSecondaryButton}
+                onPress={handleStopFocusBlock}
+              >
+                <View style={styles.focusBlockSecondaryIconCircle}>
+                  <Ionicons name="stop" size={18} color={theme.colors.danger} />
+                </View>
+                <Text style={styles.focusBlockSecondaryButtonText}>Stop</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                activeOpacity={0.85}
+                style={styles.focusBlockSecondaryButton}
+                onPress={handleResetFocusBlock}
+              >
+                <View style={styles.focusBlockSecondaryIconCircle}>
+                  <Ionicons name="refresh" size={23} color={theme.colors.blue} />
+                </View>
+                <Text style={styles.focusBlockSecondaryButtonText}>Reset</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                activeOpacity={0.85}
+                style={styles.focusBlockSecondaryButton}
+                onPress={handleSkipFocusBlock}
+              >
+                <View style={styles.focusBlockSecondaryIconCircle}>
+                  <Ionicons
+                    name="play-skip-forward"
+                    size={21}
+                    color={theme.colors.purple}
+                  />
+                </View>
+                <Text style={styles.focusBlockSecondaryButtonText}>Skip</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </ScrollView>
       </Modal>
 
       <Modal
@@ -1796,16 +2818,281 @@ export default function FocusSessionScreen() {
         </View>
       </Modal>
 
+      <Modal
+        animationType="slide"
+        transparent
+        visible={customEditorVisible}
+        onRequestClose={handleCancelCustomEditor}
+      >
+        <KeyboardAvoidingView
+          style={styles.timerEditorOverlay}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        >
+          <View style={styles.timerEditorSheet}>
+            <View style={styles.timerEditorHandle} />
+            <View style={styles.timerEditorHeader}>
+              <View>
+                <Text style={styles.timerEditorLabel}>Custom Rhythm</Text>
+                <Text style={styles.timerEditorTitle}>Edit timer</Text>
+              </View>
+
+              <View style={styles.timerEditorBadge}>
+                <Ionicons name="timer" size={15} color={theme.colors.primaryDark} />
+                <Text style={styles.timerEditorBadgeText}>1-120 min</Text>
+              </View>
+            </View>
+
+            <View style={styles.timerEditorFields}>
+              {CUSTOM_TIMER_FIELD_ORDER.map((field) => {
+                const meta = CUSTOM_TIMER_FIELD_META[field];
+                const value = customDraftTexts[field];
+
+                return (
+                  <View key={field} style={styles.timerEditorField}>
+                    <View style={styles.timerEditorFieldTopRow}>
+                      <View>
+                        <Text style={styles.timerEditorFieldLabel}>
+                          {meta.label}
+                        </Text>
+                        <Text style={styles.timerEditorFieldHint}>
+                          {meta.min}-{meta.max} {meta.unit}
+                        </Text>
+                      </View>
+
+                      <View style={styles.timerEditorInputWrap}>
+                        <TextInput
+                          value={value}
+                          onChangeText={(nextValue) =>
+                            handleChangeCustomDraftText(field, nextValue)
+                          }
+                          keyboardType="number-pad"
+                          placeholder={String(customSettings[field])}
+                          placeholderTextColor={theme.colors.muted}
+                          selectTextOnFocus
+                          maxLength={3}
+                          style={styles.timerEditorInput}
+                        />
+                        <Text style={styles.timerEditorInputUnit}>
+                          {meta.unit}
+                        </Text>
+                      </View>
+                    </View>
+
+                    <View style={styles.timerEditorAdjustRow}>
+                      {[-5, -1, 1, 5].map((delta) => (
+                        <TouchableOpacity
+                          key={`${field}-${delta}`}
+                          activeOpacity={0.82}
+                          style={styles.timerEditorAdjustButton}
+                          onPress={() => handleAdjustCustomDraftValue(field, delta)}
+                        >
+                          <Text style={styles.timerEditorAdjustText}>
+                            {delta > 0 ? `+${delta}` : delta}
+                          </Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  </View>
+                );
+              })}
+            </View>
+
+            <View style={styles.timerEditorActionRow}>
+              <TouchableOpacity
+                activeOpacity={0.85}
+                style={styles.timerEditorCancelButton}
+                onPress={handleCancelCustomEditor}
+              >
+                <Text style={styles.timerEditorCancelText}>Cancel</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                activeOpacity={0.9}
+                style={styles.timerEditorSaveButton}
+                onPress={handleSaveCustomEditor}
+              >
+                <Text style={styles.timerEditorSaveText}>Save</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
+      <Modal
+        animationType="slide"
+        transparent
+        visible={presetManagerVisible}
+        onRequestClose={handleCancelPresetManager}
+      >
+        <KeyboardAvoidingView
+          style={styles.timerEditorOverlay}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        >
+          <View style={styles.timerEditorSheet}>
+            <View style={styles.timerEditorHandle} />
+            <View style={styles.timerEditorHeader}>
+              <View>
+                <Text style={styles.timerEditorLabel}>Manage Presets</Text>
+                <Text style={styles.timerEditorTitle}>Save a rhythm</Text>
+              </View>
+
+              <View style={styles.timerEditorBadge}>
+                <Ionicons
+                  name="options-outline"
+                  size={15}
+                  color={theme.colors.primaryDark}
+                />
+                <Text style={styles.timerEditorBadgeText}>Local</Text>
+              </View>
+            </View>
+
+            <View style={styles.presetNameField}>
+              <Text style={styles.timerEditorFieldLabel}>Preset name</Text>
+              <TextInput
+                value={presetDraftName}
+                onChangeText={setPresetDraftName}
+                placeholder="Lock In"
+                placeholderTextColor={theme.colors.muted}
+                maxLength={24}
+                style={styles.presetNameInput}
+              />
+              <Text style={styles.presetManagerHint}>
+                Saved presets appear between Deep Focus and Custom.
+              </Text>
+            </View>
+
+            <View style={styles.timerEditorFields}>
+              {CUSTOM_TIMER_FIELD_ORDER.map((field) => {
+                const meta = CUSTOM_TIMER_FIELD_META[field];
+                const value = presetDraftTexts[field];
+
+                return (
+                  <View key={field} style={styles.timerEditorField}>
+                    <View style={styles.timerEditorFieldTopRow}>
+                      <View>
+                        <Text style={styles.timerEditorFieldLabel}>
+                          {meta.label}
+                        </Text>
+                        <Text style={styles.timerEditorFieldHint}>
+                          {meta.min}-{meta.max} {meta.unit}
+                        </Text>
+                      </View>
+
+                      <View style={styles.timerEditorInputWrap}>
+                        <TextInput
+                          value={value}
+                          onChangeText={(nextValue) =>
+                            handleChangePresetDraftText(field, nextValue)
+                          }
+                          keyboardType="number-pad"
+                          placeholder={String(timerSettings[field])}
+                          placeholderTextColor={theme.colors.muted}
+                          selectTextOnFocus
+                          maxLength={3}
+                          style={styles.timerEditorInput}
+                        />
+                        <Text style={styles.timerEditorInputUnit}>
+                          {meta.unit}
+                        </Text>
+                      </View>
+                    </View>
+
+                    <View style={styles.timerEditorAdjustRow}>
+                      {[-5, -1, 1, 5].map((delta) => (
+                        <TouchableOpacity
+                          key={`${field}-${delta}`}
+                          activeOpacity={0.82}
+                          style={styles.timerEditorAdjustButton}
+                          onPress={() => handleAdjustPresetDraftValue(field, delta)}
+                        >
+                          <Text style={styles.timerEditorAdjustText}>
+                            {delta > 0 ? `+${delta}` : delta}
+                          </Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  </View>
+                );
+              })}
+            </View>
+
+            {savedPresets.length > 0 ? (
+              <View style={styles.savedPresetList}>
+                {savedPresets.map((preset) => (
+                  <View key={preset.id} style={styles.savedPresetRow}>
+                    <View style={styles.savedPresetInfo}>
+                      <Text style={styles.savedPresetName} numberOfLines={1}>
+                        {preset.name}
+                      </Text>
+                      <Text style={styles.savedPresetSummary}>
+                        {preset.settings.focusMinutes} /{' '}
+                        {preset.settings.shortBreakMinutes} /{' '}
+                        {preset.settings.longBreakMinutes}
+                      </Text>
+                    </View>
+                  </View>
+                ))}
+              </View>
+            ) : null}
+
+            <View style={styles.timerEditorActionRow}>
+              <TouchableOpacity
+                activeOpacity={0.85}
+                style={styles.timerEditorCancelButton}
+                onPress={handleCancelPresetManager}
+              >
+                <Text style={styles.timerEditorCancelText}>Cancel</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                activeOpacity={0.9}
+                style={styles.timerEditorSaveButton}
+                onPress={handleSaveManagedPreset}
+              >
+                <Text style={styles.timerEditorSaveText}>Save preset</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
       <ScrollView
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.content}
       >
+        <View style={styles.headerRow}>
+          <TouchableOpacity
+            activeOpacity={0.78}
+            hitSlop={{ top: 10, right: 10, bottom: 10, left: 10 }}
+            style={styles.backButton}
+            onPress={() => {
+              if (navigation.canGoBack()) {
+                navigation.goBack();
+              }
+            }}
+          >
+            <Ionicons name="arrow-back" size={23} color={theme.colors.text} />
+          </TouchableOpacity>
+          <Text style={styles.screenHeader}>Milo Focus Mode</Text>
+        </View>
+
         <LinearGradient
-          colors={['#F9FFFB', '#DDF8E7']}
+          colors={['#F8FFF9', '#E9F9ED']}
           start={{ x: 0, y: 0 }}
           end={{ x: 1, y: 1 }}
           style={styles.heroCard}
         >
+          <View style={styles.heroHillBack} />
+          <View style={styles.heroHillFront} />
+          <View style={styles.heroSparkleOne} />
+          <View style={styles.heroSparkleTwo} />
+
+          <Image
+            source={getMiloImageSource('waving')}
+            style={styles.miloImage}
+            resizeMode="contain"
+          />
+
           <View style={styles.heroTextArea}>
             <Text style={styles.heroLabel}>Milo Focus Mode</Text>
             <Text style={styles.heroTitle}>Pomodoro timer</Text>
@@ -1814,338 +3101,259 @@ export default function FocusSessionScreen() {
               break.
             </Text>
           </View>
-
-          <View style={styles.miloBubble}>
-            <Image source={miloImage} style={styles.miloImage} resizeMode="contain" />
-          </View>
         </LinearGradient>
 
         <View style={styles.analyticsRow}>
           <View style={styles.analyticsCard}>
-            <Text style={styles.analyticsNumber}>{completedFocusCount}</Text>
+            <View style={styles.analyticsTopRow}>
+              <View
+                style={[
+                  styles.analyticsIconBubble,
+                  { backgroundColor: theme.colors.primarySoft },
+                ]}
+              >
+                <Ionicons
+                  name="cube-outline"
+                  size={20}
+                  color={theme.colors.primaryDark}
+                />
+              </View>
+              <Text style={styles.analyticsNumber}>{completedFocusCount}</Text>
+            </View>
             <Text style={styles.analyticsLabel}>Focus Blocks</Text>
           </View>
 
           <View style={styles.analyticsCard}>
-            <Text style={[styles.analyticsNumber, { color: theme.colors.blue }]}>
-              {todayFocusMinutes}
-            </Text>
+            <View style={styles.analyticsTopRow}>
+              <View
+                style={[
+                  styles.analyticsIconBubble,
+                  { backgroundColor: theme.colors.blueSoft },
+                ]}
+              >
+                <Ionicons
+                  name="time-outline"
+                  size={20}
+                  color={theme.colors.blue}
+                />
+              </View>
+              <Text style={[styles.analyticsNumber, { color: theme.colors.blue }]}>
+                {todayFocusMinutes}
+              </Text>
+            </View>
             <Text style={styles.analyticsLabel}>Focus Minutes</Text>
           </View>
 
-          <View style={styles.analyticsCard}>
-            <Text style={[styles.analyticsNumber, { color: theme.colors.purple }]}>
-              {totalFocusMinutes}
-            </Text>
+          <View style={[styles.analyticsCard, styles.analyticsCardLast]}>
+            <View style={styles.analyticsTopRow}>
+              <View
+                style={[
+                  styles.analyticsIconBubble,
+                  { backgroundColor: theme.colors.purpleSoft },
+                ]}
+              >
+                <Ionicons
+                  name="pie-chart-outline"
+                  size={20}
+                  color={theme.colors.purple}
+                />
+              </View>
+              <Text style={[styles.analyticsNumber, { color: theme.colors.purple }]}>
+                {totalFocusMinutes}
+              </Text>
+            </View>
             <Text style={styles.analyticsLabel}>Total Minutes</Text>
           </View>
         </View>
 
         <View style={styles.presetCard}>
           <View style={styles.presetHeaderRow}>
-            <View>
-              <Text style={styles.presetLabel}>Timer Preset</Text>
-              <Text style={styles.presetTitle}>{activePreset.label}</Text>
-              <Text style={styles.presetDescription}>
-                Timer Preset = duration package.
-              </Text>
+            <View style={styles.presetTitleWrap}>
+              <Ionicons name="sparkles" size={15} color={theme.colors.primaryDark} />
+              <Text style={styles.presetTitle}>Timer Preset</Text>
             </View>
 
-            <View style={styles.presetSummaryBadge}>
-              <Ionicons name="timer" size={15} color={theme.colors.primaryDark} />
-              <Text style={styles.presetSummaryBadgeText}>
-                {selectedPresetSummary}
-              </Text>
-            </View>
+            <TouchableOpacity
+              activeOpacity={0.84}
+              style={styles.managePresetsPill}
+              onPress={handleOpenPresetManager}
+            >
+              <Ionicons name="options-outline" size={15} color={theme.colors.primaryDark} />
+              <Text style={styles.managePresetsText}>Manage presets</Text>
+            </TouchableOpacity>
           </View>
 
-          <View style={styles.presetGrid}>
-            {pomodoroPresetOrder.map((presetId) => (
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            style={styles.presetCarousel}
+            contentContainerStyle={styles.presetCarouselContent}
+          >
+            {presetOptions.map((presetOption) => (
               <PresetButton
-                key={presetId}
-                presetId={presetId}
-                selected={selectedPreset === presetId}
-                onPress={() => handleSelectPreset(presetId)}
+                key={presetOption.id}
+                preset={presetOption}
+                selected={selectedPreset === presetOption.id}
+                onPress={() => handleSelectPreset(presetOption.id)}
               />
             ))}
-          </View>
+          </ScrollView>
 
-          <Text style={styles.presetHelperText}>{selectedPresetHelper}</Text>
-
-          {selectedPreset === 'custom' ? (
-            <View style={styles.customSettingsPanel}>
-              <CustomNumberControl
-                label="Focus duration"
-                value={customSettings.focusMinutes}
-                unit="min"
-                min={MIN_DURATION_MINUTES}
-                max={MAX_DURATION_MINUTES}
-                onChange={(value) => handleChangeCustomSetting('focusMinutes', value)}
-              />
-
-              <CustomNumberControl
-                label="Short break"
-                value={customSettings.shortBreakMinutes}
-                unit="min"
-                min={MIN_DURATION_MINUTES}
-                max={MAX_DURATION_MINUTES}
-                onChange={(value) =>
-                  handleChangeCustomSetting('shortBreakMinutes', value)
-                }
-              />
-
-              <CustomNumberControl
-                label="Long break"
-                value={customSettings.longBreakMinutes}
-                unit="min"
-                min={MIN_DURATION_MINUTES}
-                max={MAX_DURATION_MINUTES}
-                onChange={(value) =>
-                  handleChangeCustomSetting('longBreakMinutes', value)
-                }
-              />
-
-              <CustomNumberControl
-                label="Long break interval"
-                value={customSettings.longBreakInterval}
-                unit="blocks"
-                min={MIN_LONG_BREAK_INTERVAL}
-                max={MAX_LONG_BREAK_INTERVAL}
-                onChange={(value) =>
-                  handleChangeCustomSetting('longBreakInterval', value)
-                }
-              />
-            </View>
-          ) : null}
-        </View>
-
-        <View style={styles.timerCard}>
-          <View style={styles.timerTopRow}>
-            <View>
-              <Text style={[styles.timerLabel, { color: currentModeConfig.accentColor }]}>
-                {currentModeConfig.title}
-              </Text>
-              <Text style={styles.timerTitle}>
-                {isRunning ? currentModeConfig.runningTitle : currentModeConfig.readyTitle}
-              </Text>
-            </View>
-
-            <TouchableOpacity
-              activeOpacity={0.85}
-              style={styles.sessionBadge}
-              onPress={() => navigation.navigate('Analytics')}
-            >
-              <Ionicons name="stats-chart" size={16} color={theme.colors.primaryDark} />
-              <Text style={styles.sessionBadgeText}>Analytics</Text>
-            </TouchableOpacity>
-          </View>
-
-          <View style={styles.focusTaskStrip}>
-            <View style={styles.focusTaskIcon}>
-              <MaterialCommunityIcons
-                name={
-                  selectedFocusTaskDisplayTitle
-                    ? 'target'
-                    : focusWithoutTaskSelected
-                    ? 'timer-sand'
-                    : 'format-list-checks'
-                }
-                size={18}
-                color={theme.colors.primaryDark}
-              />
-            </View>
-
-            <View style={styles.focusTaskTextArea}>
-              <Text style={styles.focusTaskLabel}>Focus task</Text>
-              <Text style={styles.focusTaskTitle} numberOfLines={2}>
-                {focusTaskDisplayText}
-              </Text>
-              <Text style={styles.focusTaskHelper} numberOfLines={1}>
-                {focusTaskHelperText}
-              </Text>
-            </View>
-          </View>
-
-          <View
-            style={[
-              styles.timerCircle,
-              {
-                backgroundColor: currentModeConfig.softColor,
-              },
-            ]}
-          >
-            <Text style={styles.timerText}>{formatSeconds(remainingSeconds)}</Text>
-            <Text
-              style={[styles.timerSubText, { color: currentModeConfig.accentColor }]}
-            >
-              {progressPercent}% complete
-            </Text>
-          </View>
-
-          <View style={styles.progressTrack}>
-            <View
-              style={[
-                styles.progressFill,
-                {
-                  width: `${progressPercent}%`,
-                  backgroundColor: currentModeConfig.accentColor,
-                },
-              ]}
-            />
-          </View>
-
-          <View style={styles.buttonRow}>
-            <TouchableOpacity
-              activeOpacity={0.9}
-              style={[styles.mainButton, isRunning && styles.pauseButton]}
-              onPress={handleStartPause}
-            >
-              <Ionicons
-                name={isRunning ? 'pause' : 'play'}
-                size={22}
-                color="#FFFFFF"
-              />
-              <Text style={styles.mainButtonText}>
-                {isRunning ? 'Pause' : 'Start'}
-              </Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              activeOpacity={0.85}
-              style={styles.resetButton}
-              onPress={handleReset}
-            >
-              <Ionicons name="refresh" size={21} color={theme.colors.primaryDark} />
-              <Text style={styles.resetButtonText}>Reset</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              activeOpacity={0.85}
-              style={styles.skipButton}
-              onPress={handleSkip}
-            >
-              <Ionicons name="play-skip-forward" size={20} color={theme.colors.textSoft} />
-              <Text style={styles.skipButtonText}>Skip</Text>
-            </TouchableOpacity>
-          </View>
-
-        </View>
-
-        <View style={styles.sectionHeaderBlock}>
-          <Text style={styles.sectionTitle}>Current Session</Text>
-          <Text style={styles.sectionHelperText}>
-            Current Session = Focus / Short Break / Long Break.
-          </Text>
-        </View>
-
-        <View style={styles.modeRow}>
-          {pomodoroModeOrder.map((mode) => (
-            <ModeButton
-              key={mode}
-              mode={mode}
-              settings={timerSettings}
-              selected={currentMode === mode}
-              onPress={() => handleSelectMode(mode)}
-            />
-          ))}
-        </View>
-
-        <View style={styles.cycleCard}>
-          <View style={styles.cycleTopRow}>
-            <View>
-              <Text style={styles.cycleLabel}>Cycle Progress</Text>
-              <Text style={styles.cycleTitle}>
-                {cycleProgressCount}/{longBreakInterval} focus blocks
-              </Text>
-            </View>
-
-            <View style={styles.breakSuggestionBadge}>
-              <Ionicons name="leaf" size={16} color={theme.colors.primaryDark} />
-              <Text style={styles.breakSuggestionText}>
-                {cycleSuggestionText}
-              </Text>
-            </View>
-          </View>
-
-          <View style={styles.cycleDotsRow}>
-            {Array.from({ length: longBreakInterval }, (_, index) => (
+          <View style={styles.presetDotsRow}>
+            {presetOptions.map((presetOption) => (
               <View
-                key={index}
+                key={presetOption.id}
                 style={[
-                  styles.cycleDot,
-                  index < cycleProgressCount && styles.cycleDotActive,
+                  styles.presetDot,
+                  selectedPreset === presetOption.id && styles.presetDotActive,
                 ]}
               />
             ))}
           </View>
-        </View>
 
-        <View style={styles.miloMessageCard}>
-          <Image
-            source={miloImage}
-            style={styles.messageMiloImage}
-            resizeMode="contain"
-          />
+          <View
+            style={[
+              styles.presetDetailCard,
+              selectedPreset === 'custom' && styles.presetDetailCardCustom,
+            ]}
+          >
+            <View style={styles.presetDetailTitleRow}>
+              <View
+                style={[
+                  styles.detailIconBubble,
+                  { backgroundColor: activePreset.visual.softColor },
+                ]}
+              >
+                <Ionicons
+                  name={activePreset.visual.icon}
+                  size={28}
+                  color={activePreset.visual.color}
+                />
+              </View>
 
-          <View style={styles.messageTextArea}>
-            <Text style={styles.messageTitle}>Milo says</Text>
-            <Text style={styles.messageText}>{miloMessage}</Text>
-          </View>
-        </View>
-
-        <View style={styles.suggestedTaskCard}>
-          <View style={styles.suggestedTopRow}>
-            <View style={styles.suggestedIcon}>
-              <MaterialCommunityIcons name="target" size={22} color="#FFFFFF" />
-            </View>
-
-            <View style={styles.suggestedTextArea}>
-              <Text style={styles.suggestedLabel}>Suggested Focus Item</Text>
-              <Text style={styles.suggestedTitle} numberOfLines={2}>
-                {suggestedTask ? suggestedTask.title : 'No pending task yet'}
-              </Text>
-
-              <Text style={styles.suggestedSubtitle}>
-                {suggestedTask
-                  ? 'Milo thinks this should come first.'
-                  : 'Create a task first, then come back to focus mode.'}
+              <Text style={styles.presetDetailTitle}>
+                {selectedPresetDisplayName}
               </Text>
             </View>
+
+            <View style={styles.presetDetailValueRow}>
+              {presetDetailValueItems.map((item, index) => (
+                <React.Fragment key={item.label}>
+                  {index > 0 ? <View style={styles.presetValueSeparator} /> : null}
+                  <View style={styles.presetDetailValueItem}>
+                    <View style={styles.presetDetailValueLabelRow}>
+                      <MaterialCommunityIcons
+                        name={item.icon}
+                        size={18}
+                        color={theme.colors.primaryDark}
+                      />
+                      <Text style={styles.presetDetailValueLabel}>
+                        {item.label}
+                      </Text>
+                    </View>
+
+                    <Text
+                      style={styles.presetDetailValue}
+                      numberOfLines={1}
+                      adjustsFontSizeToFit
+                      minimumFontScale={0.86}
+                    >
+                      {item.value}
+                    </Text>
+                  </View>
+                </React.Fragment>
+              ))}
+            </View>
+
+            <View style={styles.presetDetailCycleRow}>
+              <Ionicons
+                name="sync-outline"
+                size={16}
+                color={theme.colors.primaryDark}
+              />
+              <Text style={styles.presetDetailCycle}>
+                {selectedPresetCycleText}
+              </Text>
+            </View>
+
+            <View style={styles.presetDetailNoteBox}>
+              <View style={styles.noteIconBubble}>
+                <Ionicons
+                  name={activePreset.visual.icon}
+                  size={18}
+                  color={activePreset.visual.color}
+                />
+              </View>
+              <Text style={styles.presetDetailNote}>
+                {selectedPresetDetailNote}
+              </Text>
+            </View>
           </View>
 
-          {suggestedTask ? (
+          {selectedPreset === 'custom' ? (
+            <View style={styles.customDetailActionRow}>
+              <TouchableOpacity
+                activeOpacity={0.85}
+                style={styles.customEditButton}
+                onPress={handleOpenCustomEditor}
+              >
+                <Ionicons
+                  name="pencil-outline"
+                  size={18}
+                  color={theme.colors.primaryDark}
+                />
+                <Text style={styles.customEditButtonText}>Edit Timer</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                activeOpacity={0.9}
+                style={styles.customStartButton}
+                onPress={handleStartFocusFromPresetDetails}
+              >
+                <View style={styles.startIconBubble}>
+                  <Ionicons name="play" size={16} color={theme.colors.primary} />
+                </View>
+                <Text style={styles.customStartButtonText}>Start Focus</Text>
+              </TouchableOpacity>
+            </View>
+          ) : activePreset.isSaved ? (
+            <View style={styles.customDetailActionRow}>
+              <TouchableOpacity
+                activeOpacity={0.85}
+                style={styles.deletePresetButton}
+                onPress={handleDeleteSelectedSavedPreset}
+              >
+                <Ionicons
+                  name="trash-outline"
+                  size={18}
+                  color={theme.colors.danger}
+                />
+                <Text style={styles.deletePresetButtonText}>Delete Preset</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                activeOpacity={0.9}
+                style={styles.customStartButton}
+                onPress={handleStartFocusFromPresetDetails}
+              >
+                <View style={styles.startIconBubble}>
+                  <Ionicons name="play" size={16} color={theme.colors.primary} />
+                </View>
+                <Text style={styles.customStartButtonText}>Start Focus</Text>
+              </TouchableOpacity>
+            </View>
+          ) : (
             <TouchableOpacity
-              activeOpacity={0.85}
-              style={styles.openTaskButton}
-              onPress={() =>
-                navigation.navigate('TaskDetails', { taskId: suggestedTask.id })
-              }
+              activeOpacity={0.9}
+              style={styles.startFocusButton}
+              onPress={handleStartFocusFromPresetDetails}
             >
-              <Text style={styles.openTaskButtonText}>Open Task Details</Text>
-              <Ionicons name="arrow-forward" size={18} color="#FFFFFF" />
+              <View style={styles.startIconBubble}>
+                <Ionicons name="play" size={16} color={theme.colors.primary} />
+              </View>
+              <Text style={styles.startFocusButtonText}>Start Focus</Text>
             </TouchableOpacity>
-          ) : null}
-        </View>
-
-        <View style={styles.tipsCard}>
-          <Text style={styles.tipsTitle}>Focus Tips</Text>
-
-          <View style={styles.tipRow}>
-            <Ionicons name="checkmark-circle" size={18} color={theme.colors.primaryDark} />
-            <Text style={styles.tipText}>Choose only one task before starting.</Text>
-          </View>
-
-          <View style={styles.tipRow}>
-            <Ionicons name="checkmark-circle" size={18} color={theme.colors.primaryDark} />
-            <Text style={styles.tipText}>Put your phone on silent if possible.</Text>
-          </View>
-
-          <View style={styles.tipRow}>
-            <Ionicons name="checkmark-circle" size={18} color={theme.colors.primaryDark} />
-            <Text style={styles.tipText}>
-              After {longBreakInterval} focus blocks, take a long break.
-            </Text>
-          </View>
+          )}
         </View>
 
         <View style={{ height: 100 }} />
@@ -2161,69 +3369,148 @@ const styles = StyleSheet.create({
   },
   content: {
     paddingHorizontal: 18,
-    paddingTop: 18,
+    paddingTop: Platform.OS === 'android' ? 26 : 12,
+  },
+  headerRow: {
+    height: 44,
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  backButton: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    justifyContent: 'center',
+    alignItems: 'flex-start',
+    marginRight: 25,
+  },
+  screenHeader: {
+    color: theme.colors.text,
+    fontSize: 24,
+    fontWeight: '900',
   },
   heroCard: {
-    borderRadius: theme.radius.xl,
-    padding: 18,
-    marginBottom: 18,
+    minHeight: 142,
+    borderRadius: 18,
+    paddingVertical: 12,
+    paddingLeft: 12,
+    paddingRight: 15,
+    marginBottom: 17,
     flexDirection: 'row',
     alignItems: 'center',
     overflow: 'hidden',
-    ...theme.shadow,
+    borderWidth: 1,
+    borderColor: '#DAF1DE',
+    ...theme.shadowSoft,
+  },
+  heroHillBack: {
+    position: 'absolute',
+    left: -16,
+    right: -18,
+    bottom: -30,
+    height: 62,
+    borderTopLeftRadius: 90,
+    borderTopRightRadius: 120,
+    backgroundColor: '#D6F2D5',
+    opacity: 0.75,
+  },
+  heroHillFront: {
+    position: 'absolute',
+    left: 96,
+    right: -36,
+    bottom: -22,
+    height: 46,
+    borderTopLeftRadius: 100,
+    borderTopRightRadius: 80,
+    backgroundColor: '#C2E8B7',
+    opacity: 0.68,
+  },
+  heroSparkleOne: {
+    position: 'absolute',
+    left: 26,
+    top: 29,
+    width: 10,
+    height: 7,
+    borderRadius: 5,
+    backgroundColor: '#A7DE9D',
+    transform: [{ rotate: '-18deg' }],
+  },
+  heroSparkleTwo: {
+    position: 'absolute',
+    left: 128,
+    top: 39,
+    width: 4,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: '#FFFFFF',
   },
   heroTextArea: {
     flex: 1,
-    paddingRight: 10,
+    paddingLeft: 12,
+    paddingBottom: 2,
   },
   heroLabel: {
     color: theme.colors.primaryDark,
     fontWeight: '900',
     fontSize: 13,
-    marginBottom: 6,
+    marginBottom: 5,
   },
   heroTitle: {
     color: theme.colors.text,
-    fontSize: 30,
+    fontSize: 28,
     fontWeight: '900',
-    letterSpacing: -0.6,
+    letterSpacing: 0,
   },
   heroSubtitle: {
-    marginTop: 7,
+    marginTop: 8,
     color: theme.colors.textSoft,
-    fontWeight: '600',
-    lineHeight: 20,
-  },
-  miloBubble: {
-    width: 120,
-    height: 120,
-    borderRadius: 60,
-    backgroundColor: '#FFFFFF',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: -8,
+    fontWeight: '700',
+    fontSize: 14,
+    lineHeight: 21,
   },
   miloImage: {
-    width: 136,
-    height: 136,
+    width: 150,
+    height: 150,
+    marginLeft: -14,
+    marginBottom: -9,
   },
   analyticsRow: {
     flexDirection: 'row',
-    marginBottom: 18,
+    marginBottom: 17,
   },
   analyticsCard: {
     flex: 1,
+    minHeight: 73,
     backgroundColor: theme.colors.surface,
-    borderRadius: theme.radius.lg,
-    paddingVertical: 14,
+    borderRadius: 16,
+    paddingVertical: 12,
+    paddingHorizontal: 8,
     alignItems: 'center',
-    marginRight: 8,
+    marginRight: 10,
     borderWidth: 1,
     borderColor: theme.colors.border,
+    ...theme.shadowSoft,
+  },
+  analyticsCardLast: {
+    marginRight: 0,
+  },
+  analyticsTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  analyticsIconBubble: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 9,
   },
   analyticsNumber: {
     color: theme.colors.primaryDark,
-    fontSize: 22,
+    fontSize: 25,
     fontWeight: '900',
   },
   analyticsLabel: {
@@ -2235,16 +3522,21 @@ const styles = StyleSheet.create({
   },
   presetCard: {
     backgroundColor: theme.colors.surface,
-    borderRadius: theme.radius.xl,
-    padding: 16,
+    borderRadius: 22,
+    paddingVertical: 15,
+    paddingHorizontal: 12,
     marginBottom: 18,
     borderWidth: 1,
     borderColor: theme.colors.border,
-    ...theme.shadowSoft,
+    ...theme.shadow,
   },
   presetHeaderRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  presetTitleWrap: {
+    flexDirection: 'row',
     alignItems: 'center',
   },
   presetLabel: {
@@ -2253,15 +3545,30 @@ const styles = StyleSheet.create({
     fontSize: 12,
   },
   presetTitle: {
-    marginTop: 4,
-    color: theme.colors.text,
-    fontSize: 20,
+    marginLeft: 6,
+    color: theme.colors.primaryDark,
+    fontSize: 17,
     fontWeight: '900',
   },
   presetDescription: {
-    marginTop: 3,
+    marginTop: 4,
     color: theme.colors.muted,
     fontWeight: '700',
+    fontSize: 11,
+  },
+  managePresetsPill: {
+    minHeight: 32,
+    borderRadius: theme.radius.pill,
+    backgroundColor: theme.colors.primarySoft,
+    paddingHorizontal: 11,
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginLeft: 10,
+  },
+  managePresetsText: {
+    marginLeft: 5,
+    color: theme.colors.primaryDark,
+    fontWeight: '900',
     fontSize: 11,
   },
   presetSummaryBadge: {
@@ -2278,113 +3585,338 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     fontSize: 12,
   },
-  presetGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
+  presetCarousel: {
     marginTop: 14,
-    marginHorizontal: -4,
+    marginHorizontal: -1,
   },
-  presetButton: {
-    flexGrow: 1,
-    flexBasis: '47%',
-    minHeight: 58,
-    borderRadius: theme.radius.md,
-    backgroundColor: theme.colors.backgroundSoft,
+  presetCarouselContent: {
+    paddingHorizontal: 1,
+    paddingTop: 12,
+    paddingBottom: 9,
+  },
+  presetChoiceAnimated: {
+    marginRight: 12,
+  },
+  presetChoiceCard: {
+    width: 95,
+    minHeight: 122,
+    borderRadius: 13,
+    backgroundColor: theme.colors.surface,
     borderWidth: 1,
     borderColor: theme.colors.border,
-    paddingHorizontal: 10,
-    paddingVertical: 10,
+    paddingHorizontal: 8,
+    paddingTop: 16,
+    paddingBottom: 10,
+    alignItems: 'center',
+    ...theme.shadowSoft,
+  },
+  presetChoiceCardActive: {
+    borderColor: theme.colors.primary,
+    shadowColor: theme.colors.primaryDark,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.16,
+    shadowRadius: 12,
+    elevation: 5,
+  },
+  presetIconBubble: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     justifyContent: 'center',
-    marginHorizontal: 4,
+    alignItems: 'center',
     marginBottom: 8,
   },
-  presetButtonActive: {
-    backgroundColor: theme.colors.primary,
-    borderColor: theme.colors.primary,
-  },
-  presetButtonLabel: {
-    color: theme.colors.text,
-    fontWeight: '900',
-    fontSize: 13,
-  },
-  presetButtonLabelActive: {
-    color: '#FFFFFF',
-  },
-  presetButtonSummary: {
-    marginTop: 4,
-    color: theme.colors.muted,
-    fontWeight: '800',
-    fontSize: 11,
-  },
-  presetButtonSummaryActive: {
-    color: '#FFFFFF',
-  },
-  presetHelperText: {
-    marginTop: 2,
-    color: theme.colors.textSoft,
-    fontWeight: '600',
-    lineHeight: 20,
-  },
-  customSettingsPanel: {
-    marginTop: 12,
-    paddingTop: 4,
-    borderTopWidth: 1,
-    borderTopColor: theme.colors.border,
-  },
-  customControlRow: {
-    flexDirection: 'row',
+  presetCheckBadge: {
+    position: 'absolute',
+    top: 7,
+    right: 7,
+    zIndex: 2,
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: theme.colors.primaryDark,
+    justifyContent: 'center',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 10,
   },
-  customControlTextArea: {
-    flex: 1,
-    paddingRight: 10,
-  },
-  customControlLabel: {
+  presetChoiceLabel: {
+    minHeight: 34,
     color: theme.colors.text,
     fontWeight: '900',
     fontSize: 13,
+    lineHeight: 17,
+    textAlign: 'center',
   },
-  customControlHint: {
-    marginTop: 3,
+  presetChoiceSummary: {
+    marginTop: 5,
     color: theme.colors.muted,
-    fontWeight: '700',
+    fontWeight: '900',
     fontSize: 11,
+    textAlign: 'center',
   },
-  stepper: {
-    width: 154,
-    height: 42,
-    borderRadius: theme.radius.pill,
-    backgroundColor: theme.colors.surfaceSoft,
+  presetDotsRow: {
+    height: 14,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: -1,
+    marginBottom: 10,
+  },
+  presetDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#D8DEE6',
+    marginHorizontal: 3,
+  },
+  presetDotActive: {
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
+    backgroundColor: theme.colors.primaryDark,
+  },
+  presetDetailCard: {
+    borderRadius: 17,
+    backgroundColor: theme.colors.surface,
     borderWidth: 1,
     borderColor: theme.colors.border,
+    paddingHorizontal: 15,
+    paddingVertical: 15,
+    ...theme.shadowSoft,
+  },
+  presetDetailCardCustom: {
+    borderColor: '#F2E2B9',
+    backgroundColor: '#FFFDF7',
+  },
+  presetDetailHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  presetDetailTitleRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 4,
   },
-  stepperButton: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
+  detailIconBubble: {
+    width: 54,
+    height: 54,
+    borderRadius: 27,
     backgroundColor: theme.colors.primarySoft,
     justifyContent: 'center',
     alignItems: 'center',
+    marginRight: 12,
   },
-  stepperButtonDisabled: {
-    backgroundColor: theme.colors.background,
+  presetDetailLabel: {
+    color: theme.colors.primaryDark,
+    fontWeight: '900',
+    fontSize: 11,
   },
-  stepperValue: {
+  presetDetailTitle: {
     flex: 1,
     color: theme.colors.text,
     fontWeight: '900',
-    fontSize: 14,
+    fontSize: 22,
+    lineHeight: 28,
+  },
+  presetDetailMetricsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    marginTop: 11,
+    paddingLeft: 62,
+  },
+  presetDetailMetric: {
+    color: theme.colors.text,
+    fontWeight: '700',
+    fontSize: 10,
+    lineHeight: 17,
+  },
+  presetDetailMetricNumber: {
+    color: theme.colors.primaryDark,
+    fontWeight: '900',
+    fontSize: 13,
+  },
+  presetDetailValueRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 14,
+    paddingHorizontal: 1,
+  },
+  presetDetailValueItem: {
+    flex: 1,
+    minWidth: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  presetDetailValueLabelRow: {
+    width: '100%',
+    minHeight: 23,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  presetDetailValueLabel: {
+    marginLeft: 5,
+    color: theme.colors.textSoft,
+    fontWeight: '800',
+    fontSize: 11.5,
+  },
+  presetDetailValue: {
+    width: '100%',
+    marginTop: 5,
+    color: theme.colors.text,
+    fontWeight: '900',
+    fontSize: 13,
     textAlign: 'center',
   },
-  stepperUnit: {
-    color: theme.colors.muted,
-    fontSize: 10,
+  presetValueSeparator: {
+    width: 1,
+    height: 44,
+    backgroundColor: '#E1E5DD',
+    marginHorizontal: 5,
+  },
+  metricSeparator: {
+    width: 4,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: theme.colors.primary,
+    marginHorizontal: 7,
+  },
+  presetDetailNote: {
+    flex: 1,
+    color: theme.colors.textSoft,
+    fontWeight: '700',
+    fontSize: 11,
+    lineHeight: 16,
+  },
+  presetDetailCycleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 10,
+    paddingLeft: 66,
+  },
+  presetDetailCycle: {
+    marginLeft: 8,
+    color: theme.colors.textSoft,
+    fontWeight: '800',
+    fontSize: 11.5,
+  },
+  presetDetailNoteBox: {
+    minHeight: 56,
+    borderRadius: 14,
+    backgroundColor: theme.colors.primarySoft,
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 13,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  noteIconBubble: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: theme.colors.surface,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 10,
+  },
+  customValuesGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginTop: 12,
+    marginHorizontal: -3,
+  },
+  customValuePill: {
+    borderRadius: theme.radius.pill,
+    backgroundColor: theme.colors.surface,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    marginHorizontal: 3,
+    marginBottom: 7,
+  },
+  customValueText: {
+    color: theme.colors.textSoft,
+    fontWeight: '900',
+    fontSize: 12,
+  },
+  customDetailActionRow: {
+    flexDirection: 'row',
+    marginTop: 14,
+  },
+  customEditButton: {
+    flex: 1,
+    height: 52,
+    borderRadius: 16,
+    backgroundColor: theme.colors.surface,
+    borderWidth: 1,
+    borderColor: theme.colors.primary,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 10,
+    flexDirection: 'row',
+  },
+  customEditButtonText: {
+    marginLeft: 8,
+    color: theme.colors.primaryDark,
+    fontWeight: '900',
+    fontSize: 15,
+  },
+  deletePresetButton: {
+    flex: 1,
+    height: 52,
+    borderRadius: 16,
+    backgroundColor: theme.colors.surface,
+    borderWidth: 1,
+    borderColor: '#F1B8C0',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 10,
+    flexDirection: 'row',
+  },
+  deletePresetButtonText: {
+    marginLeft: 8,
+    color: theme.colors.danger,
+    fontWeight: '900',
+    fontSize: 14,
+  },
+  customStartButton: {
+    flex: 1,
+    height: 52,
+    borderRadius: 16,
+    backgroundColor: theme.colors.primary,
+    justifyContent: 'center',
+    alignItems: 'center',
+    flexDirection: 'row',
+  },
+  customStartButtonText: {
+    marginLeft: 8,
+    color: '#FFFFFF',
+    fontWeight: '900',
+    fontSize: 14,
+  },
+  startFocusButton: {
+    height: 52,
+    borderRadius: 16,
+    backgroundColor: theme.colors.primary,
+    justifyContent: 'center',
+    alignItems: 'center',
+    flexDirection: 'row',
+    marginTop: 14,
+  },
+  startIconBubble: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: theme.colors.surface,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 8,
+  },
+  startFocusButtonText: {
+    color: '#FFFFFF',
+    fontWeight: '900',
+    fontSize: 15,
   },
   timerCard: {
     backgroundColor: theme.colors.surface,
@@ -2395,163 +3927,519 @@ const styles = StyleSheet.create({
     borderColor: theme.colors.border,
     ...theme.shadow,
   },
-  timerTopRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
+  focusBlockOverlayScroll: {
+    flex: 1,
+    backgroundColor: 'rgba(18, 25, 31, 0.68)',
+  },
+  focusBlockOverlay: {
+    flexGrow: 1,
+    justifyContent: 'center',
     alignItems: 'center',
+    paddingHorizontal: 22,
+    paddingVertical: 28,
   },
-  timerLabel: {
-    color: theme.colors.primaryDark,
-    fontWeight: '900',
-    fontSize: 12,
+  focusBlockCard: {
+    width: '100%',
+    maxWidth: 340,
+    borderRadius: 30,
+    backgroundColor: theme.colors.surface,
+    paddingTop: 22,
+    paddingHorizontal: 18,
+    paddingBottom: 18,
+    borderWidth: 1,
+    borderColor: '#EDF4EA',
+    overflow: 'hidden',
+    ...theme.shadow,
   },
-  timerTitle: {
-    marginTop: 3,
-    color: theme.colors.text,
-    fontSize: 20,
-    fontWeight: '900',
+  focusBlockCardCompact: {
+    maxWidth: 316,
+    borderRadius: 26,
+    paddingTop: 18,
+    paddingHorizontal: 16,
+    paddingBottom: 14,
   },
-  sessionBadge: {
+  focusModalLeafOne: {
+    position: 'absolute',
+    left: 32,
+    top: 96,
+    width: 12,
+    height: 7,
+    borderRadius: 8,
+    backgroundColor: '#BDE6B8',
+    transform: [{ rotate: '-22deg' }],
+  },
+  focusModalLeafTwo: {
+    position: 'absolute',
+    right: 38,
+    top: 80,
+    width: 11,
+    height: 7,
+    borderRadius: 8,
+    backgroundColor: '#C9EFC7',
+    transform: [{ rotate: '-38deg' }],
+  },
+  focusModalLeafThree: {
+    position: 'absolute',
+    right: 40,
+    top: 248,
+    width: 13,
+    height: 8,
+    borderRadius: 8,
+    backgroundColor: '#C6EBC3',
+    transform: [{ rotate: '-24deg' }],
+  },
+  focusBlockStatusPill: {
+    alignSelf: 'center',
+    borderRadius: theme.radius.pill,
     backgroundColor: theme.colors.primarySoft,
-    borderRadius: 999,
-    paddingHorizontal: 12,
+    paddingHorizontal: 16,
     paddingVertical: 8,
     flexDirection: 'row',
     alignItems: 'center',
   },
-  sessionBadgeText: {
-    marginLeft: 5,
+  focusBlockStatusText: {
+    marginLeft: 8,
+    color: theme.colors.primaryDark,
+    fontWeight: '900',
+    fontSize: 14,
+  },
+  focusBlockMiloImage: {
+    position: 'absolute',
+    left: 17,
+    bottom: -4,
+    width: 106,
+    height: 106,
+    zIndex: 2,
+  },
+  focusBlockTimer: {
+    marginTop: 17,
+    color: '#176D3A',
+    fontSize: 58,
+    fontWeight: '900',
+    textAlign: 'center',
+  },
+  focusBlockTimerCompact: {
+    marginTop: 12,
+    fontSize: 48,
+  },
+  focusBlockPresetIcon: {
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    backgroundColor: theme.colors.primarySoft,
+    justifyContent: 'center',
+    alignItems: 'center',
+    alignSelf: 'center',
+    marginTop: 8,
+  },
+  focusBlockPresetIconCompact: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    marginTop: 6,
+  },
+  focusBlockPresetName: {
+    marginTop: 7,
+    color: theme.colors.text,
+    fontWeight: '900',
+    fontSize: 22,
+    textAlign: 'center',
+  },
+  focusBlockPresetNameCompact: {
+    marginTop: 5,
+    fontSize: 19,
+  },
+  focusBlockTaskChip: {
+    alignSelf: 'stretch',
+    justifyContent: 'center',
+    marginTop: 8,
+    borderRadius: theme.radius.pill,
+    backgroundColor: theme.colors.primarySoft,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  focusBlockTaskText: {
+    flexShrink: 1,
+    minWidth: 0,
+    marginLeft: 7,
+    color: theme.colors.text,
+    fontWeight: '900',
+    fontSize: 13,
+  },
+  focusBlockCycleArea: {
+    marginTop: 14,
+  },
+  focusBlockCycleText: {
+    color: theme.colors.primaryDark,
+    fontWeight: '900',
+    fontSize: 15,
+    textAlign: 'center',
+  },
+  focusBlockDotsRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: 10,
+    paddingHorizontal: 10,
+  },
+  focusBlockDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#DDE3EC',
+    marginHorizontal: 3,
+  },
+  focusBlockDotActive: {
+    backgroundColor: theme.colors.primaryDark,
+  },
+  focusBlockMessageStage: {
+    height: 108,
+    marginHorizontal: -18,
+    marginTop: 9,
+    overflow: 'hidden',
+  },
+  focusBlockMessageStageCompact: {
+    height: 92,
+    marginHorizontal: -16,
+    marginTop: 7,
+  },
+  focusBlockMessageHillBack: {
+    position: 'absolute',
+    left: -20,
+    right: -20,
+    bottom: -22,
+    height: 62,
+    borderTopLeftRadius: 120,
+    borderTopRightRadius: 120,
+    backgroundColor: '#DDF5D8',
+  },
+  focusBlockMessageHillFront: {
+    position: 'absolute',
+    left: 78,
+    right: -38,
+    bottom: -16,
+    height: 48,
+    borderTopLeftRadius: 120,
+    borderTopRightRadius: 90,
+    backgroundColor: '#CBEFC4',
+  },
+  focusBlockMiloMessage: {
+    position: 'absolute',
+    right: 31,
+    bottom: 20,
+    width: 139,
+    minHeight: 54,
+    borderRadius: 16,
+    backgroundColor: '#F7FCF7',
+    borderWidth: 1,
+    borderColor: '#D9EADA',
+    justifyContent: 'center',
+    paddingHorizontal: 15,
+    paddingVertical: 10,
+    zIndex: 3,
+  },
+  focusBlockMiloImageCompact: {
+    left: 14,
+    width: 92,
+    height: 92,
+  },
+  focusBlockMiloMessageCompact: {
+    right: 19,
+    bottom: 18,
+    width: 132,
+    minHeight: 50,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  focusBlockMiloMessageText: {
+    color: theme.colors.textSoft,
+    fontWeight: '800',
+    lineHeight: 18,
+    fontSize: 12,
+  },
+  focusBlockPrimaryButton: {
+    height: 58,
+    borderRadius: 29,
+    backgroundColor: theme.colors.primary,
+    justifyContent: 'center',
+    alignItems: 'center',
+    flexDirection: 'row',
+    marginTop: 14,
+  },
+  focusBlockPrimaryButtonCompact: {
+    height: 52,
+    marginTop: 10,
+  },
+  focusBlockPrimaryIcon: {
+    width: 33,
+    height: 33,
+    borderRadius: 16.5,
+    backgroundColor: theme.colors.surface,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 13,
+  },
+  focusBlockPrimaryButtonText: {
+    color: '#FFFFFF',
+    fontWeight: '900',
+    fontSize: 18,
+  },
+  focusBlockSecondaryRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    marginTop: 16,
+  },
+  focusBlockSecondaryRowCompact: {
+    marginTop: 12,
+  },
+  focusBlockSecondaryButton: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  focusBlockSecondaryIconCircle: {
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    backgroundColor: theme.colors.surface,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    justifyContent: 'center',
+    alignItems: 'center',
+    ...theme.shadowSoft,
+  },
+  focusBlockSecondaryButtonText: {
+    marginTop: 9,
+    color: theme.colors.text,
+    fontWeight: '800',
+    fontSize: 13,
+  },
+  timerEditorOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(34, 40, 49, 0.45)',
+    justifyContent: 'flex-end',
+    alignItems: 'center',
+    paddingHorizontal: 14,
+  },
+  timerEditorSheet: {
+    width: '100%',
+    maxWidth: 430,
+    borderTopLeftRadius: theme.radius.xl,
+    borderTopRightRadius: theme.radius.xl,
+    backgroundColor: theme.colors.surface,
+    paddingHorizontal: 18,
+    paddingTop: 10,
+    paddingBottom: 18,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    ...theme.shadow,
+  },
+  timerEditorHandle: {
+    alignSelf: 'center',
+    width: 44,
+    height: 5,
+    borderRadius: theme.radius.pill,
+    backgroundColor: theme.colors.border,
+    marginBottom: 14,
+  },
+  timerEditorHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+  },
+  timerEditorLabel: {
     color: theme.colors.primaryDark,
     fontWeight: '900',
     fontSize: 12,
   },
-  focusTaskStrip: {
-    marginTop: 16,
-    borderRadius: theme.radius.lg,
-    backgroundColor: theme.colors.backgroundSoft,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    padding: 12,
+  timerEditorTitle: {
+    marginTop: 3,
+    color: theme.colors.text,
+    fontWeight: '900',
+    fontSize: 20,
+  },
+  timerEditorBadge: {
+    borderRadius: theme.radius.pill,
+    backgroundColor: theme.colors.primarySoft,
+    paddingHorizontal: 11,
+    paddingVertical: 7,
     flexDirection: 'row',
     alignItems: 'center',
   },
-  focusTaskIcon: {
-    width: 38,
-    height: 38,
-    borderRadius: 14,
-    backgroundColor: theme.colors.primarySoft,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 10,
-  },
-  focusTaskTextArea: {
-    flex: 1,
-  },
-  focusTaskLabel: {
+  timerEditorBadgeText: {
+    marginLeft: 5,
     color: theme.colors.primaryDark,
     fontWeight: '900',
     fontSize: 11,
   },
-  focusTaskTitle: {
+  timerEditorFields: {
     marginTop: 2,
+  },
+  presetNameField: {
+    borderRadius: theme.radius.lg,
+    backgroundColor: theme.colors.backgroundSoft,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    padding: 11,
+    marginBottom: 10,
+  },
+  presetNameInput: {
+    height: 42,
+    marginTop: 8,
+    borderRadius: theme.radius.md,
+    backgroundColor: theme.colors.surface,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
     color: theme.colors.text,
     fontWeight: '900',
-    fontSize: 15,
+    fontSize: 16,
+    paddingHorizontal: 12,
+    paddingVertical: 0,
   },
-  focusTaskHelper: {
+  presetManagerHint: {
+    marginTop: 7,
+    color: theme.colors.muted,
+    fontWeight: '700',
+    fontSize: 11,
+  },
+  savedPresetList: {
+    borderRadius: theme.radius.lg,
+    backgroundColor: theme.colors.primarySoft,
+    padding: 10,
+    marginBottom: 12,
+  },
+  savedPresetRow: {
+    minHeight: 42,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    borderRadius: theme.radius.md,
+    backgroundColor: 'rgba(255, 255, 255, 0.55)',
+    paddingLeft: 10,
+    paddingRight: 6,
+    marginBottom: 7,
+  },
+  savedPresetInfo: {
+    flex: 1,
+    minWidth: 0,
+    marginRight: 10,
+  },
+  savedPresetName: {
+    color: theme.colors.text,
+    fontWeight: '900',
+    fontSize: 12,
+  },
+  savedPresetSummary: {
+    marginTop: 3,
+    color: theme.colors.primaryDark,
+    fontWeight: '900',
+    fontSize: 11,
+  },
+  timerEditorField: {
+    borderRadius: theme.radius.lg,
+    backgroundColor: theme.colors.backgroundSoft,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    padding: 11,
+    marginBottom: 10,
+  },
+  timerEditorFieldTopRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  timerEditorFieldLabel: {
+    color: theme.colors.text,
+    fontWeight: '900',
+    fontSize: 13,
+  },
+  timerEditorFieldHint: {
     marginTop: 3,
     color: theme.colors.muted,
     fontWeight: '700',
     fontSize: 11,
   },
-  timerCircle: {
-    width: 210,
-    height: 210,
-    borderRadius: 105,
-    backgroundColor: theme.colors.primarySoft,
-    alignSelf: 'center',
-    marginTop: 24,
-    marginBottom: 20,
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 10,
-    borderColor: '#FFFFFF',
-  },
-  timerText: {
-    color: theme.colors.text,
-    fontSize: 48,
-    fontWeight: '900',
-    letterSpacing: -1,
-  },
-  timerSubText: {
-    marginTop: 4,
-    color: theme.colors.primaryDark,
-    fontWeight: '900',
-  },
-  progressTrack: {
-    height: 12,
-    borderRadius: 999,
-    backgroundColor: theme.colors.background,
-    overflow: 'hidden',
-    marginBottom: 18,
-  },
-  progressFill: {
-    height: '100%',
-    borderRadius: 999,
-    backgroundColor: theme.colors.primary,
-  },
-  buttonRow: {
+  timerEditorInputWrap: {
+    width: 126,
+    height: 42,
+    borderRadius: theme.radius.md,
+    backgroundColor: theme.colors.surface,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
     flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 8,
   },
-  mainButton: {
+  timerEditorInput: {
     flex: 1,
-    height: 56,
-    borderRadius: theme.radius.md,
-    backgroundColor: theme.colors.primary,
-    justifyContent: 'center',
-    alignItems: 'center',
-    flexDirection: 'row',
-    marginRight: 10,
-  },
-  pauseButton: {
-    backgroundColor: theme.colors.yellow,
-  },
-  mainButtonText: {
-    marginLeft: 8,
-    color: '#FFFFFF',
+    color: theme.colors.text,
     fontWeight: '900',
-    fontSize: 15,
+    fontSize: 17,
+    paddingVertical: 0,
+    textAlign: 'center',
   },
-  resetButton: {
-    width: 88,
-    height: 56,
-    borderRadius: theme.radius.md,
-    backgroundColor: theme.colors.primarySoft,
+  timerEditorInputUnit: {
+    color: theme.colors.muted,
+    fontWeight: '800',
+    fontSize: 11,
+    minWidth: 38,
+    textAlign: 'right',
+  },
+  timerEditorAdjustRow: {
+    flexDirection: 'row',
+    marginTop: 9,
+  },
+  timerEditorAdjustButton: {
+    flex: 1,
+    height: 34,
+    borderRadius: theme.radius.pill,
+    backgroundColor: theme.colors.surface,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
     justifyContent: 'center',
     alignItems: 'center',
-    flexDirection: 'row',
-    marginRight: 8,
+    marginRight: 6,
   },
-  resetButtonText: {
-    marginLeft: 6,
+  timerEditorAdjustText: {
     color: theme.colors.primaryDark,
     fontWeight: '900',
+    fontSize: 12,
   },
-  skipButton: {
-    width: 82,
-    height: 56,
+  timerEditorActionRow: {
+    flexDirection: 'row',
+    marginTop: 2,
+  },
+  timerEditorCancelButton: {
+    flex: 1,
+    height: 48,
     borderRadius: theme.radius.md,
     backgroundColor: theme.colors.backgroundSoft,
     borderWidth: 1,
     borderColor: theme.colors.border,
     justifyContent: 'center',
     alignItems: 'center',
-    flexDirection: 'row',
+    marginRight: 10,
   },
-  skipButtonText: {
-    marginLeft: 5,
+  timerEditorCancelText: {
     color: theme.colors.textSoft,
     fontWeight: '900',
+    fontSize: 14,
+  },
+  timerEditorSaveButton: {
+    flex: 1,
+    height: 48,
+    borderRadius: theme.radius.md,
+    backgroundColor: theme.colors.primary,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  timerEditorSaveText: {
+    color: '#FFFFFF',
+    fontWeight: '900',
+    fontSize: 14,
   },
   modalOverlay: {
     flex: 1,
@@ -2569,6 +4457,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: theme.colors.border,
     ...theme.shadow,
+  },
+  taskPickerModalCard: {
+    maxHeight: '82%',
   },
   modalAccentBar: {
     height: 5,
@@ -2632,11 +4523,12 @@ const styles = StyleSheet.create({
     fontSize: 14,
   },
   taskPickerList: {
-    maxHeight: 260,
+    maxHeight: 248,
     marginTop: 14,
+    flexShrink: 1,
   },
   taskPickerListContent: {
-    paddingBottom: 2,
+    paddingBottom: 4,
   },
   taskPickerItem: {
     minHeight: 66,
