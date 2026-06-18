@@ -8,6 +8,7 @@ import { MiloSmartPlanStep, Subtask } from '../types/task';
 import { theme } from '../theme';
 import { useTasks } from '../lib/TaskContext';
 import { getMiloReaction } from '../lib/miloReaction';
+import { openLocationInMaps } from '../lib/mapUtils';
 import {
   calculateMiloUrgency,
   generateMiloSmartNudges,
@@ -354,6 +355,7 @@ export default function TaskDetailsScreen({ navigation, route }: Props) {
   const miloUrgency = task.miloUrgency || calculateMiloUrgency(task);
   const smartNudges = task.miloSmartNudges || generateMiloSmartNudges(task);
   const joinUrl = extractUrl(task.description, task.location);
+  const taskLocation = task.location?.trim() || '';
 
   const heroMessage =
     task.status === 'completed'
@@ -539,6 +541,27 @@ export default function TaskDetailsScreen({ navigation, route }: Props) {
     navigation.navigate('MiloPlan', { taskId: task.id });
   };
 
+  const handleOpenMaps = () => {
+    if (!taskLocation) {
+      return;
+    }
+
+    Alert.alert(
+      'Open in Google Maps?',
+      'FocusMate will open this location outside the app.',
+      [
+        {
+          text: 'Cancel',
+          style: 'cancel',
+        },
+        {
+          text: 'Open Maps',
+          onPress: () => void openLocationInMaps(taskLocation),
+        },
+      ]
+    );
+  };
+
   const handleMiddleAction = () => {
     handleToggleTask();
   };
@@ -598,6 +621,37 @@ export default function TaskDetailsScreen({ navigation, route }: Props) {
           last
         />
       </View>
+
+      {taskLocation ? (
+        <View style={styles.locationCard}>
+          <View style={styles.locationIconWrap}>
+            <Ionicons
+              name="location-outline"
+              size={18}
+              color={theme.colors.primaryDark}
+            />
+          </View>
+          <View style={styles.locationCopy}>
+            <Text numberOfLines={1} style={styles.locationLabel}>
+              Place
+            </Text>
+            <Text numberOfLines={2} style={styles.locationValue}>
+              {taskLocation}
+            </Text>
+          </View>
+          <TouchableOpacity
+            activeOpacity={0.84}
+            style={styles.openMapsButton}
+            onPress={handleOpenMaps}
+            accessibilityRole="button"
+            accessibilityLabel={`Open ${taskLocation} in Maps`}
+          >
+            <Text numberOfLines={1} style={styles.openMapsButtonText}>
+              Open Maps
+            </Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
 
       {task.conflictAccepted ? (
         <View style={styles.conflictFocusCard}>
@@ -938,6 +992,59 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     lineHeight: 15,
     textAlign: 'center',
+  },
+  locationCard: {
+    minHeight: 64,
+    borderRadius: 18,
+    backgroundColor: theme.colors.surface,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 10,
+    marginBottom: 10,
+    ...theme.shadowSoft,
+  },
+  locationIconWrap: {
+    width: 38,
+    height: 38,
+    borderRadius: 15,
+    backgroundColor: theme.colors.primarySoft,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 10,
+  },
+  locationCopy: {
+    flex: 1,
+    minWidth: 0,
+    paddingRight: 8,
+  },
+  locationLabel: {
+    color: theme.colors.primaryDark,
+    fontSize: 10,
+    fontWeight: '900',
+  },
+  locationValue: {
+    marginTop: 3,
+    color: theme.colors.text,
+    fontSize: 12,
+    fontWeight: '900',
+    lineHeight: 17,
+  },
+  openMapsButton: {
+    minHeight: 34,
+    borderRadius: 17,
+    backgroundColor: theme.colors.primarySoft,
+    borderWidth: 1,
+    borderColor: '#CFEFDA',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 10,
+  },
+  openMapsButtonText: {
+    color: theme.colors.primaryDark,
+    fontSize: 11,
+    fontWeight: '900',
   },
   tabControl: {
     flexDirection: 'row',

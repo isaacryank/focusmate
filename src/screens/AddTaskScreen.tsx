@@ -821,6 +821,27 @@ export default function AddTaskScreen({ navigation }: Props) {
   const dateLabel = formatScheduleDate(dueDate);
   const durationLabel = formatDurationLabel(estimatedDurationMinutes);
   const locationLabel = location.trim();
+  const recentLocations = useMemo(() => {
+    const seenLocations = new Set<string>();
+
+    return tasks
+      .map((task) => task.location?.trim())
+      .filter((taskLocation): taskLocation is string => {
+        if (!taskLocation) {
+          return false;
+        }
+
+        const normalizedLocation = taskLocation.toLowerCase();
+
+        if (seenLocations.has(normalizedLocation)) {
+          return false;
+        }
+
+        seenLocations.add(normalizedLocation);
+        return true;
+      })
+      .slice(0, 5);
+  }, [tasks]);
   const hasScheduleConflict =
     conflictInfo?.level === 'hard' ||
     conflictInfo?.level === 'soft' ||
@@ -1554,7 +1575,7 @@ export default function AddTaskScreen({ navigation }: Props) {
                 {scheduleSheet === 'duration'
                   ? 'Estimated Duration'
                   : scheduleSheet === 'location'
-                  ? 'Location'
+                  ? 'Set Location'
                   : 'Final Reminder'}
               </Text>
               <TouchableOpacity
@@ -1625,36 +1646,39 @@ export default function AddTaskScreen({ navigation }: Props) {
 
             {scheduleSheet === 'location' ? (
               <>
+                <Text style={styles.locationHelperText}>
+                  Type a place name or address. FocusMate will save it with this task.
+                </Text>
                 <TextInput
                   value={locationDraft}
                   onChangeText={setLocationDraft}
-                  placeholder="KLCC Hall B, Google Meet, Online"
+                  placeholder="e.g. UTeM FTMK, clinic, office, café"
                   placeholderTextColor={theme.colors.muted}
                   style={styles.sheetTextInput}
                 />
-                <View style={styles.locationQuickRow}>
-                  {['Online', 'Google Meet', 'Library Study Room'].map((item) => (
-                    <TouchableOpacity
-                      key={item}
-                      activeOpacity={0.85}
-                      style={styles.quickPill}
-                      onPress={() => setLocationDraft(item)}
-                    >
-                      <Text style={styles.quickPillText}>{item}</Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
+                {recentLocations.length > 0 ? (
+                  <View style={styles.locationQuickRow}>
+                    {recentLocations.map((item) => (
+                      <TouchableOpacity
+                        key={item}
+                        activeOpacity={0.85}
+                        style={styles.quickPill}
+                        onPress={() => setLocationDraft(item)}
+                      >
+                        <Text numberOfLines={1} style={styles.quickPillText}>
+                          {item}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                ) : null}
                 <View style={styles.sheetActionRow}>
                   <SecondaryButton
-                    title="Clear"
-                    onPress={() => {
-                      setLocation('');
-                      setLocationDraft('');
-                      setScheduleSheet(null);
-                    }}
+                    title="Cancel"
+                    onPress={() => setScheduleSheet(null)}
                   />
                   <View style={styles.footerPrimary}>
-                    <PrimaryButton title="Save place" onPress={applyLocation} />
+                    <PrimaryButton title="Save Location" onPress={applyLocation} />
                   </View>
                 </View>
               </>
@@ -2312,6 +2336,13 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '800',
     paddingHorizontal: 13,
+  },
+  locationHelperText: {
+    color: theme.colors.textSoft,
+    fontSize: 12,
+    fontWeight: '700',
+    lineHeight: 18,
+    marginBottom: 10,
   },
   locationQuickRow: {
     flexDirection: 'row',

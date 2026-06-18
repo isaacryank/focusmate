@@ -18,6 +18,7 @@ import { theme } from '../theme';
 import { useTasks } from '../lib/TaskContext';
 import { PlannerType, Task } from '../types/task';
 import { getTaskUrgency } from '../lib/taskUrgency';
+import { openLocationInMaps } from '../lib/mapUtils';
 
 const miloFocusedImage = require('../../assets/mascot/milo_focused.png');
 const miloWavingImage = require('../../assets/mascot/milo_waving.png');
@@ -104,11 +105,13 @@ function TaskCard({
   onToggle,
   onDelete,
   onOpen,
+  onOpenMaps,
 }: {
   task: Task;
   onToggle: () => void;
   onDelete: () => void;
   onOpen: () => void;
+  onOpenMaps: () => void;
 }) {
   const isCompleted = task.status === 'completed';
   const typeConfig = getTypeConfig(task.plannerType);
@@ -204,6 +207,30 @@ function TaskCard({
               <Text style={styles.dateText}>
                 {completedChecklistCount}/{checklistCount}
               </Text>
+            </View>
+          ) : null}
+
+          {task.location ? (
+            <View style={styles.locationActionRow}>
+              <View style={styles.locationPill}>
+                <Ionicons
+                  name="location-outline"
+                  size={13}
+                  color={theme.colors.primaryDark}
+                />
+                <Text numberOfLines={1} style={styles.locationText}>
+                  {task.location}
+                </Text>
+              </View>
+              <TouchableOpacity
+                activeOpacity={0.82}
+                style={styles.mapsButton}
+                onPress={onOpenMaps}
+                accessibilityRole="button"
+                accessibilityLabel={`Open ${task.location} in Maps`}
+              >
+                <Text style={styles.mapsButtonText}>Open Maps</Text>
+              </TouchableOpacity>
             </View>
           ) : null}
         </View>
@@ -310,6 +337,29 @@ export default function TasksScreen() {
     );
   };
 
+  const confirmOpenMaps = (location?: string) => {
+    const trimmedLocation = location?.trim();
+
+    if (!trimmedLocation) {
+      return;
+    }
+
+    Alert.alert(
+      'Open in Google Maps?',
+      'FocusMate will open this location outside the app.',
+      [
+        {
+          text: 'Cancel',
+          style: 'cancel',
+        },
+        {
+          text: 'Open Maps',
+          onPress: () => void openLocationInMaps(trimmedLocation),
+        },
+      ]
+    );
+  };
+
   return (
     <View style={styles.screen}>
       <LinearGradient
@@ -403,6 +453,7 @@ export default function TasksScreen() {
             onToggle={() => toggleTask(item.id)}
             onDelete={() => confirmDelete(item)}
             onOpen={() => navigation.navigate('TaskDetails', { taskId: item.id })}
+            onOpenMaps={() => confirmOpenMaps(item.location)}
           />
         )}
         ListEmptyComponent={
@@ -672,6 +723,49 @@ const styles = StyleSheet.create({
     color: theme.colors.muted,
     fontSize: 12,
     fontWeight: '700',
+  },
+  locationActionRow: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 5,
+    marginBottom: 2,
+  },
+  locationPill: {
+    flex: 1,
+    minWidth: 0,
+    minHeight: 30,
+    borderRadius: 15,
+    backgroundColor: theme.colors.primarySoft,
+    borderWidth: 1,
+    borderColor: '#CFEFDA',
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 9,
+    marginRight: 8,
+  },
+  locationText: {
+    flex: 1,
+    minWidth: 0,
+    marginLeft: 4,
+    color: theme.colors.primaryDark,
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  mapsButton: {
+    minHeight: 30,
+    borderRadius: 15,
+    backgroundColor: theme.colors.surface,
+    borderWidth: 1,
+    borderColor: '#DBE7DB',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 10,
+  },
+  mapsButtonText: {
+    color: theme.colors.primaryDark,
+    fontSize: 11,
+    fontWeight: '900',
   },
   deleteButton: {
     width: 36,
