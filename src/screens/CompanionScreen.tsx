@@ -9,11 +9,13 @@ import React, {
 import {
   Animated,
   Image,
+  Linking,
   Modal,
   ScrollView,
   StyleSheet,
   type StyleProp,
   Text,
+  TextInput,
   TouchableOpacity,
   useWindowDimensions,
   View,
@@ -46,6 +48,17 @@ import {
   type MiloSituationKind,
   type MiloTaskSituation,
 } from '../lib/miloSituationIntelligence';
+import {
+  deleteSavedResource,
+  loadSavedResources,
+  saveResource,
+  type SavedResource,
+} from '../lib/resourceFinderStorage';
+import {
+  buildGoogleSearchUrl,
+  buildResourceSearchQuery,
+  generateResourceKeywords,
+} from '../lib/resourceFinderUtils';
 import { Task } from '../types/task';
 
 import ScreenContainer from '../components/ui/ScreenContainer';
@@ -54,7 +67,13 @@ import MiloMoodImage from '../components/milo/MiloMoodImage';
 type IconName = React.ComponentProps<typeof Ionicons>['name'];
 
 type MiloVideoKey = 'idle' | 'greeting';
-type CompanionDetailModal = 'analytics' | 'sessions' | 'reaction' | 'talk';
+type CompanionDetailModal =
+  | 'analytics'
+  | 'sessions'
+  | 'reaction'
+  | 'talk'
+  | 'resources';
+type ResourceFinderMode = 'finder' | 'save' | 'saved';
 
 const TEMPORARY_MILO_REACTION_MS = 6500;
 const MILO_INACTIVITY_AUTOPLAY_MS = 30000;
@@ -433,8 +452,30 @@ function formatSessionDateTime(value: string, todayDate: string) {
   return `${formatSessionDate(value, todayDate)}, ${formatSessionTime(value)}`;
 }
 
+function formatResourceDate(value: string) {
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return 'Saved recently';
+  }
+
+  const month = date.toLocaleString('en-US', { month: 'short' });
+
+  return `${month} ${date.getDate()}`;
+}
+
 function formatFocusQuality(value: FocusSessionHistoryItem['focusQuality']) {
   return value === 'clean' ? 'Clean' : 'Distracted';
+}
+
+function getOpenableResourceUrl(value: string) {
+  const trimmedValue = value.trim();
+
+  if (/^https?:\/\//i.test(trimmedValue)) {
+    return trimmedValue;
+  }
+
+  return `https://${trimmedValue}`;
 }
 
 function getDerivedSessionScore(session: FocusSessionHistoryItem) {
@@ -1061,6 +1102,19 @@ export default function CompanionScreen() {
   const [videoFailed, setVideoFailed] = useState(false);
   const [activeDetailModal, setActiveDetailModal] =
     useState<CompanionDetailModal | null>(null);
+  const [resourceFinderMode, setResourceFinderMode] =
+    useState<ResourceFinderMode>('finder');
+  const [selectedResourceTaskId, setSelectedResourceTaskId] = useState<
+    string | null
+  >(null);
+  const [selectedResourceKeywords, setSelectedResourceKeywords] = useState<
+    string[]
+  >([]);
+  const [savedResources, setSavedResources] = useState<SavedResource[]>([]);
+  const [resourceTitle, setResourceTitle] = useState('');
+  const [resourceUrl, setResourceUrl] = useState('');
+  const [resourceNote, setResourceNote] = useState('');
+  const [resourceFinderMessage, setResourceFinderMessage] = useState('');
 
   const idlePlayer = useVideoPlayer(miloIdleVideo, (player) => {
     player.loop = false;
@@ -1107,6 +1161,14 @@ export default function CompanionScreen() {
     }
   }, []);
 
+  const refreshSavedResources = useCallback(async () => {
+    const nextResources = await loadSavedResources();
+
+    if (mountedRef.current) {
+      setSavedResources(nextResources);
+    }
+  }, []);
+
   const openDetailModal = useCallback(
     async (modal: CompanionDetailModal) => {
       try {
@@ -1134,6 +1196,12 @@ export default function CompanionScreen() {
       setActiveDetailModal(null);
     }
   }, []);
+
+  useEffect(() => {
+    if (activeDetailModal === 'resources') {
+      void refreshSavedResources();
+    }
+  }, [activeDetailModal, refreshSavedResources]);
 
   const companionData = useMemo(() => {
     const now = new Date();
@@ -1205,6 +1273,55 @@ export default function CompanionScreen() {
       mood,
     };
   }, [displayName, tasks, todayDate]);
+
+  const resourceFinderTasks = useMemo(
+    () =>
+      [...tasks].sort((first, second) => {
+        if (first.status !== second.status) {
+          return first.status === 'pending' ? -1 : 1;
+        }
+
+        return first.title.localeCompare(second.title);
+      }),
+    [tasks]
+  );
+  const selectedResourceTask = useMemo(
+    () =>
+      resourceFinderTasks.find((task) => task.id === selectedResourceTaskId) ||
+      null,
+    [resourceFinderTasks, selectedResourceTaskId]
+  );
+  const resourceKeywords = useMemo(
+    () =>
+      selectedResourceTask
+        ? generateResourceKeywords(selectedResourceTask)
+        : [],
+    [selectedResourceTask]
+  );
+  const selectedResourceKeywordSet = useMemo(
+    () => new Set(selectedResourceKeywords),
+    [selectedResourceKeywords]
+  );
+  const activeResourceKeywords = useMemo(
+    () =>
+      resourceKeywords.filter((keyword) =>
+        selectedResourceKeywordSet.has(keyword)
+      ),
+    [resourceKeywords, selectedResourceKeywordSet]
+  );
+
+  useEffect(() => {
+    if (
+      selectedResourceTaskId &&
+      !resourceFinderTasks.some((task) => task.id === selectedResourceTaskId)
+    ) {
+      setSelectedResourceTaskId(null);
+    }
+  }, [resourceFinderTasks, selectedResourceTaskId]);
+
+  useEffect(() => {
+    setSelectedResourceKeywords(resourceKeywords);
+  }, [resourceKeywords]);
 
   const focusAnalytics = useMemo(
     () => createFocusAnalytics(focusHistory, todayDate),
@@ -1593,6 +1710,117 @@ export default function CompanionScreen() {
     navigation.navigate('FocusSession');
   };
 
+  const handleSelectResourceTask = async (taskId: string) => {
+    try {
+      await Haptics.selectionAsync();
+    } catch {
+      // Task selection should still work on devices where haptics are unavailable.
+    }
+
+    const nextTask = resourceFinderTasks.find((task) => task.id === taskId);
+
+    setSelectedResourceTaskId(taskId);
+    setSelectedResourceKeywords(
+      nextTask ? generateResourceKeywords(nextTask) : []
+    );
+    setResourceFinderMode('finder');
+    setResourceFinderMessage('');
+  };
+
+  const handleToggleResourceKeyword = (keyword: string) => {
+    const isSelected = selectedResourceKeywordSet.has(keyword);
+    const nextKeywords = isSelected
+      ? selectedResourceKeywords.filter(
+          (currentKeyword) => currentKeyword !== keyword
+        )
+      : [...selectedResourceKeywords, keyword];
+
+    setSelectedResourceKeywords(nextKeywords);
+    setResourceFinderMessage(
+      nextKeywords.length === 0
+        ? 'Pick at least one keyword for Milo to search.'
+        : ''
+    );
+  };
+
+  const handleSearchResourceWeb = async () => {
+    if (!selectedResourceTask) {
+      setResourceFinderMessage('Choose a task first so Milo knows what to find.');
+      return;
+    }
+
+    if (activeResourceKeywords.length === 0) {
+      setResourceFinderMessage('Pick at least one keyword for Milo to search.');
+      return;
+    }
+
+    const query = buildResourceSearchQuery(activeResourceKeywords);
+
+    try {
+      await Linking.openURL(buildGoogleSearchUrl(query));
+      setResourceFinderMessage('Milo opened a Google search for this task.');
+    } catch (error) {
+      console.warn('Failed to open resource search:', error);
+      setResourceFinderMessage('Milo could not open the web search right now.');
+    }
+  };
+
+  const handleShowSaveResource = () => {
+    setResourceFinderMode('save');
+    setResourceFinderMessage('Paste a useful link and Milo will keep it here.');
+  };
+
+  const handleOpenSavedResources = async () => {
+    setResourceFinderMode('saved');
+    setResourceFinderMessage('');
+    await refreshSavedResources();
+  };
+
+  const handleSaveResource = async () => {
+    const trimmedTitle = resourceTitle.trim();
+    const trimmedUrl = resourceUrl.trim();
+
+    if (!trimmedTitle || !trimmedUrl) {
+      setResourceFinderMessage('Add a resource title and URL before saving.');
+      return;
+    }
+
+    const nextResources = await saveResource({
+      taskId: selectedResourceTask?.id,
+      taskTitle: selectedResourceTask?.title,
+      resourceTitle: trimmedTitle,
+      resourceUrl: getOpenableResourceUrl(trimmedUrl),
+      note: resourceNote.trim() || undefined,
+    });
+
+    if (!mountedRef.current) return;
+
+    setSavedResources(nextResources);
+    setResourceTitle('');
+    setResourceUrl('');
+    setResourceNote('');
+    setResourceFinderMode('saved');
+    setResourceFinderMessage('Saved locally. Milo will remember this resource.');
+  };
+
+  const handleOpenResource = async (resource: SavedResource) => {
+    try {
+      await Linking.openURL(getOpenableResourceUrl(resource.resourceUrl));
+    } catch (error) {
+      console.warn('Failed to open saved resource:', error);
+      setResourceFinderMessage('Milo could not open that resource right now.');
+    }
+  };
+
+  const handleDeleteSavedResource = async (resourceId: string) => {
+    const nextResources = await deleteSavedResource(resourceId);
+
+    if (mountedRef.current) {
+      setSavedResources(nextResources);
+      setResourceFinderMessage('Resource removed from Milo Resource Finder.');
+    }
+  };
+
   const detailModalTitle =
     activeDetailModal === 'analytics'
       ? 'Focus Analytics'
@@ -1602,6 +1830,8 @@ export default function CompanionScreen() {
       ? "Milo's Focus Reaction"
       : activeDetailModal === 'talk'
       ? 'Talk with Milo'
+      : activeDetailModal === 'resources'
+      ? 'Milo Resource Finder'
       : '';
   const modalMaxHeight = Math.max(360, height - 72);
 
@@ -2027,11 +2257,317 @@ export default function CompanionScreen() {
     </View>
   );
 
+  const renderResourceTaskList = () => (
+    <View style={styles.resourceTaskList}>
+      {resourceFinderTasks.map((task) => {
+        const isSelected = task.id === selectedResourceTaskId;
+
+        return (
+          <TouchableOpacity
+            key={task.id}
+            activeOpacity={0.84}
+            style={[
+              styles.resourceTaskChip,
+              isSelected && styles.resourceTaskChipSelected,
+            ]}
+            onPress={() => void handleSelectResourceTask(task.id)}
+            accessibilityRole="button"
+            accessibilityLabel={`Choose ${task.title} for resource search`}
+          >
+            <Text
+              numberOfLines={1}
+              style={[
+                styles.resourceTaskTitle,
+                isSelected && styles.resourceTaskTitleSelected,
+              ]}
+            >
+              {task.title}
+            </Text>
+            <Text
+              numberOfLines={1}
+              style={[
+                styles.resourceTaskMeta,
+                isSelected && styles.resourceTaskMetaSelected,
+              ]}
+            >
+              {task.plannerType} | {task.priority}
+            </Text>
+          </TouchableOpacity>
+        );
+      })}
+    </View>
+  );
+
+  const renderResourceFinderActions = () => (
+    <View style={styles.resourceActionGrid}>
+      <TouchableOpacity
+        activeOpacity={0.84}
+        disabled={!selectedResourceTask || activeResourceKeywords.length === 0}
+        style={[
+          styles.resourceActionButton,
+          styles.resourcePrimaryButton,
+          (!selectedResourceTask || activeResourceKeywords.length === 0) &&
+            styles.resourceDisabledButton,
+        ]}
+        onPress={() => void handleSearchResourceWeb()}
+        accessibilityRole="button"
+        accessibilityLabel="Search web for task resources"
+      >
+        <Text style={styles.resourcePrimaryButtonText}>Search Web</Text>
+      </TouchableOpacity>
+
+      <TouchableOpacity
+        activeOpacity={0.84}
+        style={[styles.resourceActionButton, styles.resourceSecondaryButton]}
+        onPress={handleShowSaveResource}
+        accessibilityRole="button"
+        accessibilityLabel="Save a resource"
+      >
+        <Text style={styles.resourceSecondaryButtonText}>Save Resource</Text>
+      </TouchableOpacity>
+
+      <TouchableOpacity
+        activeOpacity={0.84}
+        style={[styles.resourceActionButton, styles.resourceSecondaryButton]}
+        onPress={() => void handleOpenSavedResources()}
+        accessibilityRole="button"
+        accessibilityLabel="Open saved resources"
+      >
+        <Text style={styles.resourceSecondaryButtonText}>
+          Open Saved Resources
+        </Text>
+      </TouchableOpacity>
+    </View>
+  );
+
+  const renderResourceSaveForm = () => (
+    <View style={styles.resourceSaveCard}>
+      <Text style={styles.modalSectionTitle}>Save a resource</Text>
+      <TextInput
+        value={resourceTitle}
+        onChangeText={setResourceTitle}
+        placeholder="Resource title"
+        placeholderTextColor={theme.colors.muted}
+        style={styles.resourceInput}
+      />
+      <TextInput
+        value={resourceUrl}
+        onChangeText={setResourceUrl}
+        placeholder="https://example.com"
+        placeholderTextColor={theme.colors.muted}
+        autoCapitalize="none"
+        keyboardType="url"
+        style={styles.resourceInput}
+      />
+      <TextInput
+        value={resourceNote}
+        onChangeText={setResourceNote}
+        placeholder="Milo note (optional)"
+        placeholderTextColor={theme.colors.muted}
+        multiline
+        textAlignVertical="top"
+        style={[styles.resourceInput, styles.resourceNoteInput]}
+      />
+      <TouchableOpacity
+        activeOpacity={0.84}
+        style={[styles.modalActionButton, styles.modalPrimaryButton]}
+        onPress={() => void handleSaveResource()}
+        accessibilityRole="button"
+        accessibilityLabel="Save resource locally"
+      >
+        <Text style={styles.modalPrimaryButtonText}>Save Resource</Text>
+      </TouchableOpacity>
+    </View>
+  );
+
+  const renderSavedResourceList = () => (
+    <View style={styles.modalSection}>
+      <Text style={styles.modalSectionTitle}>Saved resources</Text>
+      {savedResources.length === 0 ? (
+        <View style={styles.resourceSavedEmpty}>
+          <Ionicons
+            name="bookmark-outline"
+            size={24}
+            color={theme.colors.primaryDark}
+          />
+          <Text style={styles.resourceSavedEmptyText}>
+            No saved resources yet. Search the web, then paste the best links
+            here.
+          </Text>
+        </View>
+      ) : (
+        <View style={styles.resourceSavedList}>
+          {savedResources.map((resource) => (
+            <View key={resource.id} style={styles.resourceSavedCard}>
+              <View style={styles.resourceSavedHeader}>
+                <View style={styles.resourceSavedCopy}>
+                  <Text numberOfLines={2} style={styles.resourceSavedTitle}>
+                    {resource.resourceTitle}
+                  </Text>
+                  <Text numberOfLines={1} style={styles.resourceSavedMeta}>
+                    {resource.taskTitle
+                      ? `For ${resource.taskTitle}`
+                      : 'General resource'}{' '}
+                    | {formatResourceDate(resource.createdAt)}
+                  </Text>
+                </View>
+                <Ionicons
+                  name="bookmark"
+                  size={18}
+                  color={theme.colors.primaryDark}
+                />
+              </View>
+
+              {resource.note ? (
+                <Text style={styles.resourceSavedNote}>{resource.note}</Text>
+              ) : null}
+
+              <View style={styles.resourceSavedActions}>
+                <TouchableOpacity
+                  activeOpacity={0.84}
+                  style={[
+                    styles.resourceSavedActionButton,
+                    styles.resourceSavedOpenButton,
+                  ]}
+                  onPress={() => void handleOpenResource(resource)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Open ${resource.resourceTitle}`}
+                >
+                  <Text style={styles.resourceSavedOpenText}>Open</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  activeOpacity={0.84}
+                  style={[
+                    styles.resourceSavedActionButton,
+                    styles.resourceSavedDeleteButton,
+                  ]}
+                  onPress={() => void handleDeleteSavedResource(resource.id)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Delete ${resource.resourceTitle}`}
+                >
+                  <Text style={styles.resourceSavedDeleteText}>Delete</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          ))}
+        </View>
+      )}
+    </View>
+  );
+
+  const renderResourceFinderModalContent = () => {
+    if (resourceFinderTasks.length === 0) {
+      return (
+        <View>
+          {renderEmptyState(
+            'Choose a task',
+            'Choose a task and Milo will suggest helpful links.'
+          )}
+          {resourceFinderMode === 'save' ? renderResourceSaveForm() : null}
+          {resourceFinderMode === 'saved' ? renderSavedResourceList() : null}
+          {renderResourceFinderActions()}
+        </View>
+      );
+    }
+
+    return (
+      <View>
+        {!selectedResourceTask ? (
+          <View style={styles.resourceFinderHintCard}>
+            <MiloMoodImage mood="waving" size={46} />
+            <Text style={styles.resourceFinderHintText}>
+              Choose a task and Milo will suggest helpful links.
+            </Text>
+          </View>
+        ) : null}
+
+        <View style={styles.modalSection}>
+          <Text style={styles.modalSectionTitle}>Choose a task</Text>
+          {renderResourceTaskList()}
+        </View>
+
+        {selectedResourceTask ? (
+          <View style={styles.resourceSelectedCard}>
+            <View style={styles.resourceSelectedIcon}>
+              <Ionicons
+                name="search-outline"
+                size={20}
+                color={theme.colors.primaryDark}
+              />
+            </View>
+            <View style={styles.resourceSelectedCopy}>
+              <Text numberOfLines={2} style={styles.resourceSelectedTitle}>
+                {selectedResourceTask.title}
+              </Text>
+              <Text numberOfLines={1} style={styles.resourceSelectedMeta}>
+                {selectedResourceTask.plannerType} |{' '}
+                {selectedResourceTask.priority} priority
+              </Text>
+              {selectedResourceTask.description ? (
+                <Text numberOfLines={2} style={styles.resourceSelectedText}>
+                  {selectedResourceTask.description}
+                </Text>
+              ) : null}
+            </View>
+          </View>
+        ) : null}
+
+        {resourceKeywords.length > 0 ? (
+          <View style={styles.modalSection}>
+            <Text style={styles.modalSectionTitle}>Suggested keywords</Text>
+            <View style={styles.resourceKeywordRow}>
+              {resourceKeywords.map((keyword) => {
+                const isKeywordSelected = selectedResourceKeywordSet.has(keyword);
+
+                return (
+                  <TouchableOpacity
+                    key={keyword}
+                    activeOpacity={0.82}
+                    style={[
+                      styles.resourceKeyword,
+                      isKeywordSelected
+                        ? styles.resourceKeywordSelected
+                        : styles.resourceKeywordInactive,
+                    ]}
+                    onPress={() => handleToggleResourceKeyword(keyword)}
+                    accessibilityRole="button"
+                    accessibilityLabel={`${isKeywordSelected ? 'Remove' : 'Add'} ${keyword} keyword`}
+                  >
+                    <Text
+                      numberOfLines={1}
+                      style={[
+                        styles.resourceKeywordText,
+                        !isKeywordSelected && styles.resourceKeywordTextInactive,
+                      ]}
+                    >
+                      {keyword}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </View>
+        ) : null}
+
+        {resourceFinderMessage ? (
+          <Text style={styles.resourceFinderMessage}>{resourceFinderMessage}</Text>
+        ) : null}
+
+        {renderResourceFinderActions()}
+
+        {resourceFinderMode === 'save' ? renderResourceSaveForm() : null}
+        {resourceFinderMode === 'saved' ? renderSavedResourceList() : null}
+      </View>
+    );
+  };
+
   const renderDetailModalContent = () => {
     if (activeDetailModal === 'analytics') return renderAnalyticsModalContent();
     if (activeDetailModal === 'sessions') return renderRecentSessionsModalContent();
     if (activeDetailModal === 'reaction') return renderReactionModalContent();
     if (activeDetailModal === 'talk') return renderTalkModalContent();
+    if (activeDetailModal === 'resources') return renderResourceFinderModalContent();
 
     return null;
   };
@@ -2345,6 +2881,61 @@ export default function CompanionScreen() {
             style={styles.focusGuardButtonText}
           >
             Start Focus
+          </Text>
+        </TouchableOpacity>
+      </TouchableOpacity>
+
+      <TouchableOpacity
+        activeOpacity={0.9}
+        style={[styles.focusGuardCard, styles.resourceFinderCard]}
+        onPress={() => {
+          setResourceFinderMode('finder');
+          setResourceFinderMessage('');
+          void openDetailModal('resources');
+        }}
+        accessibilityRole="button"
+        accessibilityLabel="Open Milo Resource Finder"
+      >
+        <View style={styles.focusGuardIconWrap}>
+          <Ionicons
+            name="library-outline"
+            size={25}
+            color={theme.colors.primaryDark}
+          />
+        </View>
+        <View style={styles.focusGuardCopy}>
+          <View style={styles.focusGuardTitleRow}>
+            <Text numberOfLines={1} style={styles.focusGuardTitle}>
+              Milo Resource Finder
+            </Text>
+            <View style={styles.focusGuardBadge}>
+              <Text numberOfLines={1} style={styles.focusGuardBadgeText}>
+                LOCAL
+              </Text>
+            </View>
+          </View>
+          <Text numberOfLines={1} style={styles.focusGuardSubtitle}>
+            Find helpful links for your tasks.
+          </Text>
+        </View>
+        <TouchableOpacity
+          activeOpacity={0.84}
+          style={styles.focusGuardButton}
+          onPress={() => {
+            setResourceFinderMode('finder');
+            setResourceFinderMessage('');
+            void openDetailModal('resources');
+          }}
+          accessibilityRole="button"
+          accessibilityLabel="Find Resources"
+        >
+          <Text
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.82}
+            style={styles.focusGuardButtonText}
+          >
+            Find Resources
           </Text>
         </TouchableOpacity>
       </TouchableOpacity>
@@ -3641,6 +4232,10 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '900',
   },
+  resourceFinderCard: {
+    borderColor: '#D8EEDC',
+    backgroundColor: '#FEFFFC',
+  },
   analyticsDashboard: {
     flexDirection: 'row',
     gap: 16,
@@ -4365,6 +4960,297 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '800',
     lineHeight: 18,
+  },
+  resourceFinderHintCard: {
+    minHeight: 78,
+    borderRadius: 22,
+    backgroundColor: theme.colors.white,
+    borderWidth: 1,
+    borderColor: '#EEF1EA',
+    padding: 13,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  resourceFinderHintText: {
+    flex: 1,
+    minWidth: 0,
+    marginLeft: 10,
+    color: '#111827',
+    fontSize: 13,
+    fontWeight: '800',
+    lineHeight: 18,
+  },
+  resourceTaskList: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 9,
+  },
+  resourceTaskChip: {
+    flexGrow: 1,
+    flexBasis: '47%',
+    minWidth: 132,
+    minHeight: 58,
+    borderRadius: 18,
+    backgroundColor: theme.colors.white,
+    borderWidth: 1,
+    borderColor: '#E5ECE3',
+    paddingHorizontal: 11,
+    paddingVertical: 9,
+    justifyContent: 'center',
+  },
+  resourceTaskChipSelected: {
+    backgroundColor: theme.colors.primaryDark,
+    borderColor: theme.colors.primaryDark,
+  },
+  resourceTaskTitle: {
+    color: '#111827',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  resourceTaskTitleSelected: {
+    color: theme.colors.white,
+  },
+  resourceTaskMeta: {
+    marginTop: 4,
+    color: theme.colors.textSoft,
+    fontSize: 10,
+    fontWeight: '800',
+    textTransform: 'capitalize',
+  },
+  resourceTaskMetaSelected: {
+    color: '#DDF8E4',
+  },
+  resourceSelectedCard: {
+    marginTop: 16,
+    borderRadius: 22,
+    backgroundColor: '#F7FBF6',
+    borderWidth: 1,
+    borderColor: '#E5ECE3',
+    padding: 13,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+  },
+  resourceSelectedIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 15,
+    backgroundColor: theme.colors.primarySoft,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 11,
+    flexShrink: 0,
+  },
+  resourceSelectedCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  resourceSelectedTitle: {
+    color: '#111827',
+    fontSize: 14,
+    fontWeight: '900',
+    lineHeight: 19,
+  },
+  resourceSelectedMeta: {
+    marginTop: 4,
+    color: theme.colors.primaryDark,
+    fontSize: 11,
+    fontWeight: '900',
+    textTransform: 'capitalize',
+  },
+  resourceSelectedText: {
+    marginTop: 6,
+    color: theme.colors.textSoft,
+    fontSize: 12,
+    fontWeight: '700',
+    lineHeight: 17,
+  },
+  resourceKeywordRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 7,
+  },
+  resourceKeyword: {
+    maxWidth: '100%',
+    overflow: 'hidden',
+    borderRadius: 999,
+    borderWidth: 1,
+    paddingHorizontal: 9,
+    paddingVertical: 6,
+  },
+  resourceKeywordSelected: {
+    backgroundColor: theme.colors.primarySoft,
+    borderColor: '#D6F5DE',
+  },
+  resourceKeywordInactive: {
+    backgroundColor: theme.colors.white,
+    borderColor: '#E5ECE3',
+  },
+  resourceKeywordText: {
+    color: theme.colors.primaryDark,
+    fontSize: 10,
+    fontWeight: '900',
+  },
+  resourceKeywordTextInactive: {
+    color: '#6B7B6C',
+  },
+  resourceFinderMessage: {
+    marginTop: 14,
+    color: theme.colors.primaryDark,
+    fontSize: 12,
+    fontWeight: '800',
+    lineHeight: 17,
+  },
+  resourceActionGrid: {
+    marginTop: 16,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 9,
+  },
+  resourceActionButton: {
+    flexGrow: 1,
+    flexBasis: '31%',
+    minWidth: 132,
+    minHeight: 44,
+    borderRadius: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 10,
+  },
+  resourcePrimaryButton: {
+    backgroundColor: theme.colors.primaryDark,
+  },
+  resourceSecondaryButton: {
+    backgroundColor: theme.colors.white,
+    borderWidth: 1,
+    borderColor: '#DBE7DB',
+  },
+  resourceDisabledButton: {
+    backgroundColor: '#BFD4C4',
+  },
+  resourcePrimaryButtonText: {
+    color: theme.colors.white,
+    fontSize: 12,
+    fontWeight: '900',
+    textAlign: 'center',
+  },
+  resourceSecondaryButtonText: {
+    color: theme.colors.primaryDark,
+    fontSize: 12,
+    fontWeight: '900',
+    textAlign: 'center',
+  },
+  resourceSaveCard: {
+    marginTop: 16,
+    borderRadius: 22,
+    backgroundColor: theme.colors.white,
+    borderWidth: 1,
+    borderColor: '#EEF1EA',
+    padding: 12,
+    gap: 9,
+  },
+  resourceInput: {
+    minHeight: 44,
+    borderRadius: 16,
+    backgroundColor: '#F7FBF6',
+    borderWidth: 1,
+    borderColor: '#E5ECE3',
+    color: '#111827',
+    fontSize: 13,
+    fontWeight: '700',
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+  },
+  resourceNoteInput: {
+    minHeight: 76,
+    paddingTop: 11,
+  },
+  resourceSavedEmpty: {
+    minHeight: 92,
+    borderRadius: 20,
+    backgroundColor: theme.colors.white,
+    borderWidth: 1,
+    borderColor: '#EEF1EA',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 16,
+  },
+  resourceSavedEmptyText: {
+    marginTop: 8,
+    color: theme.colors.textSoft,
+    fontSize: 12,
+    fontWeight: '700',
+    lineHeight: 17,
+    textAlign: 'center',
+  },
+  resourceSavedList: {
+    gap: 10,
+  },
+  resourceSavedCard: {
+    borderRadius: 20,
+    backgroundColor: theme.colors.white,
+    borderWidth: 1,
+    borderColor: '#EEF1EA',
+    padding: 12,
+  },
+  resourceSavedHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  resourceSavedCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  resourceSavedTitle: {
+    color: '#111827',
+    fontSize: 14,
+    fontWeight: '900',
+    lineHeight: 19,
+  },
+  resourceSavedMeta: {
+    marginTop: 4,
+    color: theme.colors.textSoft,
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  resourceSavedNote: {
+    marginTop: 9,
+    color: '#111827',
+    fontSize: 12,
+    fontWeight: '700',
+    lineHeight: 17,
+  },
+  resourceSavedActions: {
+    marginTop: 12,
+    flexDirection: 'row',
+    gap: 8,
+  },
+  resourceSavedActionButton: {
+    flex: 1,
+    minHeight: 38,
+    borderRadius: 19,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 10,
+  },
+  resourceSavedOpenButton: {
+    backgroundColor: theme.colors.primaryDark,
+  },
+  resourceSavedDeleteButton: {
+    backgroundColor: theme.colors.dangerSoft,
+    borderWidth: 1,
+    borderColor: '#FBD1D1',
+  },
+  resourceSavedOpenText: {
+    color: theme.colors.white,
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  resourceSavedDeleteText: {
+    color: theme.colors.danger,
+    fontSize: 12,
+    fontWeight: '900',
   },
   modalTalkContent: {
     alignItems: 'center',
