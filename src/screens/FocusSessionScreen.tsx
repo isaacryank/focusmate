@@ -34,6 +34,18 @@ import * as Haptics from 'expo-haptics';
 import { theme } from '../theme';
 import { useTasks } from '../lib/TaskContext';
 import { useFocus } from '../lib/FocusContext';
+import {
+  appendFocusSessionHistory,
+  type FocusSessionHistoryItem,
+  type FocusSessionStatus,
+} from '../lib/focusSessionHistory';
+import {
+  cancelFocusTimerCompletionNotification,
+  scheduleFocusTimerCompletionNotification,
+  startFocusAlertLoop,
+  stopFocusAlertLoop,
+  type FocusAlertType,
+} from '../lib/focusAlertUtils';
 import { getMiloImageSource } from '../components/milo/MiloMoodImage';
 import { getTopMiloRecommendedTask } from '../lib/miloSituationIntelligence';
 import { type Task } from '../types/task';
@@ -135,6 +147,7 @@ type PersistedPomodoroSession = {
   selectedFocusTaskId: string | null;
   selectedFocusTaskTitle: string | null;
   focusWithoutTaskSelected: boolean;
+  sessionBlocks: PomodoroSessionBlockSummary[];
   savedAt: number;
 };
 
@@ -145,13 +158,36 @@ type CompleteModeOptions = {
   cycleFocusCount?: number;
   startedAt?: number | null;
   playFeedback?: boolean;
-  showAlert?: boolean;
 };
 
-type FocusSessionSummary = {
+type PomodoroSessionBlockSummary = {
+  id: string;
+  status: FocusSessionStatus;
   durationMinutes: number;
   taskTitle: string | null;
   wasDistracted: boolean;
+  presetName: string;
+  completedAt: string;
+};
+
+type FocusBlockCompletionSummary = {
+  durationMinutes: number;
+  taskTitle: string | null;
+  wasDistracted: boolean;
+  nextBreakMode: Exclude<PomodoroMode, 'focus'>;
+};
+
+type BreakCompletionSummary = {
+  breakMode: Exclude<PomodoroMode, 'focus'>;
+};
+
+type FocusSessionSummary = {
+  totalFocusMinutes: number;
+  completedBlocks: number;
+  interruptedBlocks: number;
+  taskTitle: string | null;
+  wasDistracted: boolean;
+  presetName: string;
   miloMessage: string;
 };
 
@@ -536,6 +572,43 @@ function getModeSeconds(mode: PomodoroMode, settings: PomodoroSettings) {
   return getModeMinutes(mode, settings) * 60;
 }
 
+function getElapsedFocusDurationMinutes(
+  settings: PomodoroSettings,
+  remainingMs: number
+) {
+  const totalMs = getModeSeconds('focus', settings) * 1000;
+  const elapsedMs = totalMs - clampNumber(remainingMs, 0, totalMs);
+
+  return Math.min(settings.focusMinutes, Math.max(0, Math.ceil(elapsedMs / 60000)));
+}
+
+function deriveFocusScore({
+  durationMinutes,
+  focusMinutes,
+  status,
+  wasDistracted,
+}: {
+  durationMinutes: number;
+  focusMinutes: number;
+  status: FocusSessionStatus;
+  wasDistracted: boolean;
+}) {
+  const durationRatio =
+    focusMinutes > 0 ? clampNumber(durationMinutes / focusMinutes, 0, 1) : 0;
+
+  if (status === 'completed') {
+    return wasDistracted ? 78 : 96;
+  }
+
+  const baseScore = status === 'stopped' ? 42 : 34;
+  const progressScore = Math.round(durationRatio * (wasDistracted ? 28 : 42));
+  const distractionPenalty = wasDistracted ? 8 : 0;
+
+  return Math.round(
+    clampNumber(baseScore + progressScore - distractionPenalty, 0, 100)
+  );
+}
+
 function getSuggestedBreakMode(
   completedFocusCount: number,
   longBreakInterval: number
@@ -543,6 +616,13 @@ function getSuggestedBreakMode(
   return completedFocusCount > 0 && completedFocusCount % longBreakInterval === 0
     ? 'longBreak'
     : 'shortBreak';
+}
+
+function getFocusAlertTypeForMode(mode: PomodoroMode): FocusAlertType {
+  if (mode === 'focus') return 'focusComplete';
+  if (mode === 'longBreak') return 'longBreakComplete';
+
+  return 'shortBreakComplete';
 }
 
 function getCurrentCycleBlock(
@@ -612,14 +692,10 @@ function formatSeconds(seconds: number) {
     .padStart(2, '0')}`;
 }
 
-function formatAwayDuration(awayMs: number) {
-  const totalSeconds = Math.max(0, Math.floor(awayMs / 1000));
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  const minuteLabel = minutes === 1 ? 'minute' : 'minutes';
-  const secondLabel = seconds === 1 ? 'second' : 'seconds';
+function formatAwayMinutes(awayMs: number) {
+  const minutes = Math.max(1, Math.round(awayMs / 60000));
 
-  return `${minutes} ${minuteLabel} ${seconds} ${secondLabel}`;
+  return `${minutes} ${minutes === 1 ? 'min' : 'mins'}`;
 }
 
 function parseLoggedFocusKeys(value: string | null) {
@@ -711,23 +787,104 @@ function getFocusTaskMetaText(task: Task) {
     : `${typeText} - ${priorityText}`;
 }
 
-function getFocusSummaryMiloMessage(
-  wasDistracted: boolean,
-  taskTitle: string | null
+function sanitizeSessionBlockSummary(
+  value: unknown
+): PomodoroSessionBlockSummary | null {
+  if (!isRecord(value)) return null;
+
+  const id = typeof value.id === 'string' ? value.id.trim() : '';
+  const status = value.status;
+  const completedAt =
+    typeof value.completedAt === 'string' ? value.completedAt.trim() : '';
+  const durationMinutes = getFiniteNumber(value.durationMinutes, 0);
+  const taskTitle =
+    typeof value.taskTitle === 'string' && value.taskTitle.trim()
+      ? value.taskTitle.trim()
+      : null;
+  const presetName =
+    typeof value.presetName === 'string' && value.presetName.trim()
+      ? value.presetName.trim()
+      : 'Focus';
+
+  if (!id || Number.isNaN(new Date(completedAt).getTime())) return null;
+  if (status !== 'completed' && status !== 'stopped' && status !== 'skipped') {
+    return null;
+  }
+
+  return {
+    id,
+    status,
+    durationMinutes: Math.max(0, Math.round(durationMinutes)),
+    taskTitle,
+    wasDistracted: Boolean(value.wasDistracted),
+    presetName,
+    completedAt,
+  };
+}
+
+function sanitizeSessionBlockSummaries(
+  value: unknown
+): PomodoroSessionBlockSummary[] {
+  if (!Array.isArray(value)) return [];
+
+  return value
+    .map(sanitizeSessionBlockSummary)
+    .filter((block): block is PomodoroSessionBlockSummary => Boolean(block));
+}
+
+function getSessionTaskSummary(
+  blocks: PomodoroSessionBlockSummary[],
+  fallbackTaskTitle: string | null
 ) {
-  if (wasDistracted && taskTitle) {
-    return `You came back and finished ${taskTitle}. Let's aim for a cleaner focus next time.`;
-  }
+  const taskTitles = Array.from(
+    new Set(
+      blocks
+        .map((block) => block.taskTitle)
+        .filter((taskTitle): taskTitle is string => Boolean(taskTitle))
+    )
+  );
 
-  if (wasDistracted) {
-    return "You came back and finished. Let's aim for a cleaner focus next time.";
-  }
+  if (taskTitles.length === 1) return taskTitles[0] ?? null;
+  if (taskTitles.length > 1) return 'Multiple tasks';
 
-  if (taskTitle) {
-    return `Great job! You completed a clean focus session for ${taskTitle}.`;
-  }
+  return fallbackTaskTitle;
+}
 
-  return 'Great job! You completed a clean focus session.';
+function createFocusSessionSummary({
+  blocks,
+  fallbackTaskTitle,
+  presetName,
+}: {
+  blocks: PomodoroSessionBlockSummary[];
+  fallbackTaskTitle: string | null;
+  presetName: string;
+}): FocusSessionSummary {
+  const completedBlocks = blocks.filter(
+    (block) => block.status === 'completed'
+  ).length;
+  const interruptedBlocks = blocks.filter(
+    (block) => block.status !== 'completed'
+  ).length;
+  const totalFocusMinutes = blocks.reduce(
+    (total, block) => total + block.durationMinutes,
+    0
+  );
+  const wasDistracted = blocks.some((block) => block.wasDistracted);
+  const taskTitle = getSessionTaskSummary(blocks, fallbackTaskTitle);
+  const miloMessage =
+    completedBlocks > 0
+      ? 'Great work. Milo saved your focus blocks and your progress is safe.'
+      : 'It is okay to stop here. Milo can help you restart with a smaller block next time.';
+
+  return {
+    totalFocusMinutes,
+    completedBlocks,
+    interruptedBlocks,
+    taskTitle,
+    wasDistracted,
+    presetName,
+    miloMessage,
+  };
 }
 
 function ModeButton({
@@ -875,6 +1032,13 @@ export default function FocusSessionScreen() {
   const [focusSummary, setFocusSummary] = useState<FocusSessionSummary | null>(
     null
   );
+  const [focusBlockCompletion, setFocusBlockCompletion] =
+    useState<FocusBlockCompletionSummary | null>(null);
+  const [breakCompletion, setBreakCompletion] =
+    useState<BreakCompletionSummary | null>(null);
+  const [, setSessionBlocks] = useState<
+    PomodoroSessionBlockSummary[]
+  >([]);
   const [hasRestoredPomodoroState, setHasRestoredPomodoroState] =
     useState(false);
   const [focusBlockVisible, setFocusBlockVisible] = useState(false);
@@ -905,6 +1069,9 @@ export default function FocusSessionScreen() {
   const pomodoroCompletedFocusCountRef = useRef(0);
   const cycleFocusCountRef = useRef(0);
   const wasDistractedRef = useRef(false);
+  const sessionBlocksRef = useRef<PomodoroSessionBlockSummary[]>([]);
+  const recordedFocusHistoryKeysRef = useRef<Set<string>>(new Set());
+  const timerCompletionNotificationIdRef = useRef<string | null>(null);
   const appStateRef = useRef<AppStateStatus>(AppState.currentState);
   const completionHandledRef = useRef(false);
 
@@ -1222,6 +1389,7 @@ export default function FocusSessionScreen() {
         selectedFocusTaskId: selectedFocusTaskIdRef.current,
         selectedFocusTaskTitle: selectedFocusTaskTitleRef.current,
         focusWithoutTaskSelected: focusWithoutTaskSelectedRef.current,
+        sessionBlocks: sessionBlocksRef.current,
         savedAt: Date.now(),
         ...overrides,
       };
@@ -1276,6 +1444,139 @@ export default function FocusSessionScreen() {
     setFocusWithoutTaskSelected(!task);
   }, []);
 
+  const recordFocusSessionHistory = useCallback(
+    async ({
+      status,
+      durationMinutes,
+      startedAt,
+      wasDistracted: sessionWasDistracted,
+    }: {
+      status: FocusSessionStatus;
+      durationMinutes: number;
+      startedAt: number | null;
+      wasDistracted: boolean;
+    }) => {
+      const roundedDurationMinutes =
+        status === 'completed'
+          ? Math.max(1, Math.round(durationMinutes))
+          : Math.max(0, Math.round(durationMinutes));
+
+      const sessionStartedAt = startedAt ?? startedAtRef.current ?? Date.now();
+      const historyKey = `${sessionStartedAt}:${status}`;
+
+      if (recordedFocusHistoryKeysRef.current.has(historyKey)) return;
+
+      recordedFocusHistoryKeysRef.current.add(historyKey);
+
+      const selectedTaskId = selectedFocusTaskIdRef.current;
+      const selectedTaskTitle =
+        selectedFocusTaskTitleRef.current?.trim() || null;
+      const focusScore = deriveFocusScore({
+        durationMinutes: roundedDurationMinutes,
+        focusMinutes: timerSettingsRef.current.focusMinutes,
+        status,
+        wasDistracted: sessionWasDistracted,
+      });
+      const session: FocusSessionHistoryItem = {
+        id: historyKey,
+        date: new Date().toISOString(),
+        durationMinutes: roundedDurationMinutes,
+        selectedTaskTitle,
+        ...(selectedTaskId ? { selectedTaskId } : {}),
+        focusQuality: sessionWasDistracted ? 'distracted' : 'clean',
+        presetName: getPresetDisplayName(selectedPresetRef.current, savedPresets),
+        status,
+        focusScore,
+      };
+
+      await appendFocusSessionHistory(session);
+    },
+    [savedPresets]
+  );
+
+  const appendSessionBlockSummary = useCallback(
+    ({
+      status,
+      durationMinutes,
+      startedAt,
+      wasDistracted: sessionWasDistracted,
+    }: {
+      status: FocusSessionStatus;
+      durationMinutes: number;
+      startedAt: number | null;
+      wasDistracted: boolean;
+    }) => {
+      const sessionStartedAt = startedAt ?? startedAtRef.current ?? Date.now();
+      const blockId = `${sessionStartedAt}:${status}`;
+
+      if (sessionBlocksRef.current.some((block) => block.id === blockId)) {
+        return sessionBlocksRef.current;
+      }
+
+      const nextBlocks = [
+        ...sessionBlocksRef.current,
+        {
+          id: blockId,
+          status,
+          durationMinutes:
+            status === 'completed'
+              ? Math.max(1, Math.round(durationMinutes))
+              : Math.max(0, Math.round(durationMinutes)),
+          taskTitle: selectedFocusTaskTitleRef.current?.trim() || null,
+          wasDistracted: sessionWasDistracted,
+          presetName: getPresetDisplayName(selectedPresetRef.current, savedPresets),
+          completedAt: new Date().toISOString(),
+        },
+      ];
+
+      sessionBlocksRef.current = nextBlocks;
+      setSessionBlocks(nextBlocks);
+
+      return nextBlocks;
+    },
+    [savedPresets]
+  );
+
+  const showFinalSessionSummary = useCallback(async () => {
+    const notificationId = timerCompletionNotificationIdRef.current;
+
+    timerCompletionNotificationIdRef.current = null;
+    await stopFocusAlertLoop();
+    await cancelFocusTimerCompletionNotification(notificationId);
+
+    const blocks = sessionBlocksRef.current;
+    const fallbackTaskTitle = selectedFocusTaskTitleRef.current?.trim() || null;
+    const lastBlock = blocks.length > 0 ? blocks[blocks.length - 1] : undefined;
+    const summary = createFocusSessionSummary({
+      blocks,
+      fallbackTaskTitle,
+      presetName:
+        lastBlock?.presetName ??
+        getPresetDisplayName(selectedPresetRef.current, savedPresets),
+    });
+
+    endTimestampRef.current = null;
+    startedAtRef.current = null;
+    focusLeftAtRef.current = null;
+    isRunningRef.current = false;
+    completionHandledRef.current = false;
+    setIsRunning(false);
+    setDndReminderVisible(false);
+    setFocusBlockVisible(false);
+    setFocusBlockCompletion(null);
+    setBreakCompletion(null);
+    setFocusWarningText(null);
+    setFocusSummary(summary);
+
+    await persistPomodoroState({
+      isRunning: false,
+      endTimestamp: null,
+      startedAt: null,
+      focusLeftAt: null,
+      sessionBlocks: blocks,
+    });
+  }, [persistPomodoroState, savedPresets]);
+
   const logFocusSessionOnce = useCallback(
     async (minutes: number, startedAt: number | null) => {
       const logStartedAt = startedAt ?? startedAtRef.current ?? Date.now();
@@ -1306,8 +1607,48 @@ export default function FocusSessionScreen() {
     [addFocusSession]
   );
 
+  const cancelTimerCompletionAlert = useCallback(async () => {
+    const notificationId = timerCompletionNotificationIdRef.current;
+
+    timerCompletionNotificationIdRef.current = null;
+    await stopFocusAlertLoop();
+    await cancelFocusTimerCompletionNotification(notificationId);
+  }, []);
+
+  const scheduleTimerCompletionAlert = useCallback(
+    async (mode: PomodoroMode, delayMs: number) => {
+      await cancelTimerCompletionAlert();
+
+      const notificationId = await scheduleFocusTimerCompletionNotification(
+        getFocusAlertTypeForMode(mode),
+        delayMs
+      );
+
+      timerCompletionNotificationIdRef.current = notificationId;
+    },
+    [cancelTimerCompletionAlert]
+  );
+
+  useEffect(() => {
+    return () => {
+      const notificationId = timerCompletionNotificationIdRef.current;
+
+      timerCompletionNotificationIdRef.current = null;
+      void stopFocusAlertLoop();
+      void cancelFocusTimerCompletionNotification(notificationId);
+    };
+  }, []);
+
   const resetTimerForMode = useCallback(
-    (mode: PomodoroMode, settings: PomodoroSettings = timerSettingsRef.current) => {
+    (
+      mode: PomodoroMode,
+      settings: PomodoroSettings = timerSettingsRef.current,
+      shouldCancelTimerAlert = true
+    ) => {
+      if (shouldCancelTimerAlert) {
+        void cancelTimerCompletionAlert();
+      }
+
       const nextSeconds = getModeSeconds(mode, settings);
 
       endTimestampRef.current = null;
@@ -1325,14 +1666,18 @@ export default function FocusSessionScreen() {
       setWasDistracted(false);
       setFocusBlockVisible(false);
     },
-    []
+    [cancelTimerCompletionAlert]
   );
 
   const changeMode = useCallback(
-    (mode: PomodoroMode, settings: PomodoroSettings = timerSettingsRef.current) => {
+    (
+      mode: PomodoroMode,
+      settings: PomodoroSettings = timerSettingsRef.current,
+      shouldCancelTimerAlert = true
+    ) => {
       currentModeRef.current = mode;
       setCurrentMode(mode);
-      resetTimerForMode(mode, settings);
+      resetTimerForMode(mode, settings, shouldCancelTimerAlert);
     },
     [resetTimerForMode]
   );
@@ -1362,10 +1707,11 @@ export default function FocusSessionScreen() {
       )
     );
     const sessionStartedAt = options.startedAt ?? startedAtRef.current ?? Date.now();
-    const shouldShowAlert = options.showAlert !== false;
+
+    timerCompletionNotificationIdRef.current = null;
 
     if (options.playFeedback !== false) {
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      await startFocusAlertLoop(getFocusAlertTypeForMode(completedMode));
     }
 
     if (completedMode === 'focus') {
@@ -1378,24 +1724,26 @@ export default function FocusSessionScreen() {
         startingCycleFocusCount + 1,
         settings.longBreakInterval
       );
-      const suggestedBreakMode =
+      const suggestedBreakMode: Exclude<PomodoroMode, 'focus'> =
         nextCycleFocusCount >= settings.longBreakInterval
           ? 'longBreak'
           : 'shortBreak';
-      const suggestedBreak = MODE_META[suggestedBreakMode];
       const completedWasDistracted = wasDistractedRef.current;
       const completedTaskTitle =
         selectedFocusTaskTitleRef.current?.trim() || null;
-      const summary: FocusSessionSummary = {
-        durationMinutes: settings.focusMinutes,
-        taskTitle: completedTaskTitle,
-        wasDistracted: completedWasDistracted,
-        miloMessage: getFocusSummaryMiloMessage(
-          completedWasDistracted,
-          completedTaskTitle
-        ),
-      };
 
+      await recordFocusSessionHistory({
+        status: 'completed',
+        durationMinutes: settings.focusMinutes,
+        startedAt: sessionStartedAt,
+        wasDistracted: completedWasDistracted,
+      });
+      appendSessionBlockSummary({
+        status: 'completed',
+        durationMinutes: settings.focusMinutes,
+        startedAt: sessionStartedAt,
+        wasDistracted: completedWasDistracted,
+      });
       await logFocusSessionOnce(settings.focusMinutes, sessionStartedAt);
       updateCompletedFocusCount(loggedCompletedFocusCount);
       updateCycleFocusCount(nextCycleFocusCount, settings);
@@ -1403,18 +1751,20 @@ export default function FocusSessionScreen() {
       wasDistractedRef.current = false;
       setWasDistracted(false);
       setFocusWarningText(null);
-      changeMode(suggestedBreakMode, settings);
+      changeMode(suggestedBreakMode, settings, false);
+      setFocusBlockCompletion({
+        durationMinutes: settings.focusMinutes,
+        taskTitle: completedTaskTitle,
+        wasDistracted: completedWasDistracted,
+        nextBreakMode: suggestedBreakMode,
+      });
       Speech.speak(
-        `Focus session completed. Great work. Milo suggests a ${suggestedBreak.label}.`,
+        'Great job! Focus block done. Ready for your break?',
         {
           rate: 0.95,
           pitch: 1.08,
         }
       );
-
-      if (shouldShowAlert) {
-        setFocusSummary(summary);
-      }
 
       await persistPomodoroState({
         currentMode: suggestedBreakMode,
@@ -1426,6 +1776,7 @@ export default function FocusSessionScreen() {
         remainingMs: getModeSeconds(suggestedBreakMode, settings) * 1000,
         wasDistracted: false,
         focusLeftAt: null,
+        sessionBlocks: sessionBlocksRef.current,
       });
       return;
     }
@@ -1435,19 +1786,20 @@ export default function FocusSessionScreen() {
     }
 
     startedAtRef.current = null;
-    changeMode('focus', settings);
+    changeMode('focus', settings, false);
 
-    Speech.speak('Break completed. Milo is ready for the next focus block.', {
-      rate: 0.95,
-      pitch: 1.08,
+    Speech.speak(
+      completedMode === 'longBreak'
+        ? 'Nice rest! Ready to continue with Milo?'
+        : 'Break is done. Ready for the next focus block?',
+      {
+        rate: 0.95,
+        pitch: 1.08,
+      }
+    );
+    setBreakCompletion({
+      breakMode: completedMode === 'longBreak' ? 'longBreak' : 'shortBreak',
     });
-
-    if (shouldShowAlert) {
-      Alert.alert(
-        'Break complete',
-        'Nice reset. Milo is ready when you want to start another focus block.'
-      );
-    }
 
     await persistPomodoroState({
       currentMode: 'focus',
@@ -1457,16 +1809,19 @@ export default function FocusSessionScreen() {
       cycleProgressCount: completedMode === 'longBreak' ? 0 : cycleFocusCountRef.current,
       remainingMs: getModeSeconds('focus', settings) * 1000,
       focusLeftAt: null,
+      sessionBlocks: sessionBlocksRef.current,
     });
   }, [
+    appendSessionBlockSummary,
     changeMode,
     logFocusSessionOnce,
     persistPomodoroState,
+    recordFocusSessionHistory,
     updateCompletedFocusCount,
     updateCycleFocusCount,
   ]);
 
-  const syncRunningTimer = useCallback(async () => {
+  const syncRunningTimer = useCallback(async (options: { playFeedback?: boolean } = {}) => {
     if (!isRunningRef.current || !endTimestampRef.current) return;
 
     const nextRemainingMs = Math.max(endTimestampRef.current - Date.now(), 0);
@@ -1474,13 +1829,16 @@ export default function FocusSessionScreen() {
     setRemainingSeconds(Math.ceil(nextRemainingMs / 1000));
 
     if (nextRemainingMs === 0) {
-      await completeCurrentMode();
+      await completeCurrentMode({ playFeedback: options.playFeedback });
     }
   }, [completeCurrentMode]);
 
-  const handleReturnToApp = useCallback(() => {
+  const handleReturnToApp = useCallback(async () => {
     const now = Date.now();
     const focusLeftAt = focusLeftAtRef.current;
+    const hadScheduledTimerAlert = Boolean(timerCompletionNotificationIdRef.current);
+
+    await cancelTimerCompletionAlert();
 
     if (isRunningRef.current && currentModeRef.current === 'focus' && focusLeftAt) {
       const awayMs = now - focusLeftAt;
@@ -1489,9 +1847,9 @@ export default function FocusSessionScreen() {
         wasDistractedRef.current = true;
         setWasDistracted(true);
         setFocusWarningText(
-          `Milo noticed you left Focus Mode for ${formatAwayDuration(
+          `You were away for ${formatAwayMinutes(
             awayMs
-          )}. Let's continue clean focus.`
+          )} during focus. Milo kept the timer running.`
         );
       }
 
@@ -1502,8 +1860,8 @@ export default function FocusSessionScreen() {
       });
     }
 
-    syncRunningTimer();
-  }, [persistPomodoroState, syncRunningTimer]);
+    await syncRunningTimer({ playFeedback: !hadScheduledTimerAlert });
+  }, [cancelTimerCompletionAlert, persistPomodoroState, syncRunningTimer]);
 
   useEffect(() => {
     let isMounted = true;
@@ -1589,6 +1947,9 @@ export default function FocusSessionScreen() {
         const restoredFocusWithoutTaskSelected = Boolean(
           stored.focusWithoutTaskSelected
         );
+        const restoredSessionBlocks = sanitizeSessionBlockSummaries(
+          stored.sessionBlocks
+        );
         const shouldRestoreFocusTaskSelection =
           restoredMode === 'focus' && Boolean(restoredStartedAt);
         const nextSelectedFocusTaskId = shouldRestoreFocusTaskSelection
@@ -1614,6 +1975,7 @@ export default function FocusSessionScreen() {
         pomodoroCompletedFocusCountRef.current = restoredCompletedFocusCount;
         cycleFocusCountRef.current = restoredCycleProgressCount;
         wasDistractedRef.current = restoredWasDistracted;
+        sessionBlocksRef.current = restoredSessionBlocks;
 
         setSelectedPreset(restoredPreset);
         setCustomSettings(restoredCustomSettings);
@@ -1624,6 +1986,7 @@ export default function FocusSessionScreen() {
         setSelectedFocusTaskId(nextSelectedFocusTaskId);
         setSelectedFocusTaskTitle(nextSelectedFocusTaskTitle);
         setFocusWithoutTaskSelected(nextFocusWithoutTaskSelected);
+        setSessionBlocks(restoredSessionBlocks);
         setTaskPickerVisible(false);
         setFocusWarningText(null);
 
@@ -1676,9 +2039,9 @@ export default function FocusSessionScreen() {
               wasDistractedRef.current = true;
               setWasDistracted(true);
               setFocusWarningText(
-                `Milo noticed you left Focus Mode for ${formatAwayDuration(
+                `You were away for ${formatAwayMinutes(
                   awayMs
-                )}. Let's continue clean focus.`
+                )} during focus. Milo kept the timer running.`
               );
             }
 
@@ -1756,18 +2119,25 @@ export default function FocusSessionScreen() {
         const returningToActiveState =
           previousAppState !== 'active' && nextAppState === 'active';
 
-        if (
-          leavingActiveState &&
-          isRunningRef.current &&
-          currentModeRef.current === 'focus'
-        ) {
-          const focusLeftAt = focusLeftAtRef.current ?? Date.now();
-          focusLeftAtRef.current = focusLeftAt;
-          persistPomodoroState({ focusLeftAt });
+        if (leavingActiveState && isRunningRef.current) {
+          if (currentModeRef.current === 'focus') {
+            const focusLeftAt = focusLeftAtRef.current ?? Date.now();
+            focusLeftAtRef.current = focusLeftAt;
+            persistPomodoroState({ focusLeftAt });
+          }
+
+          const remainingUntilEndMs = endTimestampRef.current
+            ? Math.max(endTimestampRef.current - Date.now(), 0)
+            : remainingMsRef.current;
+
+          void scheduleTimerCompletionAlert(
+            currentModeRef.current,
+            remainingUntilEndMs
+          );
         }
 
         if (returningToActiveState) {
-          handleReturnToApp();
+          void handleReturnToApp();
         }
 
         appStateRef.current = nextAppState;
@@ -1775,7 +2145,12 @@ export default function FocusSessionScreen() {
     );
 
     return () => subscription.remove();
-  }, [handleReturnToApp, hasRestoredPomodoroState, persistPomodoroState]);
+  }, [
+    handleReturnToApp,
+    hasRestoredPomodoroState,
+    persistPomodoroState,
+    scheduleTimerCompletionAlert,
+  ]);
 
   const handleSelectPreset = (presetId: PomodoroPresetId) => {
     if (presetId === selectedPreset) return;
@@ -1800,6 +2175,8 @@ export default function FocusSessionScreen() {
     timerSettingsRef.current = nextSettings;
     clearFocusTaskSelection();
     setFocusSummary(null);
+    setFocusBlockCompletion(null);
+    setBreakCompletion(null);
     setSelectedPreset(presetId);
     updateCycleFocusCount(nextCycleFocusCount, nextSettings);
     resetTimerForMode(currentMode, nextSettings);
@@ -1836,6 +2213,8 @@ export default function FocusSessionScreen() {
     timerSettingsRef.current = nextSettings;
     clearFocusTaskSelection();
     setFocusSummary(null);
+    setFocusBlockCompletion(null);
+    setBreakCompletion(null);
     setSelectedPreset('custom');
     setCustomSettings(nextSettings);
     updateCycleFocusCount(cycleProgressCount, nextSettings);
@@ -2019,6 +2398,8 @@ export default function FocusSessionScreen() {
     timerSettingsRef.current = nextSettings;
     clearFocusTaskSelection();
     setFocusSummary(null);
+    setFocusBlockCompletion(null);
+    setBreakCompletion(null);
     setSelectedPreset(nextPresetId);
     updateCycleFocusCount(nextCycleFocusCount, nextSettings);
     resetTimerForMode(currentMode, nextSettings);
@@ -2063,6 +2444,8 @@ export default function FocusSessionScreen() {
             timerSettingsRef.current = CLASSIC_SETTINGS;
             clearFocusTaskSelection();
             setFocusSummary(null);
+            setFocusBlockCompletion(null);
+            setBreakCompletion(null);
             setSelectedPreset('classic');
             updateCycleFocusCount(cycleProgressCount, CLASSIC_SETTINGS);
             resetTimerForMode(currentMode, CLASSIC_SETTINGS);
@@ -2087,6 +2470,8 @@ export default function FocusSessionScreen() {
 
     clearFocusTaskSelection();
     setFocusSummary(null);
+    setFocusBlockCompletion(null);
+    setBreakCompletion(null);
     changeMode(mode);
   };
 
@@ -2121,6 +2506,9 @@ export default function FocusSessionScreen() {
     completionHandledRef.current = false;
     endTimestampRef.current = now + startingRemainingMs;
     isRunningRef.current = true;
+    setFocusSummary(null);
+    setFocusBlockCompletion(null);
+    setBreakCompletion(null);
     setIsRunning(true);
     setDndReminderVisible(false);
     setFocusBlockVisible(true);
@@ -2162,19 +2550,31 @@ export default function FocusSessionScreen() {
   };
 
   const handleDismissFocusSummary = async () => {
+    await cancelTimerCompletionAlert();
     setFocusSummary(null);
+    setFocusBlockCompletion(null);
+    setBreakCompletion(null);
     clearFocusTaskSelection();
+    sessionBlocksRef.current = [];
+    setSessionBlocks([]);
     wasDistractedRef.current = false;
     focusLeftAtRef.current = null;
+    currentModeRef.current = 'focus';
     setWasDistracted(false);
     setFocusWarningText(null);
-    await persistPomodoroState({
-      wasDistracted: false,
-      focusLeftAt: null,
-      selectedFocusTaskId: null,
-      selectedFocusTaskTitle: null,
-      focusWithoutTaskSelected: false,
-    });
+    setCurrentMode('focus');
+    updateCycleFocusCount(0, timerSettings);
+    resetTimerForMode('focus', timerSettings);
+
+    try {
+      await AsyncStorage.removeItem(POMODORO_SESSION_STORAGE_KEY);
+    } catch (error) {
+      console.log('Failed to clear Pomodoro session:', error);
+    }
+
+    if (navigation.canGoBack()) {
+      navigation.goBack();
+    }
   };
 
   const handleContinueFocus = () => {
@@ -2195,6 +2595,7 @@ export default function FocusSessionScreen() {
       setRemainingSeconds(Math.ceil(pausedRemainingMs / 1000));
       setIsRunning(false);
       setDndReminderVisible(false);
+      await cancelTimerCompletionAlert();
       await persistPomodoroState({
         isRunning: false,
         endTimestamp: null,
@@ -2220,6 +2621,23 @@ export default function FocusSessionScreen() {
     await startTimer();
   };
 
+  const handleStartBreakAfterFocusCompletion = async () => {
+    await stopFocusAlertLoop();
+    setFocusBlockCompletion(null);
+    await startTimer();
+  };
+
+  const handleStartNextFocusAfterBreak = async () => {
+    await stopFocusAlertLoop();
+    setBreakCompletion(null);
+    await handleStartPause();
+  };
+
+  const handleEndSessionFromCycleModal = async () => {
+    await stopFocusAlertLoop();
+    await showFinalSessionSummary();
+  };
+
   const handleStartFocusFromPresetDetails = async () => {
     if (currentMode !== 'focus') {
       if (isRunning) {
@@ -2232,6 +2650,8 @@ export default function FocusSessionScreen() {
 
       clearFocusTaskSelection();
       setFocusSummary(null);
+      setFocusBlockCompletion(null);
+      setBreakCompletion(null);
       changeMode('focus', timerSettings);
       setTaskPickerVisible(true);
       return;
@@ -2243,6 +2663,8 @@ export default function FocusSessionScreen() {
   const handleReset = async () => {
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setFocusSummary(null);
+    setFocusBlockCompletion(null);
+    setBreakCompletion(null);
     clearFocusTaskSelection();
     resetTimerForMode(currentMode);
     await persistPomodoroState({
@@ -2260,6 +2682,7 @@ export default function FocusSessionScreen() {
 
   const handleResetFocusBlock = async () => {
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    await cancelTimerCompletionAlert();
 
     const nextRemainingMs = getModeSeconds(currentMode, timerSettings) * 1000;
 
@@ -2271,6 +2694,8 @@ export default function FocusSessionScreen() {
     wasDistractedRef.current = false;
     completionHandledRef.current = false;
     setFocusSummary(null);
+    setFocusBlockCompletion(null);
+    setBreakCompletion(null);
     setIsRunning(false);
     setRemainingSeconds(Math.ceil(nextRemainingMs / 1000));
     setDndReminderVisible(false);
@@ -2290,41 +2715,78 @@ export default function FocusSessionScreen() {
 
   const handleStopFocusBlock = async () => {
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    setFocusSummary(null);
-    clearFocusTaskSelection();
-    changeMode('focus', timerSettings);
-    await persistPomodoroState({
-      currentMode: 'focus',
-      isRunning: false,
-      endTimestamp: null,
-      startedAt: null,
-      remainingMs: getModeSeconds('focus', timerSettings) * 1000,
-      wasDistracted: false,
-      focusLeftAt: null,
-      selectedFocusTaskId: null,
-      selectedFocusTaskTitle: null,
-      focusWithoutTaskSelected: false,
-    });
+    const stoppedMode = currentModeRef.current;
+
+    if (stoppedMode === 'focus') {
+      const elapsedDurationMinutes = getElapsedFocusDurationMinutes(
+        timerSettings,
+        remainingMsRef.current
+      );
+
+      await recordFocusSessionHistory({
+        status: 'stopped',
+        durationMinutes: elapsedDurationMinutes,
+        startedAt: startedAtRef.current,
+        wasDistracted: wasDistractedRef.current,
+      });
+      appendSessionBlockSummary({
+        status: 'stopped',
+        durationMinutes: elapsedDurationMinutes,
+        startedAt: startedAtRef.current,
+        wasDistracted: wasDistractedRef.current,
+      });
+    }
+
+    await showFinalSessionSummary();
   };
 
   const handleSkip = async () => {
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    await cancelTimerCompletionAlert();
 
     const skippedMode = currentMode;
-    const { nextMode, nextCycleFocusCount } = getNextSessionType(
-      skippedMode,
-      cycleFocusCountRef.current,
-      timerSettings.longBreakInterval
-    );
+    const nextSession =
+      skippedMode === 'focus'
+        ? {
+            nextMode: 'shortBreak' as PomodoroMode,
+            nextCycleFocusCount: cycleFocusCountRef.current,
+          }
+        : getNextSessionType(
+            skippedMode,
+            cycleFocusCountRef.current,
+            timerSettings.longBreakInterval
+          );
+    const { nextMode, nextCycleFocusCount } = nextSession;
+
+    if (skippedMode === 'focus') {
+      const elapsedDurationMinutes = getElapsedFocusDurationMinutes(
+        timerSettings,
+        remainingMsRef.current
+      );
+
+      await recordFocusSessionHistory({
+        status: 'skipped',
+        durationMinutes: elapsedDurationMinutes,
+        startedAt: startedAtRef.current,
+        wasDistracted: wasDistractedRef.current,
+      });
+      appendSessionBlockSummary({
+        status: 'skipped',
+        durationMinutes: elapsedDurationMinutes,
+        startedAt: startedAtRef.current,
+        wasDistracted: wasDistractedRef.current,
+      });
+    }
 
     setFocusSummary(null);
-    clearFocusTaskSelection();
+    setFocusBlockCompletion(null);
+    setBreakCompletion(null);
     updateCycleFocusCount(nextCycleFocusCount, timerSettings);
     changeMode(nextMode);
 
     Speech.speak(
       skippedMode === 'focus'
-        ? 'Focus block skipped. Milo will not count this one.'
+        ? 'Focus block skipped. Take a short break before trying again.'
         : 'Break skipped. Milo is ready for focus.',
       {
         rate: 0.95,
@@ -2341,22 +2803,48 @@ export default function FocusSessionScreen() {
       remainingMs: getModeSeconds(nextMode, timerSettings) * 1000,
       focusLeftAt: null,
       wasDistracted: false,
-      selectedFocusTaskId: null,
-      selectedFocusTaskTitle: null,
-      focusWithoutTaskSelected: false,
+      sessionBlocks: sessionBlocksRef.current,
     });
   };
 
   const handleSkipFocusBlock = async () => {
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    await cancelTimerCompletionAlert();
 
     const skippedMode = currentMode;
-    const { nextMode, nextCycleFocusCount } = getNextSessionType(
-      skippedMode,
-      cycleFocusCountRef.current,
-      timerSettings.longBreakInterval
-    );
+    const nextSession =
+      skippedMode === 'focus'
+        ? {
+            nextMode: 'shortBreak' as PomodoroMode,
+            nextCycleFocusCount: cycleFocusCountRef.current,
+          }
+        : getNextSessionType(
+            skippedMode,
+            cycleFocusCountRef.current,
+            timerSettings.longBreakInterval
+          );
+    const { nextMode, nextCycleFocusCount } = nextSession;
     const nextRemainingMs = getModeSeconds(nextMode, timerSettings) * 1000;
+
+    if (skippedMode === 'focus') {
+      const elapsedDurationMinutes = getElapsedFocusDurationMinutes(
+        timerSettings,
+        remainingMsRef.current
+      );
+
+      await recordFocusSessionHistory({
+        status: 'skipped',
+        durationMinutes: elapsedDurationMinutes,
+        startedAt: startedAtRef.current,
+        wasDistracted: wasDistractedRef.current,
+      });
+      appendSessionBlockSummary({
+        status: 'skipped',
+        durationMinutes: elapsedDurationMinutes,
+        startedAt: startedAtRef.current,
+        wasDistracted: wasDistractedRef.current,
+      });
+    }
 
     currentModeRef.current = nextMode;
     endTimestampRef.current = null;
@@ -2367,6 +2855,8 @@ export default function FocusSessionScreen() {
     wasDistractedRef.current = false;
     completionHandledRef.current = false;
     setFocusSummary(null);
+    setFocusBlockCompletion(null);
+    setBreakCompletion(null);
     setCurrentMode(nextMode);
     updateCycleFocusCount(nextCycleFocusCount, timerSettings);
     setIsRunning(false);
@@ -2378,7 +2868,7 @@ export default function FocusSessionScreen() {
 
     Speech.speak(
       skippedMode === 'focus'
-        ? 'Focus block skipped. Milo will not count this one.'
+        ? 'Focus block skipped. Take a short break before trying again.'
         : 'Break skipped. Milo is ready for focus.',
       {
         rate: 0.95,
@@ -2395,6 +2885,7 @@ export default function FocusSessionScreen() {
       remainingMs: nextRemainingMs,
       focusLeftAt: null,
       wasDistracted: false,
+      sessionBlocks: sessionBlocksRef.current,
     });
   };
 
@@ -2742,6 +3233,157 @@ export default function FocusSessionScreen() {
       <Modal
         animationType="fade"
         transparent
+        visible={Boolean(focusBlockCompletion)}
+        onRequestClose={() => {}}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.focusModalCard}>
+            <View style={styles.modalAccentBar} />
+            <View style={styles.modalBadge}>
+              <Text style={styles.modalBadgeText}>Pomodoro Cycle</Text>
+            </View>
+            <Text style={styles.modalTitle}>Focus block completed</Text>
+
+            {focusBlockCompletion ? (
+              <>
+                <View style={styles.summaryRows}>
+                  <View style={styles.summaryRow}>
+                    <Text style={styles.summaryLabel}>Duration</Text>
+                    <Text style={styles.summaryValue}>
+                      {focusBlockCompletion.durationMinutes} min
+                    </Text>
+                  </View>
+
+                  <View style={styles.summaryRow}>
+                    <Text style={styles.summaryLabel}>Task</Text>
+                    <Text style={styles.summaryValue} numberOfLines={2}>
+                      {focusBlockCompletion.taskTitle || 'Focus without task'}
+                    </Text>
+                  </View>
+
+                  <View style={styles.summaryRow}>
+                    <Text style={styles.summaryLabel}>Status</Text>
+                    <View
+                      style={[
+                        styles.summaryStatusBadge,
+                        focusBlockCompletion.wasDistracted &&
+                          styles.summaryStatusBadgeDistracted,
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.summaryStatusText,
+                          focusBlockCompletion.wasDistracted &&
+                            styles.summaryStatusTextDistracted,
+                        ]}
+                      >
+                        {focusBlockCompletion.wasDistracted
+                          ? 'Distracted'
+                          : 'Clean'}
+                      </Text>
+                    </View>
+                  </View>
+                </View>
+
+                <View style={styles.summaryMiloBox}>
+                  <Image
+                    source={getMiloImageSource('celebrating')}
+                    style={styles.summaryMiloImage}
+                    resizeMode="contain"
+                  />
+                  <Text style={styles.summaryMiloText}>
+                    Great job! Focus block done. Ready for your break?
+                  </Text>
+                </View>
+              </>
+            ) : null}
+
+            <View style={styles.modalButtonStack}>
+              <TouchableOpacity
+                activeOpacity={0.88}
+                style={styles.modalPrimaryButton}
+                onPress={handleStartBreakAfterFocusCompletion}
+              >
+                <Text style={styles.modalPrimaryButtonText}>
+                  {focusBlockCompletion?.nextBreakMode === 'longBreak'
+                    ? 'Start Long Break'
+                    : 'Start Short Break'}
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                activeOpacity={0.82}
+                style={styles.modalSecondaryButton}
+                onPress={handleEndSessionFromCycleModal}
+              >
+                <Text style={styles.modalSecondaryButtonText}>End Session</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        animationType="fade"
+        transparent
+        visible={Boolean(breakCompletion)}
+        onRequestClose={() => {}}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.focusModalCard}>
+            <View style={styles.modalAccentBar} />
+            <View style={styles.modalBadge}>
+              <Text style={styles.modalBadgeText}>
+                {breakCompletion?.breakMode === 'longBreak'
+                  ? 'Long Break'
+                  : 'Short Break'}
+              </Text>
+            </View>
+            <Text style={styles.modalTitle}>
+              {breakCompletion?.breakMode === 'longBreak'
+                ? 'Long break completed'
+                : 'Break completed'}
+            </Text>
+
+            <View style={styles.summaryMiloBox}>
+              <Image
+                source={getMiloImageSource('happy')}
+                style={styles.summaryMiloImage}
+                resizeMode="contain"
+              />
+              <Text style={styles.summaryMiloText}>
+                {breakCompletion?.breakMode === 'longBreak'
+                  ? 'Nice rest! Ready to continue with Milo?'
+                  : 'Break is done. Ready for the next focus block?'}
+              </Text>
+            </View>
+
+            <View style={styles.modalButtonStack}>
+              <TouchableOpacity
+                activeOpacity={0.88}
+                style={styles.modalPrimaryButton}
+                onPress={handleStartNextFocusAfterBreak}
+              >
+                <Text style={styles.modalPrimaryButtonText}>
+                  Start Next Focus
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                activeOpacity={0.82}
+                style={styles.modalSecondaryButton}
+                onPress={handleEndSessionFromCycleModal}
+              >
+                <Text style={styles.modalSecondaryButtonText}>End Session</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        animationType="fade"
+        transparent
         visible={Boolean(focusSummary)}
         onRequestClose={() => {}}
       >
@@ -2751,15 +3393,29 @@ export default function FocusSessionScreen() {
             <View style={styles.modalBadge}>
               <Text style={styles.modalBadgeText}>Session Summary</Text>
             </View>
-            <Text style={styles.modalTitle}>Focus completed</Text>
+            <Text style={styles.modalTitle}>Session Summary</Text>
 
             {focusSummary ? (
               <>
                 <View style={styles.summaryRows}>
                   <View style={styles.summaryRow}>
-                    <Text style={styles.summaryLabel}>Duration</Text>
+                    <Text style={styles.summaryLabel}>Total focus</Text>
                     <Text style={styles.summaryValue}>
-                      {focusSummary.durationMinutes} min
+                      {focusSummary.totalFocusMinutes} min
+                    </Text>
+                  </View>
+
+                  <View style={styles.summaryRow}>
+                    <Text style={styles.summaryLabel}>Completed</Text>
+                    <Text style={styles.summaryValue}>
+                      {focusSummary.completedBlocks} blocks
+                    </Text>
+                  </View>
+
+                  <View style={styles.summaryRow}>
+                    <Text style={styles.summaryLabel}>Skipped/stopped</Text>
+                    <Text style={styles.summaryValue}>
+                      {focusSummary.interruptedBlocks} blocks
                     </Text>
                   </View>
 
@@ -2789,6 +3445,13 @@ export default function FocusSessionScreen() {
                         {focusSummary.wasDistracted ? 'Distracted' : 'Clean'}
                       </Text>
                     </View>
+                  </View>
+
+                  <View style={styles.summaryRow}>
+                    <Text style={styles.summaryLabel}>Preset used</Text>
+                    <Text style={styles.summaryValue} numberOfLines={1}>
+                      {focusSummary.presetName}
+                    </Text>
                   </View>
                 </View>
 
@@ -3286,6 +3949,18 @@ export default function FocusSessionScreen() {
               </View>
               <Text style={styles.presetDetailNote}>
                 {selectedPresetDetailNote}
+              </Text>
+            </View>
+
+            <View style={styles.realTimeTimerNoteBox}>
+              <Ionicons
+                name="time-outline"
+                size={15}
+                color={theme.colors.primaryDark}
+              />
+              <Text style={styles.realTimeTimerNoteText}>
+                Pomodoro uses real time, so the timer keeps running even if you
+                leave the app.
               </Text>
             </View>
           </View>
@@ -3809,6 +4484,26 @@ const styles = StyleSheet.create({
     marginTop: 13,
     paddingHorizontal: 12,
     paddingVertical: 10,
+  },
+  realTimeTimerNoteBox: {
+    borderRadius: 13,
+    backgroundColor: '#F8FCF8',
+    borderWidth: 1,
+    borderColor: '#DCEBDD',
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 9,
+    paddingHorizontal: 11,
+    paddingVertical: 9,
+  },
+  realTimeTimerNoteText: {
+    flex: 1,
+    minWidth: 0,
+    marginLeft: 7,
+    color: theme.colors.textSoft,
+    fontWeight: '800',
+    fontSize: 10.5,
+    lineHeight: 15,
   },
   noteIconBubble: {
     width: 32,

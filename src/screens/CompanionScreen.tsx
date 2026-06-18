@@ -9,15 +9,19 @@ import React, {
 import {
   Animated,
   Image,
+  Modal,
+  ScrollView,
   StyleSheet,
+  type StyleProp,
   Text,
-  TextInput,
   TouchableOpacity,
   useWindowDimensions,
   View,
+  type ViewStyle,
 } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import * as Speech from 'expo-speech';
+import { LinearGradient } from 'expo-linear-gradient';
 import { VideoView, useVideoPlayer } from 'expo-video';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
@@ -27,8 +31,11 @@ import { theme } from '../theme';
 import { useAuth } from '../lib/AuthContext';
 import { useTasks } from '../lib/TaskContext';
 import {
-  getMiloEncouragement,
-  getMiloMoodLabel,
+  getFocusSessionHistory,
+  type FocusSessionHistoryItem,
+  type FocusSessionStatus,
+} from '../lib/focusSessionHistory';
+import {
   getTodayDate,
   MiloMood,
 } from '../lib/miloPersonality';
@@ -46,22 +53,19 @@ import MiloMoodImage from '../components/milo/MiloMoodImage';
 
 type IconName = React.ComponentProps<typeof Ionicons>['name'];
 
-type QuickActionKey = 'first' | 'plan' | 'calm' | 'schedule';
 type MiloVideoKey = 'idle' | 'greeting';
+type CompanionDetailModal = 'analytics' | 'sessions' | 'reaction' | 'talk';
 
 const TEMPORARY_MILO_REACTION_MS = 6500;
 const MILO_INACTIVITY_AUTOPLAY_MS = 30000;
+const SPEECH_ROTATION_MS = 6000;
+const TREND_CHART_HEIGHT = 112;
+const TREND_DOT_SIZE = 10;
+const TREND_CHART_VERTICAL_PADDING = 12;
+const TREND_AXIS_LABEL_COUNT = 6;
 const miloIdleScene = require('../../assets/images/companion/milo_idle_scene.png');
 const miloIdleVideo = require('../../assets/videos/milo/milo_idle_final.mp4');
 const miloGreetingVideo = require('../../assets/videos/milo/milo_greeting_final.mp4');
-
-type InsightItem = {
-  label: string;
-  value: number;
-  icon: IconName;
-  color: string;
-  backgroundColor: string;
-};
 
 type MoodStatusItem = {
   label: string;
@@ -97,6 +101,32 @@ type CompanionPlannerSnapshot = {
   startEarlyCount: number;
   acceptedOverlapCount: number;
   unacceptedOverlapCount: number;
+};
+
+type WeeklyFocusTrendItem = {
+  dateKey: string;
+  label: string;
+  minutes: number;
+};
+
+type FocusAnalyticsSummary = {
+  todayFocusMinutes: number;
+  cleanSessions: number;
+  distractedSessions: number;
+  mostFocusedTask: string;
+  weeklyTrend: WeeklyFocusTrendItem[];
+  recentSessions: FocusSessionHistoryItem[];
+  latestSession: FocusSessionHistoryItem | null;
+  latestCompletedSession: FocusSessionHistoryItem | null;
+  completedSessionCount: number;
+  sessionsThisWeek: number;
+  dayStreak: number;
+  focusScore: number | null;
+};
+
+type TrendPlotPoint = {
+  x: number;
+  y: number;
 };
 
 const overlapTypes = [
@@ -219,32 +249,6 @@ function countSituations(items: SituationItem[], kinds: MiloSituationKind[]) {
   return items.filter((item) => kinds.includes(item.situation.kind)).length;
 }
 
-function getTaskMood(situation?: MiloTaskSituation): MiloMood {
-  if (!situation) return 'focused';
-
-  if (['overdue', 'missed'].includes(situation.kind)) return 'worried';
-
-  if (situation.kind === 'high_focus' && situation.urgency.level === 'high') {
-    return 'worried';
-  }
-
-  if (
-    [
-      'happening_now',
-      'starting_soon',
-      'accepted_overlap',
-      'due_today',
-      'due_tonight',
-      'all_day',
-      'high_focus',
-    ].includes(situation.kind)
-  ) {
-    return 'focused';
-  }
-
-  return 'waving';
-}
-
 function getDefaultMiloMessage(
   displayName: string,
   snapshot: CompanionPlannerSnapshot
@@ -314,46 +318,6 @@ function getDefaultMiloMessage(
   return `Your planner looks calm, ${displayName}. Future you will thank you.`;
 }
 
-function getMiloSays(snapshot: CompanionPlannerSnapshot) {
-  if (snapshot.missedCount > 0 || snapshot.overdueCount > 0) {
-    return 'No panic. We can rescue this one gently.';
-  }
-
-  if (snapshot.unacceptedOverlapCount > 0) {
-    return "Hmm, plans are close. Let's protect your time.";
-  }
-
-  if (snapshot.acceptedOverlapCount > 0) {
-    return "Keep Both is okay. I'll watch the timing.";
-  }
-
-  if (snapshot.happeningNowCount > 0 || snapshot.startingSoonCount > 0) {
-    return "Almost time. Let's get ready calmly.";
-  }
-
-  if (snapshot.dueTodayCount > 0 || snapshot.meetingTodayCount > 0) {
-    return "This needs today's focus. I'll stay with you.";
-  }
-
-  if (snapshot.highFocusCount > 0) {
-    return 'Big focus task. Tiny first step.';
-  }
-
-  if (snapshot.completedTodayCount > 0) {
-    return 'Nice work. I saw that progress.';
-  }
-
-  if (snapshot.pendingCount === 0) {
-    return 'Your planner is clear. Want one small plan?';
-  }
-
-  if (snapshot.startEarlyCount > 0) {
-    return 'Future you will like one early step.';
-  }
-
-  return 'Your planner looks calm. One small step is enough.';
-}
-
 function getSituationMood(snapshot: CompanionPlannerSnapshot): MiloMood {
   if (snapshot.missedCount > 0 || snapshot.overdueCount > 0) return 'worried';
   if (snapshot.unacceptedOverlapCount > 0) return 'worried';
@@ -381,73 +345,658 @@ function getSituationMood(snapshot: CompanionPlannerSnapshot): MiloMood {
   return 'waving';
 }
 
-function InsightPill({
-  item,
-  showDivider,
-}: {
-  item: InsightItem;
-  showDivider: boolean;
-}) {
+const focusSessionStatusMeta: Record<
+  FocusSessionStatus,
+  {
+    label: string;
+    icon: IconName;
+    color: string;
+    backgroundColor: string;
+  }
+> = {
+  completed: {
+    label: 'Completed',
+    icon: 'checkmark-circle',
+    color: theme.colors.primaryDark,
+    backgroundColor: theme.colors.successSoft,
+  },
+  stopped: {
+    label: 'Stopped',
+    icon: 'pause-circle',
+    color: '#B7791F',
+    backgroundColor: theme.colors.yellowSoft,
+  },
+  skipped: {
+    label: 'Skipped',
+    icon: 'play-skip-forward',
+    color: theme.colors.muted,
+    backgroundColor: '#F3F4F6',
+  },
+};
+
+function getLocalDateKey(date: Date) {
+  const year = date.getFullYear();
+  const month = `${date.getMonth() + 1}`.padStart(2, '0');
+  const day = `${date.getDate()}`.padStart(2, '0');
+
+  return `${year}-${month}-${day}`;
+}
+
+function getDateFromKey(dateKey: string) {
+  const [year, month, day] = dateKey.split('-').map(Number);
+
+  return new Date(year, month - 1, day);
+}
+
+function getSessionDateKey(session: FocusSessionHistoryItem) {
+  return getLocalDateKey(new Date(session.date));
+}
+
+function getSessionTitle(session: FocusSessionHistoryItem) {
+  return session.selectedTaskTitle?.trim() || 'Focus without task';
+}
+
+function formatMinutesLabel(minutes: number) {
+  const roundedMinutes = Math.max(0, Math.round(minutes));
+
+  return `${roundedMinutes} min`;
+}
+
+function formatSessionTime(value: string) {
+  const date = new Date(value);
+  let hours = date.getHours();
+  const minutes = `${date.getMinutes()}`.padStart(2, '0');
+  const suffix = hours >= 12 ? 'PM' : 'AM';
+
+  hours %= 12;
+  if (hours === 0) hours = 12;
+
+  return `${hours}:${minutes} ${suffix}`;
+}
+
+function formatSessionDate(value: string, todayDate: string) {
+  const dateKey = getLocalDateKey(new Date(value));
+  const today = getDateFromKey(todayDate);
+  const yesterday = new Date(today);
+  yesterday.setDate(today.getDate() - 1);
+
+  if (dateKey === todayDate) return 'Today';
+  if (dateKey === getLocalDateKey(yesterday)) return 'Yesterday';
+
+  const date = new Date(value);
+  const month = date.toLocaleString('en-US', { month: 'short' });
+
+  return `${month} ${date.getDate()}`;
+}
+
+function formatSessionDateTime(value: string, todayDate: string) {
+  return `${formatSessionDate(value, todayDate)}, ${formatSessionTime(value)}`;
+}
+
+function formatFocusQuality(value: FocusSessionHistoryItem['focusQuality']) {
+  return value === 'clean' ? 'Clean' : 'Distracted';
+}
+
+function getDerivedSessionScore(session: FocusSessionHistoryItem) {
+  if (typeof session.focusScore === 'number') {
+    return Math.round(Math.min(100, Math.max(0, session.focusScore)));
+  }
+
+  if (session.status === 'completed') {
+    return session.focusQuality === 'clean' ? 94 : 76;
+  }
+
+  return session.status === 'stopped' ? 52 : 42;
+}
+
+function getFocusDayStreak(completedSessions: FocusSessionHistoryItem[], todayDate: string) {
+  const completedDateKeys = new Set(completedSessions.map(getSessionDateKey));
+  let streak = 0;
+  const cursor = getDateFromKey(todayDate);
+
+  while (completedDateKeys.has(getLocalDateKey(cursor))) {
+    streak += 1;
+    cursor.setDate(cursor.getDate() - 1);
+  }
+
+  return streak;
+}
+
+function getNiceTrendMax(minutes: number[]) {
+  const maxMinutes = Math.max(0, ...minutes);
+
+  if (maxMinutes <= 10) return 10;
+  if (maxMinutes <= 30) return Math.ceil(maxMinutes / 5) * 5;
+  if (maxMinutes <= 60) return Math.ceil(maxMinutes / 10) * 10;
+
+  return Math.ceil(maxMinutes / 15) * 15;
+}
+
+function getTrendAxisLabels(maxMinutes: number) {
+  return Array.from({ length: TREND_AXIS_LABEL_COUNT }, (_, index) => {
+    const ratio = index / (TREND_AXIS_LABEL_COUNT - 1);
+
+    return Math.round(maxMinutes - maxMinutes * ratio);
+  });
+}
+
+function formatTrendAxisLabel(minutes: number) {
+  return `${minutes} min`;
+}
+
+function getCatmullRomValue(
+  previous: number,
+  current: number,
+  next: number,
+  following: number,
+  amount: number
+) {
+  const squared = amount * amount;
+  const cubed = squared * amount;
+
   return (
-    <View style={styles.insightPill}>
-      {showDivider ? <View style={styles.insightDivider} /> : null}
-      <View style={styles.insightMetricRow}>
-        <View style={[styles.insightIcon, { backgroundColor: `${item.color}16` }]}>
-          <Ionicons name={item.icon} size={12} color={item.color} />
+    0.5 *
+    (2 * current +
+      (-previous + next) * amount +
+      (2 * previous - 5 * current + 4 * next - following) * squared +
+      (-previous + 3 * current - 3 * next + following) * cubed)
+  );
+}
+
+function getSmoothTrendPoints(points: TrendPlotPoint[]) {
+  if (points.length < 3) return points;
+
+  const smoothPoints: TrendPlotPoint[] = [];
+  const stepsPerSegment = 8;
+
+  for (let index = 0; index < points.length - 1; index += 1) {
+    const previous = points[Math.max(0, index - 1)];
+    const current = points[index];
+    const next = points[index + 1];
+    const following = points[Math.min(points.length - 1, index + 2)];
+
+    for (let step = 0; step < stepsPerSegment; step += 1) {
+      const amount = step / stepsPerSegment;
+
+      smoothPoints.push({
+        x: getCatmullRomValue(
+          previous.x,
+          current.x,
+          next.x,
+          following.x,
+          amount
+        ),
+        y: getCatmullRomValue(
+          previous.y,
+          current.y,
+          next.y,
+          following.y,
+          amount
+        ),
+      });
+    }
+  }
+
+  smoothPoints.push(points[points.length - 1]);
+
+  return smoothPoints;
+}
+
+function createPlaceholderRecentSessions(todayDate: string): FocusSessionHistoryItem[] {
+  const today = getDateFromKey(todayDate);
+  const makeDate = (daysAgo: number, hour: number, minute: number) => {
+    const date = new Date(today);
+    date.setDate(today.getDate() - daysAgo);
+    date.setHours(hour, minute, 0, 0);
+
+    return date.toISOString();
+  };
+
+  return [
+    {
+      id: 'placeholder-focus-1',
+      date: makeDate(0, 10, 42),
+      durationMinutes: 25,
+      selectedTaskTitle: 'Overdue Assignment',
+      focusQuality: 'clean',
+      presetName: 'Classic Pomodoro',
+      status: 'completed',
+      focusScore: 96,
+    },
+    {
+      id: 'placeholder-focus-2',
+      date: makeDate(1, 15, 10),
+      durationMinutes: 15,
+      selectedTaskTitle: 'Review notes',
+      focusQuality: 'distracted',
+      presetName: 'Quick Focus',
+      status: 'completed',
+      focusScore: 78,
+    },
+    {
+      id: 'placeholder-focus-3',
+      date: makeDate(2, 9, 25),
+      durationMinutes: 8,
+      selectedTaskTitle: 'Plan tiny steps',
+      focusQuality: 'clean',
+      presetName: 'Custom Rhythm',
+      status: 'stopped',
+      focusScore: 55,
+    },
+  ];
+}
+
+function createFocusAnalytics(
+  history: FocusSessionHistoryItem[],
+  todayDate: string
+): FocusAnalyticsSummary {
+  const sortedHistory = [...history].sort(
+    (first, second) =>
+      new Date(second.date).getTime() - new Date(first.date).getTime()
+  );
+  const completedSessions = sortedHistory.filter(
+    (session) => session.status === 'completed'
+  );
+  const todayCompletedSessions = completedSessions.filter(
+    (session) => getSessionDateKey(session) === todayDate
+  );
+  const today = getDateFromKey(todayDate);
+  const weekDateKeys = Array.from({ length: 7 }, (_, index) => {
+    const date = new Date(today);
+    date.setDate(today.getDate() - (6 - index));
+
+    return getLocalDateKey(date);
+  });
+  const weekDateKeySet = new Set(weekDateKeys);
+  const sessionsThisWeek = sortedHistory.filter((session) =>
+    weekDateKeySet.has(getSessionDateKey(session))
+  );
+  const completedSessionsThisWeek = completedSessions.filter((session) =>
+    weekDateKeySet.has(getSessionDateKey(session))
+  );
+  const taskTotals = new Map<string, number>();
+
+  completedSessions.forEach((session) => {
+    const title = getSessionTitle(session);
+    taskTotals.set(title, (taskTotals.get(title) ?? 0) + session.durationMinutes);
+  });
+
+  let mostFocusedTask = 'No focus yet';
+  let mostFocusedMinutes = 0;
+  taskTotals.forEach((minutes, title) => {
+    if (minutes > mostFocusedMinutes) {
+      mostFocusedTask = title;
+      mostFocusedMinutes = minutes;
+    }
+  });
+
+  const weeklyTrend = weekDateKeys.map((dateKey) => {
+    const date = getDateFromKey(dateKey);
+    const label = date.toLocaleDateString('en-US', { weekday: 'short' }).slice(0, 3);
+    const minutes = completedSessions
+      .filter((session) => getSessionDateKey(session) === dateKey)
+      .reduce((total, session) => total + session.durationMinutes, 0);
+
+    return {
+      dateKey,
+      label,
+      minutes,
+    };
+  });
+  const scoredSessions =
+    completedSessionsThisWeek.length > 0 ? completedSessionsThisWeek : completedSessions;
+  const focusScore =
+    scoredSessions.length > 0
+      ? Math.round(
+          scoredSessions.reduce(
+            (total, session) => total + getDerivedSessionScore(session),
+            0
+          ) / scoredSessions.length
+        )
+      : null;
+
+  return {
+    todayFocusMinutes: todayCompletedSessions.reduce(
+      (total, session) => total + session.durationMinutes,
+      0
+    ),
+    cleanSessions: completedSessions.filter(
+      (session) => session.focusQuality === 'clean'
+    ).length,
+    distractedSessions: completedSessions.filter(
+      (session) => session.focusQuality === 'distracted'
+    ).length,
+    mostFocusedTask,
+    weeklyTrend,
+    recentSessions: sortedHistory.slice(0, 3),
+    latestSession: sortedHistory[0] ?? null,
+    latestCompletedSession: completedSessions[0] ?? null,
+    completedSessionCount: completedSessions.length,
+    sessionsThisWeek: sessionsThisWeek.length,
+    dayStreak: getFocusDayStreak(completedSessions, todayDate),
+    focusScore,
+  };
+}
+
+function WeeklyFocusChart({
+  data,
+  style,
+}: {
+  data: WeeklyFocusTrendItem[];
+  style?: StyleProp<ViewStyle>;
+}) {
+  const [plotWidth, setPlotWidth] = useState(0);
+  const chartMaxMinutes = getNiceTrendMax(data.map((item) => item.minutes));
+  const axisLabels = getTrendAxisLabels(chartMaxMinutes);
+  const hasFocusData = data.some((item) => item.minutes > 0);
+  const plotTop = TREND_CHART_VERTICAL_PADDING;
+  const plotBottom = TREND_CHART_HEIGHT - TREND_CHART_VERTICAL_PADDING;
+  const plotRange = plotBottom - plotTop;
+  const stepX =
+    plotWidth > 0 && data.length > 1 ? plotWidth / (data.length - 1) : 0;
+  const points = data.map((item, index) => {
+    const ratio = Math.min(1, Math.max(0, item.minutes / chartMaxMinutes));
+
+    return {
+      ...item,
+      x: stepX * index,
+      y: plotTop + (1 - ratio) * plotRange,
+    };
+  });
+  const smoothPoints =
+    plotWidth > 0
+      ? getSmoothTrendPoints(points).map((point) => ({
+          x: Math.min(plotWidth, Math.max(0, point.x)),
+          y: Math.min(plotBottom, Math.max(plotTop, point.y)),
+        }))
+      : [];
+  const areaBarWidth =
+    smoothPoints.length > 1
+      ? Math.max(6, plotWidth / (smoothPoints.length - 1) + 2)
+      : 18;
+
+  return (
+    <View pointerEvents="none" style={[styles.trendCard, style]}>
+      <View style={styles.trendChartBody}>
+        <View style={styles.trendYAxis}>
+          {axisLabels.map((label, index) => {
+            const y =
+              plotTop +
+              (plotRange * index) / Math.max(1, TREND_AXIS_LABEL_COUNT - 1);
+
+            return (
+              <Text
+                key={`${label}-${index}`}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.72}
+                style={[styles.trendYAxisLabel, { top: y - 7 }]}
+              >
+                {formatTrendAxisLabel(label)}
+              </Text>
+            );
+          })}
         </View>
-        <Text style={[styles.insightValue, { color: item.color }]}>
-          {item.value}
-        </Text>
+
+        <View style={styles.trendPlotWrap}>
+          <View
+            style={styles.trendPlot}
+            onLayout={({ nativeEvent }) =>
+              setPlotWidth(nativeEvent.layout.width)
+            }
+          >
+            {axisLabels.map((label, index) => {
+              const y =
+                plotTop +
+                (plotRange * index) / Math.max(1, TREND_AXIS_LABEL_COUNT - 1);
+
+              return (
+                <View
+                  key={`${label}-${index}-grid`}
+                  pointerEvents="none"
+                  style={[styles.trendGridLine, { top: y }]}
+                />
+              );
+            })}
+
+            {smoothPoints.length > 0
+              ? smoothPoints.map((point, index) => {
+                  const areaHeight = Math.max(0, plotBottom - point.y);
+
+                  if (areaHeight <= 0) return null;
+
+                  return (
+                    <LinearGradient
+                      key={`area-${index}`}
+                      pointerEvents="none"
+                      start={{ x: 0, y: 0 }}
+                      end={{ x: 0, y: 1 }}
+                      colors={[
+                        'rgba(45, 181, 105, 0.18)',
+                        'rgba(45, 181, 105, 0.025)',
+                      ]}
+                      style={[
+                        styles.trendAreaColumn,
+                        {
+                          left: point.x - areaBarWidth / 2,
+                          top: point.y,
+                          width: areaBarWidth,
+                          height: areaHeight,
+                        },
+                      ]}
+                    />
+                  );
+                })
+              : null}
+
+            {smoothPoints.length > 0
+              ? smoothPoints.slice(0, -1).map((point, index) => {
+                  const nextPoint = smoothPoints[index + 1];
+                  const deltaX = nextPoint.x - point.x;
+                  const deltaY = nextPoint.y - point.y;
+                  const segmentLength = Math.sqrt(deltaX ** 2 + deltaY ** 2);
+                  const angle = (Math.atan2(deltaY, deltaX) * 180) / Math.PI;
+
+                  return (
+                    <View
+                      key={`segment-${index}`}
+                      pointerEvents="none"
+                      style={[
+                        styles.trendSegment,
+                        {
+                          left: point.x + deltaX / 2 - segmentLength / 2,
+                          top: point.y + deltaY / 2 - 1.5,
+                          width: segmentLength,
+                          transform: [{ rotate: `${angle}deg` }],
+                        },
+                      ]}
+                    />
+                  );
+                })
+              : null}
+
+            {plotWidth > 0
+              ? points.map((point) => (
+                  <View
+                    key={`${point.dateKey}-dot`}
+                    pointerEvents="none"
+                    style={[
+                      styles.trendDot,
+                      {
+                        left: point.x - TREND_DOT_SIZE / 2,
+                        top: point.y - TREND_DOT_SIZE / 2,
+                      },
+                    ]}
+                  >
+                    <View style={styles.trendDotCore} />
+                  </View>
+                ))
+              : null}
+
+            {!hasFocusData ? (
+              <View pointerEvents="none" style={styles.trendEmptyHintWrap}>
+                <Text numberOfLines={1} style={styles.trendEmptyHintText}>
+                  No focus data yet
+                </Text>
+              </View>
+            ) : null}
+          </View>
+
+          <View style={styles.trendLabelRow}>
+            {data.map((item) => (
+              <Text key={item.dateKey} numberOfLines={1} style={styles.trendLabel}>
+                {item.label}
+              </Text>
+            ))}
+          </View>
+        </View>
       </View>
-      <Text
-        numberOfLines={2}
-        adjustsFontSizeToFit
-        minimumFontScale={0.86}
-        style={styles.insightLabel}
-      >
-        {item.label}
-      </Text>
     </View>
   );
 }
 
-function QuickActionButton({
-  title,
-  icon,
-  onPress,
-  backgroundColor,
-  iconColor = theme.colors.primaryDark,
-}: {
-  title: string;
-  icon: IconName;
-  onPress: () => void;
-  backgroundColor: string;
-  iconColor?: string;
-}) {
-  return (
-    <TouchableOpacity
-      activeOpacity={0.84}
-      style={[styles.quickActionButton, { backgroundColor }]}
-      onPress={onPress}
-      accessibilityRole="button"
-      accessibilityLabel={title}
-    >
-      <Ionicons
-        name={icon}
-        size={20}
-        color={iconColor}
-        style={styles.quickActionIcon}
-      />
-      <Text
-        numberOfLines={2}
-        adjustsFontSizeToFit
-        minimumFontScale={0.84}
-        style={styles.quickActionText}
-      >
-        {title}
-      </Text>
-    </TouchableOpacity>
+function getMiloFocusReaction(analytics: FocusAnalyticsSummary) {
+  if (
+    analytics.latestSession?.status === 'stopped' ||
+    analytics.latestSession?.status === 'skipped'
+  ) {
+    return "It's okay. Let's restart with a smaller focus block.";
+  }
+
+  if (analytics.sessionsThisWeek >= 5) {
+    return "You're building a strong focus habit.";
+  }
+
+  const latestCompletedSession = analytics.latestCompletedSession;
+
+  if (latestCompletedSession?.focusQuality === 'clean') {
+    return 'Great job! You stayed focused.';
+  }
+
+  if (latestCompletedSession?.focusQuality === 'distracted') {
+    return "You came back and finished. Let's try cleaner focus next time.";
+  }
+
+  return 'Start one focus block and Milo will cheer you on here.';
+}
+
+function getMiloProductivityInsight(analytics: FocusAnalyticsSummary) {
+  if (!analytics.latestSession) {
+    return 'Start one focus session and Milo will build your analytics here.';
+  }
+
+  if (analytics.sessionsThisWeek >= 5) {
+    return "You're showing up often this week. Keep the habit gentle and repeatable.";
+  }
+
+  if (analytics.dayStreak >= 2) {
+    return 'Your streak is growing. One calm block tomorrow can keep it alive.';
+  }
+
+  if (analytics.distractedSessions > analytics.cleanSessions) {
+    return 'Distractions showed up, but finishing still counts. Try a shorter block next.';
+  }
+
+  if (analytics.todayFocusMinutes > 0) {
+    return 'You gave today real focus. A short reset can help your next block stay calm.';
+  }
+
+  return 'Pick one small task and Milo will help you build momentum.';
+}
+
+function getMiloNextSessionSuggestion(analytics: FocusAnalyticsSummary) {
+  const latestSession = analytics.latestSession;
+
+  if (!latestSession) {
+    return 'Try a 10 or 15 minute focus block with one clear task.';
+  }
+
+  if (latestSession.status === 'stopped' || latestSession.status === 'skipped') {
+    return 'Restart with a smaller focus block and one tiny target.';
+  }
+
+  if (analytics.sessionsThisWeek >= 5) {
+    return 'Protect the habit: one clean block is enough for the next step.';
+  }
+
+  if (latestSession.focusQuality === 'distracted') {
+    return 'Before the next session, remove one distraction and choose a shorter preset.';
+  }
+
+  return 'Repeat this preset with your next important task.';
+}
+
+function getTimeAwareMiloLine(displayName: string) {
+  const hour = new Date().getHours();
+
+  if (hour >= 5 && hour < 11) {
+    return `Good morning, ${displayName}. Start small and make the day lighter.`;
+  }
+
+  if (hour >= 11 && hour < 14) {
+    return 'Did you have lunch already?';
+  }
+
+  if (hour >= 18 && hour < 23) {
+    return `Evening check-in, ${displayName}. One calm block is enough.`;
+  }
+
+  if (hour >= 23 || hour < 5) {
+    return `Late night, ${displayName}. Be kind to your energy too.`;
+  }
+
+  return `Keep going, ${displayName}. Your next tiny step is enough.`;
+}
+
+function getRotatingMiloMessages(
+  displayName: string,
+  snapshot: CompanionPlannerSnapshot,
+  analytics: FocusAnalyticsSummary
+) {
+  const taskTitle = getTaskTitle(snapshot.firstTask);
+  const greetingLine = snapshot.firstTask
+    ? `"${taskTitle}" needs your focus today. I'll stay with you.`
+    : "Pick one small focus step. I'll stay with you.";
+  const habitLine =
+    analytics.completedSessionCount >= 5
+      ? "You're building a strong focus habit."
+      : null;
+  const lines = [
+    greetingLine,
+    "Aww, don't be stressed. Milo will help you!",
+    getTimeAwareMiloLine(displayName),
+    'Small focus today still counts. Milo is proud of you.',
+    'One tiny step first. Then we win the day.',
+    'If your brain has too many tabs open, choose one and park the rest.',
+    getMiloFocusReaction(analytics),
+    habitLine,
+  ];
+
+  return Array.from(
+    new Set(lines.filter((line): line is string => Boolean(line)))
   );
+}
+
+function getTalkPreviewText(analytics: FocusAnalyticsSummary) {
+  const latestSession = analytics.latestSession;
+
+  if (!latestSession) {
+    return 'I can chat here soon. For now, I can help you plan the next tiny step.';
+  }
+
+  if (latestSession.status === 'completed') {
+    const taskTitle = getSessionTitle(latestSession);
+
+    return latestSession.focusQuality === 'clean'
+      ? `Great job finishing your focus session for ${taskTitle}.`
+      : `You finished ${taskTitle}, even after a distraction. Proud of you.`;
+  }
+
+  if (latestSession.status === 'stopped') {
+    return 'You stopped the last block. We can restart with a gentler timer.';
+  }
+
+  return 'You skipped the last block. Want to try a smaller focus step next?';
 }
 
 function MoodStatusCard({ item }: { item: MoodStatusItem }) {
@@ -483,6 +1032,11 @@ export default function CompanionScreen() {
   const displayName = userName?.trim() || 'Student';
   const todayDate = getTodayDate();
   const compactWidth = width < 380;
+  const narrowContent = width < 520;
+  const stackTalkCard = width < 430;
+  const stackDashboardCards = width < 720;
+  const compactReactsStrip = width < 430;
+  const stackReactsStrip = width < 360;
   const shortScreen = height < 760;
 
   const speechBubbleMotion = useRef(new Animated.Value(1)).current;
@@ -496,12 +1050,17 @@ export default function CompanionScreen() {
 
   const [miloMessage, setMiloMessage] = useState<string | null>(null);
   const [miloMood, setMiloMood] = useState<MiloMood | null>(null);
-  const [draftMessage, setDraftMessage] = useState('');
+  const [focusHistory, setFocusHistory] = useState<FocusSessionHistoryItem[]>(
+    []
+  );
+  const [speechMessageIndex, setSpeechMessageIndex] = useState(0);
   const [activeMiloVideo, setActiveMiloVideo] = useState<MiloVideoKey | null>(
     null
   );
   const [isCompanionFocused, setIsCompanionFocused] = useState(false);
   const [videoFailed, setVideoFailed] = useState(false);
+  const [activeDetailModal, setActiveDetailModal] =
+    useState<CompanionDetailModal | null>(null);
 
   const idlePlayer = useVideoPlayer(miloIdleVideo, (player) => {
     player.loop = false;
@@ -538,6 +1097,42 @@ export default function CompanionScreen() {
         inactivityTimerRef.current = null;
       }
     };
+  }, []);
+
+  const loadFocusHistory = useCallback(async () => {
+    const nextHistory = await getFocusSessionHistory();
+
+    if (mountedRef.current) {
+      setFocusHistory(nextHistory);
+    }
+  }, []);
+
+  const openDetailModal = useCallback(
+    async (modal: CompanionDetailModal) => {
+      try {
+        await Haptics.selectionAsync();
+      } catch {
+        // Taps should still work on devices where haptics are unavailable.
+      }
+
+      if (!mountedRef.current) return;
+
+      setActiveDetailModal(modal);
+      void loadFocusHistory();
+    },
+    [loadFocusHistory]
+  );
+
+  const closeDetailModal = useCallback(async () => {
+    try {
+      await Haptics.selectionAsync();
+    } catch {
+      // Closing the modal should not depend on haptics support.
+    }
+
+    if (mountedRef.current) {
+      setActiveDetailModal(null);
+    }
   }, []);
 
   const companionData = useMemo(() => {
@@ -602,63 +1197,31 @@ export default function CompanionScreen() {
     };
 
     const defaultMessage = getDefaultMiloMessage(displayName, snapshot);
-    const says = getMiloSays(snapshot);
     const mood = getSituationMood(snapshot);
-
-    const insights: InsightItem[] = [
-      {
-        label: 'Overdue',
-        value: overdueCount + missedCount,
-        icon: 'alert-circle',
-        color: theme.colors.danger,
-        backgroundColor: theme.colors.dangerSoft,
-      },
-      {
-        label: 'Due today',
-        value: dueTodayCount + happeningNowCount + startingSoonCount,
-        icon: 'time',
-        color: '#D97706',
-        backgroundColor: '#FFF7ED',
-      },
-      {
-        label: 'Start early',
-        value: startEarlyCount,
-        icon: 'airplane',
-        color: theme.colors.primaryDark,
-        backgroundColor: theme.colors.primarySoft,
-      },
-      {
-        label: 'Meeting today',
-        value: meetingTodayItems.length,
-        icon: 'people',
-        color: theme.colors.purple,
-        backgroundColor: theme.colors.purpleSoft,
-      },
-      {
-        label: 'Accepted overlap',
-        value: acceptedOverlapItems.length,
-        icon: 'heart',
-        color: theme.colors.blue,
-        backgroundColor: theme.colors.blueSoft,
-      },
-    ];
 
     return {
       ...snapshot,
       defaultMessage,
-      says,
       mood,
-      insights,
     };
   }, [displayName, tasks, todayDate]);
 
+  const focusAnalytics = useMemo(
+    () => createFocusAnalytics(focusHistory, todayDate),
+    [focusHistory, todayDate]
+  );
+  const rotatingMessages = useMemo(
+    () => getRotatingMiloMessages(displayName, companionData, focusAnalytics),
+    [companionData, displayName, focusAnalytics]
+  );
   const activeMood = miloMood || companionData.mood;
-  const activeMessage = miloMessage || companionData.defaultMessage;
-  const moodPanelWidth = compactWidth ? 104 : 118;
+  const activeMessage =
+    miloMessage ||
+    rotatingMessages[speechMessageIndex % Math.max(rotatingMessages.length, 1)] ||
+    companionData.defaultMessage;
+  const moodPanelWidth = compactWidth ? 98 : 118;
   const roomCardHeight = shortScreen ? 414 : compactWidth ? 430 : 456;
   const bottomContentPadding = tabBarHeight + (shortScreen ? 54 : 66);
-  const moodLabel = getMiloMoodLabel(activeMood);
-  const moodCareText = getMiloEncouragement(activeMood);
   const stressSignals =
     companionData.overdueCount +
     companionData.missedCount +
@@ -697,6 +1260,28 @@ export default function CompanionScreen() {
       backgroundColor: theme.colors.blueSoft,
     },
   ];
+  const latestChatPreview = getTalkPreviewText(focusAnalytics);
+  const latestChatTime = focusAnalytics.latestSession
+    ? formatSessionTime(focusAnalytics.latestSession.date)
+    : formatSessionTime(new Date().toISOString());
+  const latestReaction = getMiloFocusReaction(focusAnalytics);
+  const latestReactionSession = focusAnalytics.latestSession;
+  const latestReactionDuration =
+    latestReactionSession?.durationMinutes ?? focusAnalytics.todayFocusMinutes;
+  const latestReactionPreset = latestReactionSession?.presetName ?? 'Classic';
+  const latestReactionPresetLabel = latestReactionPreset
+    .replace(' Pomodoro', '')
+    .replace(' Rhythm', '');
+  const latestReactionQuality =
+    latestReactionSession?.focusQuality === 'distracted'
+      ? 'Distracted'
+      : 'Clean';
+  const recentSessionRows =
+    focusAnalytics.recentSessions.length > 0
+      ? focusAnalytics.recentSessions
+      : createPlaceholderRecentSessions(todayDate);
+  const focusScoreLabel =
+    focusAnalytics.focusScore === null ? '--' : `${focusAnalytics.focusScore}%`;
 
   const speechBubbleMotionStyle = {
     opacity: speechBubbleMotion,
@@ -705,6 +1290,12 @@ export default function CompanionScreen() {
         scale: speechBubbleMotion.interpolate({
           inputRange: [0, 1],
           outputRange: [0.97, 1],
+        }),
+      },
+      {
+        translateY: speechBubbleMotion.interpolate({
+          inputRange: [0, 1],
+          outputRange: [8, 0],
         }),
       },
     ],
@@ -839,6 +1430,24 @@ export default function CompanionScreen() {
   }, [tapMessages]);
 
   useEffect(() => {
+    setSpeechMessageIndex(0);
+  }, [rotatingMessages]);
+
+  useEffect(() => {
+    if (!isCompanionFocused || miloMessage || rotatingMessages.length <= 1) {
+      return undefined;
+    }
+
+    const interval = setInterval(() => {
+      setSpeechMessageIndex((currentIndex) =>
+        (currentIndex + 1) % rotatingMessages.length
+      );
+    }, SPEECH_ROTATION_MS);
+
+    return () => clearInterval(interval);
+  }, [isCompanionFocused, miloMessage, rotatingMessages.length]);
+
+  useEffect(() => {
     playIdleMiloVideoRef.current = playIdleMiloVideo;
   }, [playIdleMiloVideo]);
 
@@ -849,6 +1458,7 @@ export default function CompanionScreen() {
       setIsCompanionFocused(true);
       setActiveMiloVideo(null);
       isMiloVideoPlayingRef.current = false;
+      void loadFocusHistory();
       resetInactivityTimer();
 
       return () => {
@@ -858,7 +1468,7 @@ export default function CompanionScreen() {
         clearInactivityTimer();
         stopMiloVideos();
       };
-    }, [clearInactivityTimer, resetInactivityTimer, stopMiloVideos])
+    }, [clearInactivityTimer, loadFocusHistory, resetInactivityTimer, stopMiloVideos])
   );
 
   useEffect(() => {
@@ -931,6 +1541,14 @@ export default function CompanionScreen() {
     }, TEMPORARY_MILO_REACTION_MS);
   };
 
+  const handleContinueChat = async () => {
+    await openDetailModal('talk');
+  };
+
+  const handleOldMessages = async () => {
+    await openDetailModal('sessions');
+  };
+
   const handleMiloTap = async () => {
     const currentIndex = tapMessageIndexRef.current % tapMessages.length;
     tapMessageIndexRef.current = (currentIndex + 1) % tapMessages.length;
@@ -961,117 +1579,461 @@ export default function CompanionScreen() {
     });
   };
 
-  const handleQuickAction = async (action: QuickActionKey) => {
-    const firstTask = companionData.firstTask;
-
-    if (action === 'first') {
-      if (!firstTask) {
-        await updateMiloSpeech(
-          'Your planner is clear. Want to add one small thing?',
-          'happy'
-        );
-        return;
-      }
-
-      const title = getTaskTitle(firstTask);
-      await updateMiloSpeech(
-        `"${title}" first. Just 10 calm minutes.`,
-        getTaskMood(companionData.firstSituation)
-      );
-      return;
+  const handleStartFocus = async () => {
+    try {
+      await Haptics.selectionAsync();
+    } catch {
+      // Navigation should still happen when haptics are unavailable.
     }
 
-    if (action === 'plan') {
-      if (!firstTask) {
-        await updateMiloSpeech(
-          "Add one small planner item, then I'll help make it easy.",
-          'happy'
-        );
-        return;
-      }
-
-      await updateMiloSpeech(
-        `Let's make "${getTaskTitle(
-          firstTask
-        )}" tiny. Open it and choose one action.`,
-        'focused'
-      );
-      return;
+    if (mountedRef.current) {
+      setActiveDetailModal(null);
     }
 
-    if (action === 'calm') {
-      await updateMiloSpeech(
-        "Deep breath. You're safe here. Just one tiny next step.",
-        'sleepy'
+    navigation.navigate('FocusSession');
+  };
+
+  const detailModalTitle =
+    activeDetailModal === 'analytics'
+      ? 'Focus Analytics'
+      : activeDetailModal === 'sessions'
+      ? 'Recent Sessions'
+      : activeDetailModal === 'reaction'
+      ? "Milo's Focus Reaction"
+      : activeDetailModal === 'talk'
+      ? 'Talk with Milo'
+      : '';
+  const modalMaxHeight = Math.max(360, height - 72);
+
+  const renderModalMetric = (
+    label: string,
+    value: string,
+    icon: IconName,
+    color = theme.colors.primaryDark,
+    backgroundColor = theme.colors.primarySoft
+  ) => (
+    <View key={label} style={styles.modalMetricCard}>
+      <View style={[styles.modalMetricIcon, { backgroundColor }]}>
+        <Ionicons name={icon} size={17} color={color} />
+      </View>
+      <View style={styles.modalMetricCopy}>
+        <Text numberOfLines={1} style={styles.modalMetricLabel}>
+          {label}
+        </Text>
+        <Text
+          numberOfLines={2}
+          adjustsFontSizeToFit
+          minimumFontScale={0.82}
+          style={styles.modalMetricValue}
+        >
+          {value}
+        </Text>
+      </View>
+    </View>
+  );
+
+  const renderModalActions = ({
+    primaryLabel,
+    onPrimaryPress,
+    secondaryLabel,
+    onSecondaryPress,
+    closeLabel,
+  }: {
+    primaryLabel: string;
+    onPrimaryPress: () => void;
+    secondaryLabel?: string;
+    onSecondaryPress?: () => void;
+    closeLabel?: string;
+  }) => (
+    <View style={styles.modalButtonRow}>
+      <TouchableOpacity
+        activeOpacity={0.84}
+        style={[styles.modalActionButton, styles.modalPrimaryButton]}
+        onPress={onPrimaryPress}
+        accessibilityRole="button"
+        accessibilityLabel={primaryLabel}
+      >
+        <Text
+          numberOfLines={1}
+          adjustsFontSizeToFit
+          minimumFontScale={0.82}
+          style={styles.modalPrimaryButtonText}
+        >
+          {primaryLabel}
+        </Text>
+      </TouchableOpacity>
+
+      {secondaryLabel && onSecondaryPress ? (
+        <TouchableOpacity
+          activeOpacity={0.84}
+          style={[styles.modalActionButton, styles.modalSecondaryButton]}
+          onPress={onSecondaryPress}
+          accessibilityRole="button"
+          accessibilityLabel={secondaryLabel}
+        >
+          <Text
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.82}
+            style={styles.modalSecondaryButtonText}
+          >
+            {secondaryLabel}
+          </Text>
+        </TouchableOpacity>
+      ) : null}
+
+      {closeLabel ? (
+        <TouchableOpacity
+          activeOpacity={0.84}
+          style={[styles.modalActionButton, styles.modalSecondaryButton]}
+          onPress={() => void closeDetailModal()}
+          accessibilityRole="button"
+          accessibilityLabel={closeLabel}
+        >
+          <Text
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.82}
+            style={styles.modalSecondaryButtonText}
+          >
+            {closeLabel}
+          </Text>
+        </TouchableOpacity>
+      ) : null}
+    </View>
+  );
+
+  const renderEmptyState = (title: string, message: string) => (
+    <View style={styles.modalEmptyState}>
+      <View style={styles.modalEmptyIcon}>
+        <MiloMoodImage mood="waving" size={62} />
+      </View>
+      <Text style={styles.modalEmptyTitle}>{title}</Text>
+      <Text style={styles.modalEmptyText}>{message}</Text>
+    </View>
+  );
+
+  const renderAnalyticsModalContent = () => {
+    if (focusHistory.length === 0) {
+      return (
+        <>
+          {renderEmptyState(
+            'No analytics yet',
+            'Start your first focus session and Milo will build your weekly focus report.'
+          )}
+          {renderModalActions({
+            primaryLabel: 'Start FocusGuard Pomodoro',
+            onPrimaryPress: () => void handleStartFocus(),
+          })}
+        </>
       );
-      return;
     }
 
-    if (companionData.unacceptedOverlapCount > 0) {
-      await updateMiloSpeech(
-        `Hmm, I found ${companionData.unacceptedOverlapCount} possible overlap${
-          companionData.unacceptedOverlapCount === 1 ? '' : 's'
-        }. Let's add a buffer or move one item.`,
-        'worried'
-      );
-      return;
-    }
+    return (
+      <>
+        <View style={styles.modalMetricGrid}>
+          {renderModalMetric(
+            'Focus minutes today',
+            formatMinutesLabel(focusAnalytics.todayFocusMinutes),
+            'time-outline'
+          )}
+          {renderModalMetric(
+            'Total sessions this week',
+            `${focusAnalytics.sessionsThisWeek}`,
+            'albums-outline',
+            theme.colors.blue,
+            theme.colors.blueSoft
+          )}
+          {renderModalMetric(
+            'Clean sessions',
+            `${focusAnalytics.cleanSessions}`,
+            'checkmark-circle',
+            theme.colors.primaryDark,
+            theme.colors.successSoft
+          )}
+          {renderModalMetric(
+            'Distracted sessions',
+            `${focusAnalytics.distractedSessions}`,
+            'alert-circle',
+            '#B7791F',
+            theme.colors.yellowSoft
+          )}
+          {renderModalMetric(
+            'Day streak',
+            `${focusAnalytics.dayStreak}`,
+            'flame-outline',
+            '#B7791F',
+            theme.colors.yellowSoft
+          )}
+          {renderModalMetric(
+            'Focus score',
+            focusScoreLabel,
+            'sparkles',
+            theme.colors.purple,
+            theme.colors.purpleSoft
+          )}
+          {renderModalMetric(
+            'Most focused task',
+            focusAnalytics.mostFocusedTask,
+            'flag-outline',
+            theme.colors.primaryDark,
+            '#F1FAED'
+          )}
+        </View>
 
-    if (companionData.acceptedOverlapCount > 0) {
-      await updateMiloSpeech(
-        "Keep Both is okay. I'll keep an eye on the timing.",
-        'focused'
-      );
-      return;
-    }
+        <View style={styles.modalSection}>
+          <Text style={styles.modalSectionTitle}>Weekly focus trend</Text>
+          <WeeklyFocusChart
+            data={focusAnalytics.weeklyTrend}
+            style={styles.modalTrendCard}
+          />
+        </View>
 
-    await updateMiloSpeech(
-      'Your schedule looks calm. Keep a tiny buffer before meetings.',
-      'happy'
+        <View style={styles.modalInsightCard}>
+          <View style={styles.modalInsightIcon}>
+            <MiloMoodImage mood="happy" size={42} />
+          </View>
+          <View style={styles.modalInsightCopy}>
+            <Text numberOfLines={1} style={styles.modalInsightTitle}>
+              Milo productivity insight
+            </Text>
+            <Text style={styles.modalInsightText}>
+              {getMiloProductivityInsight(focusAnalytics)}
+            </Text>
+          </View>
+        </View>
+
+        {renderModalActions({
+          primaryLabel: 'Start another focus',
+          onPrimaryPress: () => void handleStartFocus(),
+          secondaryLabel: 'View recent sessions',
+          onSecondaryPress: () => void openDetailModal('sessions'),
+        })}
+      </>
     );
   };
 
-  const handleSendMessage = async () => {
-    const trimmedMessage = draftMessage.trim();
-
-    if (!trimmedMessage) return;
-
-    setDraftMessage('');
-
-    const lowerMessage = trimmedMessage.toLowerCase();
-
-    if (lowerMessage.includes('first') || lowerMessage.includes('start')) {
-      await handleQuickAction('first');
-      return;
+  const renderRecentSessionsModalContent = () => {
+    if (focusHistory.length === 0) {
+      return (
+        <>
+          {renderEmptyState(
+            'No sessions yet',
+            'Your completed, stopped, and skipped focus sessions will appear here.'
+          )}
+          {renderModalActions({
+            primaryLabel: 'Start first session',
+            onPrimaryPress: () => void handleStartFocus(),
+          })}
+        </>
+      );
     }
 
-    if (lowerMessage.includes('plan') || lowerMessage.includes('step')) {
-      await handleQuickAction('plan');
-      return;
-    }
+    return (
+      <>
+        <View style={styles.modalSessionList}>
+          {focusHistory.map((session) => {
+            const statusMeta = focusSessionStatusMeta[session.status];
+            const isClean = session.focusQuality === 'clean';
 
-    if (
-      lowerMessage.includes('calm') ||
-      lowerMessage.includes('stress') ||
-      lowerMessage.includes('overwhelm')
-    ) {
-      await handleQuickAction('calm');
-      return;
-    }
+            return (
+              <View key={session.id} style={styles.modalSessionCard}>
+                <View style={styles.modalSessionHeader}>
+                  <View style={styles.modalSessionTitleWrap}>
+                    <Text numberOfLines={1} style={styles.modalSessionTitle}>
+                      {getSessionTitle(session)}
+                    </Text>
+                    <Text numberOfLines={1} style={styles.modalSessionDate}>
+                      {formatSessionDateTime(session.date, todayDate)}
+                    </Text>
+                  </View>
+                  <View
+                    style={[
+                      styles.modalStatusBadge,
+                      { backgroundColor: statusMeta.backgroundColor },
+                    ]}
+                  >
+                    <Text
+                      numberOfLines={1}
+                      style={[styles.modalStatusText, { color: statusMeta.color }]}
+                    >
+                      {statusMeta.label}
+                    </Text>
+                  </View>
+                </View>
 
-    if (
-      lowerMessage.includes('schedule') ||
-      lowerMessage.includes('conflict') ||
-      lowerMessage.includes('overlap')
-    ) {
-      await handleQuickAction('schedule');
-      return;
-    }
+                <View style={styles.modalSessionDetailRow}>
+                  <Text numberOfLines={1} style={styles.modalSessionDetail}>
+                    {formatMinutesLabel(session.durationMinutes)}
+                  </Text>
+                  <Text numberOfLines={1} style={styles.modalSessionDetail}>
+                    {session.presetName}
+                  </Text>
+                  <Text
+                    numberOfLines={1}
+                    style={[
+                      styles.modalSessionDetail,
+                      isClean
+                        ? styles.modalSessionDetailClean
+                        : styles.modalSessionDetailDistracted,
+                    ]}
+                  >
+                    {formatFocusQuality(session.focusQuality)}
+                  </Text>
+                </View>
+              </View>
+            );
+          })}
+        </View>
 
-    await updateMiloSpeech(
-      'I heard you. I can help with first steps, tiny plans, calm breaks, or timing.',
-      'waving'
+        {renderModalActions({
+          primaryLabel: 'Start new focus',
+          onPrimaryPress: () => void handleStartFocus(),
+        })}
+      </>
     );
+  };
+
+  const renderReactionModalContent = () => {
+    const latestSession = focusAnalytics.latestSession;
+
+    if (!latestSession) {
+      return (
+        <>
+          {renderEmptyState(
+            'Milo is waiting to cheer you on 💚',
+            'Finish one focus block and Milo will react to your progress.'
+          )}
+          {renderModalActions({
+            primaryLabel: 'Start with Milo',
+            onPrimaryPress: () => void handleStartFocus(),
+          })}
+        </>
+      );
+    }
+
+    const statusMeta = focusSessionStatusMeta[latestSession.status];
+
+    return (
+      <>
+        <View style={styles.modalInsightCard}>
+          <View style={styles.modalInsightIcon}>
+            <MiloMoodImage
+              mood={latestSession.focusQuality === 'distracted' ? 'worried' : 'happy'}
+              size={42}
+            />
+          </View>
+          <View style={styles.modalInsightCopy}>
+            <Text numberOfLines={1} style={styles.modalInsightTitle}>
+              Milo reaction message
+            </Text>
+            <Text style={styles.modalInsightText}>{latestReaction}</Text>
+          </View>
+        </View>
+
+        <View style={styles.modalSection}>
+          <Text style={styles.modalSectionTitle}>Latest session summary</Text>
+          <View style={styles.modalSummaryCard}>
+            <View style={styles.modalSummaryTopRow}>
+              <View style={styles.modalSessionTitleWrap}>
+                <Text numberOfLines={1} style={styles.modalSessionTitle}>
+                  {getSessionTitle(latestSession)}
+                </Text>
+                <Text numberOfLines={1} style={styles.modalSessionDate}>
+                  {formatSessionDateTime(latestSession.date, todayDate)}
+                </Text>
+              </View>
+              <View
+                style={[
+                  styles.modalStatusBadge,
+                  { backgroundColor: statusMeta.backgroundColor },
+                ]}
+              >
+                <Text
+                  numberOfLines={1}
+                  style={[styles.modalStatusText, { color: statusMeta.color }]}
+                >
+                  {statusMeta.label}
+                </Text>
+              </View>
+            </View>
+
+            <View style={styles.modalMetricGrid}>
+              {renderModalMetric(
+                'Duration',
+                formatMinutesLabel(latestSession.durationMinutes),
+                'time-outline'
+              )}
+              {renderModalMetric(
+                'Focus quality',
+                formatFocusQuality(latestSession.focusQuality),
+                latestSession.focusQuality === 'clean'
+                  ? 'checkmark-circle'
+                  : 'alert-circle',
+                latestSession.focusQuality === 'clean'
+                  ? theme.colors.primaryDark
+                  : '#B7791F',
+                latestSession.focusQuality === 'clean'
+                  ? theme.colors.successSoft
+                  : theme.colors.yellowSoft
+              )}
+              {renderModalMetric(
+                'Preset used',
+                latestSession.presetName,
+                'options-outline',
+                theme.colors.purple,
+                theme.colors.purpleSoft
+              )}
+            </View>
+          </View>
+        </View>
+
+        <View style={styles.modalSuggestionCard}>
+          <Ionicons
+            name="leaf-outline"
+            size={18}
+            color={theme.colors.primaryDark}
+          />
+          <Text style={styles.modalSuggestionText}>
+            {getMiloNextSessionSuggestion(focusAnalytics)}
+          </Text>
+        </View>
+
+        {renderModalActions({
+          primaryLabel: 'Try another focus block',
+          onPrimaryPress: () => void handleStartFocus(),
+        })}
+      </>
+    );
+  };
+
+  const renderTalkModalContent = () => (
+    <View style={styles.modalTalkContent}>
+      <View style={styles.modalTalkAvatar}>
+        <MiloMoodImage mood="waving" size={78} />
+      </View>
+      <Text style={styles.modalTalkTitle}>Talk with Milo</Text>
+      <Text style={styles.modalTalkText}>
+        Milo chat is coming soon. For now, Milo can help you start a focus block
+        and review your progress.
+      </Text>
+      {renderModalActions({
+        primaryLabel: 'Start Focus',
+        onPrimaryPress: () => void handleStartFocus(),
+        secondaryLabel: 'View Analytics',
+        onSecondaryPress: () => void openDetailModal('analytics'),
+        closeLabel: 'Close',
+      })}
+    </View>
+  );
+
+  const renderDetailModalContent = () => {
+    if (activeDetailModal === 'analytics') return renderAnalyticsModalContent();
+    if (activeDetailModal === 'sessions') return renderRecentSessionsModalContent();
+    if (activeDetailModal === 'reaction') return renderReactionModalContent();
+    if (activeDetailModal === 'talk') return renderTalkModalContent();
+
+    return null;
   };
 
   const activePlayer = getActivePlayer();
@@ -1085,14 +2047,34 @@ export default function CompanionScreen() {
     >
       <View style={styles.header}>
         <View style={styles.headerTextBlock}>
-          <Text style={styles.headerTitle}>Companion</Text>
-          <Text style={styles.headerSubtitle}>Chat and plan with Milo 💚</Text>
+          <Text
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.82}
+            style={[styles.headerTitle, compactWidth && styles.headerTitleCompact]}
+          >
+            Companion
+          </Text>
+          <Text
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.82}
+            style={[
+              styles.headerSubtitle,
+              compactWidth && styles.headerSubtitleCompact,
+            ]}
+          >
+            Chat and plan with Milo 💚
+          </Text>
         </View>
 
         <View style={styles.headerActions}>
           <TouchableOpacity
             activeOpacity={0.82}
-            style={styles.headerIconButton}
+            style={[
+              styles.headerIconButton,
+              compactWidth && styles.headerIconButtonCompact,
+            ]}
             onPress={() => navigation.navigate('ReminderCenter')}
             accessibilityRole="button"
             accessibilityLabel="Open Reminder Center"
@@ -1109,7 +2091,10 @@ export default function CompanionScreen() {
 
           <TouchableOpacity
             activeOpacity={0.82}
-            style={styles.headerIconButton}
+            style={[
+              styles.headerIconButton,
+              compactWidth && styles.headerIconButtonCompact,
+            ]}
             onPress={() => navigation.navigate('Settings')}
             accessibilityRole="button"
             accessibilityLabel="Open Settings"
@@ -1157,9 +2142,14 @@ export default function CompanionScreen() {
         <Animated.View
           style={[styles.speechBubble, speechBubbleMotionStyle]}
         >
-          <Text style={styles.speechGreeting}>Hi {displayName}! 👋</Text>
+          <View style={styles.speechCloudBumpLarge} />
+          <View style={styles.speechCloudBumpSmall} />
+          <View style={styles.speechCloudBumpTiny} />
+          <Text numberOfLines={1} style={styles.speechGreeting}>
+            Hi {displayName}! 👋
+          </Text>
           <Text
-            numberOfLines={4}
+            numberOfLines={5}
             adjustsFontSizeToFit
             minimumFontScale={0.88}
             style={styles.speechText}
@@ -1180,10 +2170,10 @@ export default function CompanionScreen() {
               />
             </View>
             <Text numberOfLines={1} style={styles.moodLabel}>
-              {moodLabel}
+              Focused
             </Text>
             <Text numberOfLines={2} style={styles.moodSubtext}>
-              {moodCareText}
+              Start small and keep going.
             </Text>
           </View>
 
@@ -1218,116 +2208,504 @@ export default function CompanionScreen() {
 
       </View>
 
-      <View style={styles.askCard}>
-        <View style={styles.askHeader}>
-          <Text style={styles.askTitle}>Ask Milo anything</Text>
-          <Text style={styles.seeAllText}>See all &gt;</Text>
-        </View>
-
-        <View style={styles.quickActionGrid}>
-          <QuickActionButton
-            title="What should I do first?"
-            icon="chatbubble-ellipses-outline"
-            backgroundColor="#ECF8EF"
-            onPress={() => handleQuickAction('first')}
-          />
-          <QuickActionButton
-            title="Generate my plan"
-            icon="color-wand-outline"
-            backgroundColor="#F3EEFF"
-            iconColor={theme.colors.purple}
-            onPress={() => handleQuickAction('plan')}
-          />
-          <QuickActionButton
-            title="Calm me down"
-            icon="flower-outline"
-            backgroundColor="#FFF6DB"
-            iconColor="#B7791F"
-            onPress={() => handleQuickAction('calm')}
-          />
-          <QuickActionButton
-            title="Fix my schedule"
-            icon="calendar-outline"
-            backgroundColor="#EAF4FF"
-            iconColor={theme.colors.blue}
-            onPress={() => handleQuickAction('schedule')}
-          />
-        </View>
-      </View>
-
-      <View style={styles.insightCard}>
-        <View style={styles.cardHeaderRow}>
-          <Text style={styles.insightTitle}>💡 Milos Insight</Text>
-        </View>
-
-        <View style={styles.insightGrid}>
-          {companionData.insights.map((item, index) => (
-            <InsightPill
-              key={item.label}
-              item={item}
-              showDivider={index > 0}
+      <TouchableOpacity
+        activeOpacity={0.9}
+        style={styles.talkCard}
+        onPress={handleContinueChat}
+        accessibilityRole="button"
+        accessibilityLabel="Open Talk with Milo"
+      >
+        <View style={styles.talkTitleRow}>
+          <View style={styles.talkTitleIcon}>
+            <Ionicons
+              name="chatbubbles"
+              size={19}
+              color={theme.colors.primaryDark}
             />
-          ))}
+          </View>
+          <Text style={styles.talkTitle}>Talk with Milo</Text>
         </View>
-      </View>
 
-      <View style={styles.miloSaysCard}>
-        <View style={styles.miloSaysAvatar}>
-          <MiloMoodImage
-            mood={activeMood}
-            size={54}
-            style={styles.miloSaysImage}
+        <View style={[styles.talkBody, stackTalkCard && styles.talkBodyCompact]}>
+          <View style={styles.talkPreviewRow}>
+            <View style={styles.talkAvatar}>
+              <MiloMoodImage mood={activeMood} size={54} />
+            </View>
+            <View style={styles.talkPreviewBubble}>
+              <View style={styles.talkPreviewHeader}>
+              <Text numberOfLines={1} style={styles.talkPreviewSender}>
+                Milo
+              </Text>
+              <Text numberOfLines={1} style={styles.talkPreviewTime}>
+                {latestChatTime}
+              </Text>
+            </View>
+              <Text numberOfLines={2} style={styles.talkPreviewText}>
+                {latestChatPreview}
+              </Text>
+            </View>
+          </View>
+
+          <View
+            style={[
+              styles.talkActions,
+              narrowContent && styles.talkActionsNarrow,
+              stackTalkCard && styles.talkActionsCompact,
+            ]}
+          >
+            <TouchableOpacity
+              activeOpacity={0.84}
+              style={[
+                styles.continueChatButton,
+                stackTalkCard && styles.talkActionButtonCompact,
+              ]}
+              onPress={handleContinueChat}
+              accessibilityRole="button"
+              accessibilityLabel="Continue chat with Milo"
+            >
+              <Text
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.78}
+                style={styles.continueChatText}
+              >
+                Continue chat
+              </Text>
+              <Ionicons name="arrow-forward" size={18} color={theme.colors.white} />
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              activeOpacity={0.84}
+              style={[
+                styles.oldMessagesButton,
+                stackTalkCard && styles.talkActionButtonCompact,
+              ]}
+              onPress={handleOldMessages}
+              accessibilityRole="button"
+              accessibilityLabel="Open old Milo messages"
+            >
+              <Ionicons
+                name="time-outline"
+                size={18}
+                color={theme.colors.primaryDark}
+              />
+              <Text
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.78}
+                style={styles.oldMessagesText}
+              >
+                Old messages
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </TouchableOpacity>
+
+      <TouchableOpacity
+        activeOpacity={0.9}
+        style={styles.focusGuardCard}
+        onPress={() => void handleStartFocus()}
+        accessibilityRole="button"
+        accessibilityLabel="Start FocusGuard Pomodoro"
+      >
+        <View style={styles.focusGuardIconWrap}>
+          <Ionicons
+            name="shield-checkmark-outline"
+            size={25}
+            color={theme.colors.primaryDark}
           />
         </View>
-        <View style={styles.miloSaysCopy}>
-          <Text style={styles.miloSaysTitle}>Milo says</Text>
-          <Text style={styles.miloSaysText}>{companionData.says}</Text>
-          <TouchableOpacity
-            activeOpacity={0.84}
-            style={styles.encourageButton}
-            onPress={() => handleQuickAction('calm')}
-            accessibilityRole="button"
-            accessibilityLabel="Encourage me"
-          >
-            <Text style={styles.encourageButtonText}>Encourage me</Text>
-          </TouchableOpacity>
+        <View style={styles.focusGuardCopy}>
+          <View style={styles.focusGuardTitleRow}>
+            <Text numberOfLines={1} style={styles.focusGuardTitle}>
+              FocusGuard Pomodoro
+            </Text>
+            <View style={styles.focusGuardBadge}>
+              <Text numberOfLines={1} style={styles.focusGuardBadgeText}>
+                NEW
+              </Text>
+            </View>
+          </View>
+          <Text numberOfLines={1} style={styles.focusGuardSubtitle}>
+            Start a protected focus block with Milo.
+          </Text>
         </View>
-      </View>
-
-      <View style={styles.chatBar}>
-        <TextInput
-          value={draftMessage}
-          onChangeText={setDraftMessage}
-          placeholder="Type your message to Milo..."
-          placeholderTextColor={theme.colors.muted}
-          style={styles.chatInput}
-          returnKeyType="send"
-          onSubmitEditing={handleSendMessage}
-        />
         <TouchableOpacity
-          activeOpacity={0.82}
-          style={[
-            styles.sendButton,
-            !draftMessage.trim() && styles.sendButtonDisabled,
-          ]}
-          onPress={handleSendMessage}
-          disabled={!draftMessage.trim()}
+          activeOpacity={0.84}
+          style={styles.focusGuardButton}
+          onPress={() => void handleStartFocus()}
           accessibilityRole="button"
-          accessibilityLabel="Send message to Milo"
+          accessibilityLabel="Start Focus"
         >
-          <Ionicons name="send" size={18} color={theme.colors.white} />
+          <Text
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.82}
+            style={styles.focusGuardButtonText}
+          >
+            Start Focus
+          </Text>
+        </TouchableOpacity>
+      </TouchableOpacity>
+
+      <View
+        style={[
+          styles.analyticsDashboard,
+          stackDashboardCards && styles.analyticsDashboardCompact,
+        ]}
+      >
+        <TouchableOpacity
+          activeOpacity={0.9}
+          style={styles.focusAnalyticsCard}
+          onPress={() => void openDetailModal('analytics')}
+          accessibilityRole="button"
+          accessibilityLabel="Open Focus Analytics details"
+        >
+          <View style={styles.analyticsHeader}>
+            <Text style={styles.dashboardCardTitle}>Focus Analytics</Text>
+            <View style={styles.periodPill}>
+              <Text style={styles.periodPillText}>This week</Text>
+              <Ionicons
+                name="chevron-down"
+                size={12}
+                color={theme.colors.primaryDark}
+              />
+            </View>
+          </View>
+
+          <View style={styles.analyticsStatGrid}>
+            <View style={styles.analyticsStatItem}>
+              <View style={styles.analyticsStatIcon}>
+                <Ionicons
+                  name="time-outline"
+                  size={18}
+                  color={theme.colors.primaryDark}
+                />
+              </View>
+              <Text
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.78}
+                style={styles.analyticsStatValue}
+              >
+                {formatMinutesLabel(focusAnalytics.todayFocusMinutes)}
+              </Text>
+              <Text numberOfLines={1} style={styles.analyticsStatLabel}>
+                Focus time
+              </Text>
+            </View>
+            <View style={styles.analyticsStatDivider} />
+            <View style={styles.analyticsStatItem}>
+              <View style={[styles.analyticsStatIcon, styles.analyticsStatIconBlue]}>
+                <Ionicons name="albums-outline" size={18} color={theme.colors.blue} />
+              </View>
+              <Text numberOfLines={1} style={styles.analyticsStatValue}>
+                {focusAnalytics.sessionsThisWeek}
+              </Text>
+              <Text numberOfLines={1} style={styles.analyticsStatLabel}>
+                Sessions
+              </Text>
+            </View>
+            <View style={styles.analyticsStatDivider} />
+            <View style={styles.analyticsStatItem}>
+              <View
+                style={[styles.analyticsStatIcon, styles.analyticsStatIconYellow]}
+              >
+                <Ionicons name="flame-outline" size={18} color="#B7791F" />
+              </View>
+              <Text numberOfLines={1} style={styles.analyticsStatValue}>
+                {focusAnalytics.dayStreak}
+              </Text>
+              <Text numberOfLines={1} style={styles.analyticsStatLabel}>
+                Day streak
+              </Text>
+            </View>
+            <View style={styles.analyticsStatDivider} />
+            <View style={styles.analyticsStatItem}>
+              <View
+                style={[styles.analyticsStatIcon, styles.analyticsStatIconPurple]}
+              >
+                <Ionicons name="sparkles" size={18} color={theme.colors.purple} />
+              </View>
+              <Text
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.78}
+                style={styles.analyticsStatValue}
+              >
+                {focusScoreLabel}
+              </Text>
+              <Text numberOfLines={1} style={styles.analyticsStatLabel}>
+                Focus score
+              </Text>
+            </View>
+          </View>
+
+          <WeeklyFocusChart data={focusAnalytics.weeklyTrend} />
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          activeOpacity={0.9}
+          style={styles.recentSessionsCard}
+          onPress={() => void openDetailModal('sessions')}
+          accessibilityRole="button"
+          accessibilityLabel="Open Recent Sessions details"
+        >
+          <View style={styles.analyticsHeader}>
+            <Text style={styles.dashboardCardTitle}>Recent Sessions</Text>
+            <TouchableOpacity
+              activeOpacity={0.78}
+              onPress={() => void openDetailModal('sessions')}
+              accessibilityRole="button"
+              accessibilityLabel="See all focus sessions"
+            >
+              <Text style={styles.seeAllText}>See all &gt;</Text>
+            </TouchableOpacity>
+          </View>
+
+          {recentSessionRows.map((session) => {
+            const statusMeta = focusSessionStatusMeta[session.status];
+
+            return (
+              <View key={session.id} style={styles.sessionRow}>
+                <View
+                  style={[
+                    styles.sessionIcon,
+                    { backgroundColor: statusMeta.backgroundColor },
+                  ]}
+                >
+                  <Ionicons
+                    name={statusMeta.icon}
+                    size={22}
+                    color={statusMeta.color}
+                  />
+                </View>
+                <View style={styles.sessionCopy}>
+                  <Text numberOfLines={1} style={styles.sessionTitle}>
+                    {getSessionTitle(session)}
+                  </Text>
+                  <Text numberOfLines={1} style={styles.sessionMeta}>
+                    {formatSessionDate(session.date, todayDate)} -{' '}
+                    {formatMinutesLabel(session.durationMinutes)}
+                  </Text>
+                </View>
+                <View style={styles.sessionStatusWrap}>
+                  <View
+                    style={[
+                      styles.sessionStatusPill,
+                      { backgroundColor: statusMeta.backgroundColor },
+                    ]}
+                  >
+                    <Text
+                      numberOfLines={1}
+                      adjustsFontSizeToFit
+                      minimumFontScale={0.82}
+                      style={[
+                        styles.sessionStatusText,
+                        { color: statusMeta.color },
+                      ]}
+                    >
+                      {statusMeta.label}
+                    </Text>
+                  </View>
+                  <View style={styles.sessionTimeRow}>
+                    <Text numberOfLines={1} style={styles.sessionTime}>
+                      {formatSessionTime(session.date)}
+                    </Text>
+                    <Ionicons
+                      name="chevron-forward"
+                      size={12}
+                      color={theme.colors.muted}
+                    />
+                  </View>
+                </View>
+              </View>
+            );
+          })}
         </TouchableOpacity>
       </View>
+
+      <TouchableOpacity
+        activeOpacity={0.9}
+        onPress={() => void openDetailModal('reaction')}
+        accessibilityRole="button"
+        accessibilityLabel="Open Milo's Focus Reaction"
+        style={[
+          styles.reactsStrip,
+          compactReactsStrip && styles.reactsStripPhone,
+          stackReactsStrip && styles.reactsStripCompact,
+        ]}
+      >
+        <View style={styles.reactsIntro}>
+          <View
+            style={[
+              styles.reactsAvatar,
+              compactReactsStrip && styles.reactsAvatarPhone,
+            ]}
+          >
+            <MiloMoodImage
+              mood={
+                latestReactionSession?.focusQuality === 'distracted'
+                  ? 'worried'
+                  : 'happy'
+              }
+              size={compactReactsStrip ? 46 : 58}
+            />
+          </View>
+          <View
+            style={[
+              styles.reactsCopy,
+              compactReactsStrip && styles.reactsCopyPhone,
+            ]}
+          >
+            <Text style={styles.reactsTitle}>Milo reacts</Text>
+            <Text numberOfLines={3} style={styles.reactsText}>
+              {latestReaction}
+            </Text>
+          </View>
+        </View>
+
+        <View
+          style={[
+            styles.reactsChips,
+            compactReactsStrip && styles.reactsChipsPhone,
+            stackReactsStrip && styles.reactsChipsCompact,
+          ]}
+        >
+          <View
+            style={[
+              styles.reactChip,
+              compactReactsStrip && styles.reactChipPhone,
+            ]}
+          >
+            <Ionicons
+              name="time-outline"
+              size={20}
+              color={theme.colors.primaryDark}
+            />
+            <Text
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.78}
+              style={styles.reactChipValue}
+            >
+              {formatMinutesLabel(latestReactionDuration)}
+            </Text>
+            <Text style={styles.reactChipLabel}>Duration</Text>
+          </View>
+          <View
+            style={[
+              styles.reactChip,
+              compactReactsStrip && styles.reactChipPhone,
+            ]}
+          >
+            <Ionicons
+              name={
+                latestReactionQuality === 'Clean'
+                  ? 'checkmark-circle'
+                  : 'alert-circle'
+              }
+              size={20}
+              color={
+                latestReactionQuality === 'Clean'
+                  ? theme.colors.primaryDark
+                  : '#B7791F'
+              }
+            />
+            <Text
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.78}
+              style={styles.reactChipValue}
+            >
+              {latestReactionQuality}
+            </Text>
+            <Text style={styles.reactChipLabel}>Session</Text>
+          </View>
+          <View
+            style={[
+              styles.reactChip,
+              compactReactsStrip && styles.reactChipPhone,
+            ]}
+          >
+            <Ionicons
+              name="options-outline"
+              size={20}
+              color={theme.colors.purple}
+            />
+            <Text
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.78}
+              style={styles.reactChipValue}
+            >
+              {latestReactionPresetLabel}
+            </Text>
+            <Text style={styles.reactChipLabel}>Preset</Text>
+          </View>
+        </View>
+
+        {!compactReactsStrip ? (
+          <View
+            style={[
+              styles.reactsCelebration,
+              stackReactsStrip && styles.reactsCelebrationCompact,
+            ]}
+          >
+            <MiloMoodImage mood="celebrating" size={64} />
+          </View>
+        ) : null}
+      </TouchableOpacity>
+
+      <Modal
+        visible={activeDetailModal !== null}
+        animationType="fade"
+        transparent
+        onRequestClose={() => void closeDetailModal()}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={[styles.modalCard, { maxHeight: modalMaxHeight }]}>
+            <View style={styles.modalHeader}>
+              <View style={styles.modalTitleWrap}>
+                <Text numberOfLines={1} style={styles.modalTitle}>
+                  {detailModalTitle}
+                </Text>
+              </View>
+              <TouchableOpacity
+                activeOpacity={0.82}
+                style={styles.modalCloseButton}
+                onPress={() => void closeDetailModal()}
+                accessibilityRole="button"
+                accessibilityLabel={`Close ${detailModalTitle}`}
+              >
+                <Ionicons name="close" size={20} color={theme.colors.primaryDark} />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView
+              style={styles.modalScroll}
+              contentContainerStyle={styles.modalScrollContent}
+              showsVerticalScrollIndicator={false}
+            >
+              {renderDetailModalContent()}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
     </ScreenContainer>
   );
 }
 
 const styles = StyleSheet.create({
   screen: {
-    backgroundColor: '#F7F8F1',
+    backgroundColor: '#F8F5EC',
   },
   screenContent: {
-    backgroundColor: '#F7F8F1',
+    width: '100%',
+    maxWidth: 960,
+    alignSelf: 'center',
+    backgroundColor: '#F8F5EC',
   },
   header: {
     flexDirection: 'row',
@@ -1337,28 +2715,39 @@ const styles = StyleSheet.create({
   },
   headerTextBlock: {
     flex: 1,
+    minWidth: 0,
     paddingRight: 12,
   },
   headerTitle: {
     color: '#111827',
-    fontSize: 32,
+    fontSize: 40,
     fontWeight: '900',
     letterSpacing: 0,
+  },
+  headerTitleCompact: {
+    fontSize: 34,
   },
   headerSubtitle: {
     marginTop: 5,
     color: '#4B5563',
     fontSize: 15,
     fontWeight: '700',
+    flexShrink: 1,
+    lineHeight: 20,
+  },
+  headerSubtitleCompact: {
+    fontSize: 13,
+    lineHeight: 18,
   },
   headerActions: {
     flexDirection: 'row',
     alignItems: 'center',
+    flexShrink: 0,
   },
   headerIconButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
+    width: 48,
+    height: 48,
+    borderRadius: 24,
     backgroundColor: theme.colors.white,
     alignItems: 'center',
     justifyContent: 'center',
@@ -1366,6 +2755,12 @@ const styles = StyleSheet.create({
     borderColor: '#EEF1EA',
     marginLeft: 10,
     ...theme.shadowSoft,
+  },
+  headerIconButtonCompact: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    marginLeft: 8,
   },
   notificationBadge: {
     position: 'absolute',
@@ -1585,6 +2980,7 @@ const styles = StyleSheet.create({
     top: 18,
     left: 18,
     width: '52%',
+    minWidth: 156,
     maxWidth: 210,
     backgroundColor: theme.colors.white,
     borderRadius: 26,
@@ -1602,18 +2998,59 @@ const styles = StyleSheet.create({
     shadowRadius: 16,
     elevation: 4,
   },
+  speechCloudBumpLarge: {
+    position: 'absolute',
+    left: 18,
+    top: -12,
+    width: 52,
+    height: 30,
+    borderRadius: 26,
+    backgroundColor: theme.colors.white,
+    borderTopWidth: 1,
+    borderLeftWidth: 1,
+    borderRightWidth: 1,
+    borderColor: '#EEF1EA',
+  },
+  speechCloudBumpSmall: {
+    position: 'absolute',
+    left: 61,
+    top: -9,
+    width: 38,
+    height: 23,
+    borderRadius: 19,
+    backgroundColor: theme.colors.white,
+    borderTopWidth: 1,
+    borderLeftWidth: 1,
+    borderRightWidth: 1,
+    borderColor: '#EEF1EA',
+  },
+  speechCloudBumpTiny: {
+    position: 'absolute',
+    left: 98,
+    top: -5,
+    width: 26,
+    height: 17,
+    borderRadius: 13,
+    backgroundColor: theme.colors.white,
+    borderTopWidth: 1,
+    borderLeftWidth: 1,
+    borderRightWidth: 1,
+    borderColor: '#EEF1EA',
+  },
   speechGreeting: {
     color: '#111827',
     fontSize: 15,
     fontWeight: '900',
     lineHeight: 20,
     marginBottom: 4,
+    zIndex: 2,
   },
   speechText: {
     color: '#111827',
     fontSize: 13,
     fontWeight: '800',
     lineHeight: 18,
+    zIndex: 2,
   },
   speechTail: {
     position: 'absolute',
@@ -1656,6 +3093,7 @@ const styles = StyleSheet.create({
   },
   moodCardTitle: {
     flex: 1,
+    minWidth: 0,
     color: '#247A3E',
     fontSize: 10,
     fontWeight: '900',
@@ -1708,6 +3146,7 @@ const styles = StyleSheet.create({
   },
   statusCopy: {
     flex: 1,
+    minWidth: 0,
   },
   statusLabel: {
     color: '#6B7280',
@@ -1956,14 +3395,12 @@ const styles = StyleSheet.create({
     zIndex: 3,
     backgroundColor: 'rgba(255, 255, 255, 0.08)',
   },
-  askCard: {
+  talkCard: {
     backgroundColor: theme.colors.white,
-    borderRadius: 30,
+    borderRadius: 28,
     borderWidth: 1,
     borderColor: '#ECEFE8',
-    paddingHorizontal: 14,
-    paddingTop: 14,
-    paddingBottom: 13,
+    padding: 16,
     marginBottom: 16,
     shadowColor: '#223322',
     shadowOffset: {
@@ -1974,240 +3411,1023 @@ const styles = StyleSheet.create({
     shadowRadius: 18,
     elevation: 4,
   },
-  askHeader: {
+  talkTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 14,
+  },
+  talkTitleIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 14,
+    backgroundColor: theme.colors.primarySoft,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  talkTitle: {
+    marginLeft: 10,
+    color: '#111827',
+    fontSize: 18,
+    fontWeight: '900',
+    flexShrink: 1,
+  },
+  talkBody: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  talkBodyCompact: {
+    alignItems: 'stretch',
+    flexDirection: 'column',
+  },
+  talkPreviewRow: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  talkAvatar: {
+    width: 58,
+    height: 58,
+    borderRadius: 22,
+    backgroundColor: theme.colors.primarySoft,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 10,
+    overflow: 'hidden',
+  },
+  talkPreviewBubble: {
+    flex: 1,
+    minWidth: 0,
+    flexShrink: 1,
+    minHeight: 76,
+    borderRadius: 18,
+    backgroundColor: '#F7FBF6',
+    borderWidth: 1,
+    borderColor: '#E5ECE3',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  talkPreviewHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 10,
+    gap: 8,
+    marginBottom: 4,
   },
-  askTitle: {
+  talkPreviewSender: {
+    flex: 1,
+    minWidth: 0,
+    color: theme.colors.primaryDark,
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  talkPreviewTime: {
+    flexShrink: 0,
+    color: theme.colors.muted,
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  talkPreviewText: {
+    color: '#111827',
+    fontSize: 13,
+    fontWeight: '700',
+    lineHeight: 18,
+    flexShrink: 1,
+  },
+  talkActions: {
+    width: 226,
+    gap: 10,
+  },
+  talkActionsNarrow: {
+    width: 150,
+  },
+  talkActionsCompact: {
+    width: '100%',
+    flexDirection: 'row',
+    gap: 8,
+  },
+  talkActionButtonCompact: {
+    flex: 1,
+    minWidth: 0,
+  },
+  continueChatButton: {
+    minWidth: 0,
+    minHeight: 48,
+    borderRadius: 24,
+    backgroundColor: theme.colors.primaryDark,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 14,
+    shadowColor: theme.colors.primaryDark,
+    shadowOffset: {
+      width: 0,
+      height: 8,
+    },
+    shadowOpacity: 0.16,
+    shadowRadius: 14,
+    elevation: 4,
+  },
+  continueChatText: {
+    color: theme.colors.white,
+    fontSize: 13,
+    fontWeight: '900',
+    marginRight: 8,
+    flexShrink: 1,
+  },
+  oldMessagesButton: {
+    minWidth: 0,
+    minHeight: 44,
+    borderRadius: 22,
+    backgroundColor: theme.colors.white,
+    borderWidth: 1,
+    borderColor: '#DBE7DB',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+  },
+  oldMessagesText: {
+    marginLeft: 7,
+    color: '#4F6B55',
+    fontSize: 12,
+    fontWeight: '900',
+    flexShrink: 1,
+  },
+  focusGuardCard: {
+    minHeight: 86,
+    backgroundColor: theme.colors.white,
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: '#E2EFE2',
+    padding: 13,
+    marginBottom: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    shadowColor: '#223322',
+    shadowOffset: {
+      width: 0,
+      height: 10,
+    },
+    shadowOpacity: 0.065,
+    shadowRadius: 16,
+    elevation: 3,
+  },
+  focusGuardIconWrap: {
+    width: 48,
+    height: 48,
+    borderRadius: 18,
+    backgroundColor: theme.colors.primarySoft,
+    borderWidth: 1,
+    borderColor: '#D4F0DA',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 11,
+    flexShrink: 0,
+  },
+  focusGuardCopy: {
+    flex: 1,
+    minWidth: 0,
+    paddingRight: 10,
+  },
+  focusGuardTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    minWidth: 0,
+  },
+  focusGuardTitle: {
+    flexShrink: 1,
+    minWidth: 0,
     color: '#111827',
     fontSize: 14,
+    fontWeight: '900',
+  },
+  focusGuardBadge: {
+    flexShrink: 0,
+    marginLeft: 8,
+    minHeight: 20,
+    borderRadius: 10,
+    backgroundColor: '#EAFBF0',
+    borderWidth: 1,
+    borderColor: '#CDEFD5',
+    paddingHorizontal: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  focusGuardBadgeText: {
+    color: theme.colors.primaryDark,
+    fontSize: 9,
+    fontWeight: '900',
+  },
+  focusGuardSubtitle: {
+    marginTop: 5,
+    color: theme.colors.textSoft,
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  focusGuardButton: {
+    minWidth: 104,
+    minHeight: 38,
+    borderRadius: 19,
+    backgroundColor: theme.colors.primaryDark,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 13,
+    flexShrink: 0,
+  },
+  focusGuardButtonText: {
+    color: theme.colors.white,
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  analyticsDashboard: {
+    flexDirection: 'row',
+    gap: 16,
+    marginBottom: 16,
+  },
+  analyticsDashboardCompact: {
+    flexDirection: 'column',
+    gap: 14,
+  },
+  focusAnalyticsCard: {
+    flex: 1,
+    minWidth: 0,
+    width: '100%',
+    backgroundColor: theme.colors.white,
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: '#ECEFE8',
+    padding: 18,
+    shadowColor: '#223322',
+    shadowOffset: {
+      width: 0,
+      height: 10,
+    },
+    shadowOpacity: 0.065,
+    shadowRadius: 16,
+    elevation: 3,
+  },
+  recentSessionsCard: {
+    flex: 1,
+    minWidth: 0,
+    width: '100%',
+    backgroundColor: theme.colors.white,
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: '#ECEFE8',
+    padding: 18,
+    shadowColor: '#223322',
+    shadowOffset: {
+      width: 0,
+      height: 10,
+    },
+    shadowOpacity: 0.065,
+    shadowRadius: 16,
+    elevation: 3,
+  },
+  analyticsHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+    marginBottom: 18,
+  },
+  dashboardCardTitle: {
+    flex: 1,
+    minWidth: 0,
+    color: '#111827',
+    fontSize: 17,
+    fontWeight: '900',
+  },
+  periodPill: {
+    flexShrink: 0,
+    minHeight: 34,
+    borderRadius: 17,
+    backgroundColor: '#F7FBF6',
+    borderWidth: 1,
+    borderColor: '#E5ECE3',
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 13,
+  },
+  periodPillText: {
+    color: theme.colors.primaryDark,
+    fontSize: 12,
+    fontWeight: '900',
+    marginRight: 4,
+  },
+  analyticsStatGrid: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    justifyContent: 'space-between',
+    paddingHorizontal: 2,
+    paddingVertical: 2,
+    marginBottom: 8,
+  },
+  analyticsStatItem: {
+    flex: 1,
+    minWidth: 0,
+    minHeight: 76,
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+    paddingHorizontal: 2,
+  },
+  analyticsStatDivider: {
+    width: 1,
+    alignSelf: 'stretch',
+    marginVertical: 16,
+    backgroundColor: '#E8EFE4',
+  },
+  analyticsStatIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: theme.colors.primarySoft,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 7,
+  },
+  analyticsStatIconBlue: {
+    backgroundColor: theme.colors.blueSoft,
+  },
+  analyticsStatIconYellow: {
+    backgroundColor: theme.colors.yellowSoft,
+  },
+  analyticsStatIconPurple: {
+    backgroundColor: theme.colors.purpleSoft,
+  },
+  analyticsStatValue: {
+    color: '#111827',
+    fontSize: 16,
+    fontWeight: '900',
+    textAlign: 'center',
+    width: '100%',
+  },
+  analyticsStatLabel: {
+    marginTop: 4,
+    color: theme.colors.textSoft,
+    fontSize: 10,
+    fontWeight: '800',
+    textAlign: 'center',
+    width: '100%',
+  },
+  trendCard: {
+    marginTop: 10,
+    borderRadius: 22,
+    backgroundColor: '#FCFFFB',
+    borderWidth: 1,
+    borderColor: '#E8F0E4',
+    paddingHorizontal: 12,
+    paddingTop: 13,
+    paddingBottom: 11,
+    overflow: 'hidden',
+  },
+  trendChartBody: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+  },
+  trendYAxis: {
+    width: 38,
+    height: TREND_CHART_HEIGHT,
+    position: 'relative',
+    marginRight: 6,
+  },
+  trendYAxisLabel: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    color: '#8B988D',
+    fontSize: 8.5,
+    fontWeight: '800',
+    textAlign: 'right',
+  },
+  trendPlotWrap: {
+    flex: 1,
+    minWidth: 0,
+  },
+  trendPlot: {
+    height: TREND_CHART_HEIGHT,
+    position: 'relative',
+    overflow: 'hidden',
+  },
+  trendGridLine: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    height: 1,
+    backgroundColor: '#E9F1E6',
+  },
+  trendAreaColumn: {
+    position: 'absolute',
+    borderTopLeftRadius: 14,
+    borderTopRightRadius: 14,
+  },
+  trendSegment: {
+    position: 'absolute',
+    height: 2.5,
+    borderRadius: 999,
+    backgroundColor: '#25A95F',
+  },
+  trendDot: {
+    position: 'absolute',
+    width: TREND_DOT_SIZE,
+    height: TREND_DOT_SIZE,
+    borderRadius: TREND_DOT_SIZE / 2,
+    backgroundColor: theme.colors.white,
+    borderWidth: 2,
+    borderColor: '#25A95F',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  trendDotCore: {
+    width: 4,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: '#25A95F',
+  },
+  trendEmptyHintWrap: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    top: 13,
+    alignItems: 'center',
+  },
+  trendEmptyHintText: {
+    overflow: 'hidden',
+    borderRadius: 999,
+    backgroundColor: 'rgba(255, 255, 255, 0.84)',
+    color: theme.colors.textSoft,
+    fontSize: 9,
+    fontWeight: '900',
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+  },
+  trendLabelRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 7,
+  },
+  trendLabel: {
+    flex: 1,
+    color: '#8B988D',
+    fontSize: 9,
+    fontWeight: '900',
+    textAlign: 'center',
+  },
+  sessionRow: {
+    minHeight: 68,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#E7EEE4',
+    backgroundColor: '#FEFFFC',
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 11,
+    paddingVertical: 9,
+    marginBottom: 9,
+    shadowColor: '#223322',
+    shadowOffset: {
+      width: 0,
+      height: 5,
+    },
+    shadowOpacity: 0.035,
+    shadowRadius: 8,
+    elevation: 1,
+  },
+  sessionIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 10,
+  },
+  sessionCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  sessionTitle: {
+    color: '#111827',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  sessionMeta: {
+    marginTop: 4,
+    color: theme.colors.textSoft,
+    fontSize: 10,
+    fontWeight: '800',
+  },
+  sessionStatusWrap: {
+    alignItems: 'flex-end',
+    marginLeft: 8,
+    minWidth: 80,
+    flexShrink: 0,
+  },
+  sessionStatusPill: {
+    minHeight: 24,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 8,
+  },
+  sessionStatusText: {
+    fontSize: 9,
+    fontWeight: '900',
+  },
+  sessionTimeRow: {
+    marginTop: 5,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    gap: 2,
+  },
+  sessionTime: {
+    color: theme.colors.muted,
+    fontSize: 9,
+    fontWeight: '800',
+  },
+  reactsStrip: {
+    backgroundColor: theme.colors.white,
+    borderRadius: 28,
+    borderWidth: 1,
+    borderColor: '#ECEFE8',
+    padding: 12,
+    marginBottom: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    shadowColor: '#223322',
+    shadowOffset: {
+      width: 0,
+      height: 10,
+    },
+    shadowOpacity: 0.065,
+    shadowRadius: 16,
+    elevation: 3,
+  },
+  reactsStripCompact: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+  },
+  reactsStripPhone: {
+    padding: 10,
+    gap: 8,
+  },
+  reactsIntro: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  reactsAvatar: {
+    width: 58,
+    height: 58,
+    borderRadius: 22,
+    backgroundColor: theme.colors.primarySoft,
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  reactsAvatarPhone: {
+    width: 48,
+    height: 48,
+    borderRadius: 18,
+  },
+  reactsCopy: {
+    flex: 1,
+    minWidth: 0,
+    marginLeft: 11,
+    paddingRight: 8,
+  },
+  reactsCopyPhone: {
+    marginLeft: 8,
+    paddingRight: 4,
+  },
+  reactsTitle: {
+    color: theme.colors.primaryDark,
+    fontSize: 14,
+    fontWeight: '900',
+    marginBottom: 4,
+  },
+  reactsText: {
+    color: '#111827',
+    fontSize: 12,
+    fontWeight: '700',
+    lineHeight: 17,
+    flexShrink: 1,
+  },
+  reactsChips: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    justifyContent: 'flex-end',
+  },
+  reactsChipsCompact: {
+    width: '100%',
+    justifyContent: 'space-between',
+  },
+  reactsChipsPhone: {
+    flexShrink: 0,
+    gap: 6,
+  },
+  reactChip: {
+    width: 68,
+    minHeight: 76,
+    borderRadius: 18,
+    backgroundColor: '#F8FBF7',
+    borderWidth: 1,
+    borderColor: '#E7ECE4',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 6,
+  },
+  reactChipPhone: {
+    width: 54,
+    minHeight: 66,
+    paddingHorizontal: 4,
+  },
+  reactChipValue: {
+    marginTop: 5,
+    color: '#111827',
+    fontSize: 11,
+    fontWeight: '900',
+    textAlign: 'center',
+    width: '100%',
+  },
+  reactChipLabel: {
+    marginTop: 3,
+    color: theme.colors.textSoft,
+    fontSize: 9,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  reactsCelebration: {
+    width: 70,
+    height: 70,
+    borderRadius: 24,
+    backgroundColor: '#F1FAED',
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  reactsCelebrationCompact: {
+    alignSelf: 'center',
+  },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(248, 245, 236, 0.94)',
+    paddingHorizontal: 16,
+    paddingVertical: 28,
+    justifyContent: 'center',
+  },
+  modalCard: {
+    width: '100%',
+    maxWidth: 560,
+    alignSelf: 'center',
+    backgroundColor: '#FFFDF7',
+    borderRadius: 28,
+    borderWidth: 1,
+    borderColor: '#ECE6D7',
+    overflow: 'hidden',
+    shadowColor: '#223322',
+    shadowOffset: {
+      width: 0,
+      height: 18,
+    },
+    shadowOpacity: 0.16,
+    shadowRadius: 28,
+    elevation: 10,
+  },
+  modalHeader: {
+    minHeight: 64,
+    paddingLeft: 18,
+    paddingRight: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F0EADB',
+    backgroundColor: '#FFFDF7',
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  modalTitleWrap: {
+    flex: 1,
+    minWidth: 0,
+    paddingRight: 10,
+  },
+  modalTitle: {
+    color: '#111827',
+    fontSize: 19,
+    fontWeight: '900',
+  },
+  modalCloseButton: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: theme.colors.primarySoft,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modalScroll: {
+    width: '100%',
+  },
+  modalScrollContent: {
+    padding: 18,
+    paddingBottom: 22,
+  },
+  modalMetricGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  modalMetricCard: {
+    flexGrow: 1,
+    flexBasis: '47%',
+    minWidth: 138,
+    minHeight: 76,
+    borderRadius: 18,
+    backgroundColor: theme.colors.white,
+    borderWidth: 1,
+    borderColor: '#EEF1EA',
+    padding: 11,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  modalMetricIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 13,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 10,
+    flexShrink: 0,
+  },
+  modalMetricCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  modalMetricLabel: {
+    color: theme.colors.textSoft,
+    fontSize: 10,
+    fontWeight: '800',
+  },
+  modalMetricValue: {
+    marginTop: 4,
+    color: '#111827',
+    fontSize: 14,
+    fontWeight: '900',
+    lineHeight: 18,
+  },
+  modalEmptyState: {
+    minHeight: 220,
+    borderRadius: 24,
+    backgroundColor: theme.colors.white,
+    borderWidth: 1,
+    borderColor: '#EEF1EA',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 22,
+  },
+  modalEmptyIcon: {
+    width: 78,
+    height: 78,
+    borderRadius: 28,
+    backgroundColor: theme.colors.primarySoft,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 12,
+  },
+  modalEmptyTitle: {
+    color: '#111827',
+    fontSize: 17,
+    fontWeight: '900',
+    textAlign: 'center',
+  },
+  modalEmptyText: {
+    marginTop: 8,
+    color: theme.colors.textSoft,
+    fontSize: 13,
+    fontWeight: '700',
+    lineHeight: 19,
+    textAlign: 'center',
+  },
+  modalSection: {
+    marginTop: 16,
+  },
+  modalSectionTitle: {
+    color: '#111827',
+    fontSize: 14,
+    fontWeight: '900',
+    marginBottom: 10,
+  },
+  modalTrendCard: {
+    marginTop: 0,
+    backgroundColor: theme.colors.white,
+    borderWidth: 1,
+    borderColor: '#EEF1EA',
+  },
+  modalInsightCard: {
+    marginTop: 16,
+    borderRadius: 22,
+    backgroundColor: '#F7FBF6',
+    borderWidth: 1,
+    borderColor: '#E5ECE3',
+    padding: 13,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  modalInsightIcon: {
+    width: 54,
+    height: 54,
+    borderRadius: 20,
+    backgroundColor: theme.colors.primarySoft,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+    flexShrink: 0,
+  },
+  modalInsightCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  modalInsightTitle: {
+    color: theme.colors.primaryDark,
+    fontSize: 12,
+    fontWeight: '900',
+    marginBottom: 4,
+  },
+  modalInsightText: {
+    color: '#111827',
+    fontSize: 13,
+    fontWeight: '700',
+    lineHeight: 19,
+  },
+  modalSessionList: {
+    gap: 10,
+  },
+  modalSessionCard: {
+    borderRadius: 20,
+    backgroundColor: theme.colors.white,
+    borderWidth: 1,
+    borderColor: '#EEF1EA',
+    padding: 12,
+  },
+  modalSessionHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  modalSessionTitleWrap: {
+    flex: 1,
+    minWidth: 0,
+  },
+  modalSessionTitle: {
+    color: '#111827',
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  modalSessionDate: {
+    marginTop: 4,
+    color: theme.colors.textSoft,
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  modalStatusBadge: {
+    minHeight: 25,
+    minWidth: 74,
+    borderRadius: 13,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 9,
+    flexShrink: 0,
+  },
+  modalStatusText: {
+    fontSize: 10,
+    fontWeight: '900',
+  },
+  modalSessionDetailRow: {
+    marginTop: 11,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 7,
+  },
+  modalSessionDetail: {
+    maxWidth: '100%',
+    borderRadius: 999,
+    overflow: 'hidden',
+    backgroundColor: '#F7FBF6',
+    borderWidth: 1,
+    borderColor: '#E5ECE3',
+    color: '#4F6B55',
+    fontSize: 10,
+    fontWeight: '900',
+    paddingHorizontal: 9,
+    paddingVertical: 6,
+  },
+  modalSessionDetailClean: {
+    color: theme.colors.primaryDark,
+    backgroundColor: theme.colors.successSoft,
+    borderColor: '#D6F5DE',
+  },
+  modalSessionDetailDistracted: {
+    color: '#B7791F',
+    backgroundColor: theme.colors.yellowSoft,
+    borderColor: '#F4E7B7',
+  },
+  modalSummaryCard: {
+    borderRadius: 22,
+    backgroundColor: theme.colors.white,
+    borderWidth: 1,
+    borderColor: '#EEF1EA',
+    padding: 12,
+  },
+  modalSummaryTopRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 10,
+    marginBottom: 12,
+  },
+  modalSuggestionCard: {
+    marginTop: 16,
+    borderRadius: 18,
+    backgroundColor: theme.colors.primarySoft,
+    padding: 13,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  modalSuggestionText: {
+    flex: 1,
+    minWidth: 0,
+    marginLeft: 9,
+    color: theme.colors.primaryDark,
+    fontSize: 13,
+    fontWeight: '800',
+    lineHeight: 18,
+  },
+  modalTalkContent: {
+    alignItems: 'center',
+  },
+  modalTalkAvatar: {
+    width: 96,
+    height: 96,
+    borderRadius: 34,
+    backgroundColor: theme.colors.primarySoft,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 14,
+  },
+  modalTalkTitle: {
+    color: '#111827',
+    fontSize: 18,
+    fontWeight: '900',
+    textAlign: 'center',
+  },
+  modalTalkText: {
+    marginTop: 8,
+    color: theme.colors.textSoft,
+    fontSize: 13,
+    fontWeight: '700',
+    lineHeight: 19,
+    textAlign: 'center',
+  },
+  modalButtonRow: {
+    width: '100%',
+    flexDirection: 'column',
+    gap: 10,
+    marginTop: 18,
+  },
+  modalActionButton: {
+    width: '100%',
+    minHeight: 46,
+    minWidth: 0,
+    borderRadius: 23,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+  },
+  modalPrimaryButton: {
+    backgroundColor: theme.colors.primaryDark,
+  },
+  modalSecondaryButton: {
+    backgroundColor: theme.colors.white,
+    borderWidth: 1,
+    borderColor: '#DBE7DB',
+  },
+  modalPrimaryButtonText: {
+    color: theme.colors.white,
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  modalSecondaryButtonText: {
+    color: theme.colors.primaryDark,
+    fontSize: 13,
     fontWeight: '900',
   },
   seeAllText: {
     color: '#247A3E',
     fontSize: 12,
     fontWeight: '500',
-  },
-  quickActionGrid: {
-    flexDirection: 'row',
-    gap: 6,
-  },
-  quickActionButton: {
-    flex: 1,
-    minHeight: 62,
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: 'rgba(34, 40, 49, 0.04)',
-    paddingHorizontal: 7,
-    paddingVertical: 7,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'flex-start',
-  },
-  quickActionIcon: {
-    marginRight: 5,
-    flexShrink: 0,
-  },
-  quickActionText: {
-    flex: 1,
-    color: '#111827',
-    fontSize: 9,
-    fontWeight: '800',
-    lineHeight: 14,
-    textAlign: 'left',
-  },
-  insightCard: {
-    backgroundColor: '#F3FBF0',
-    borderRadius: 26,
-    borderWidth: 1,
-    borderColor: '#DAEFD6',
-    paddingHorizontal: 13,
-    paddingTop: 13,
-    paddingBottom: 12,
-    marginBottom: 14,
-    shadowColor: '#223322',
-    shadowOffset: {
-      width: 0,
-      height: 8,
-    },
-    shadowOpacity: 0.06,
-    shadowRadius: 14,
-    elevation: 3,
-  },
-  cardHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 9,
-  },
-  insightTitle: {
-    color: '#247A3E',
-    fontSize: 16,
-    fontWeight: '900',
-    lineHeight: 20,
-  },
-  insightGrid: {
-    flexDirection: 'row',
-    alignItems: 'stretch',
-    backgroundColor: 'rgba(255, 255, 255, 0.58)',
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: 'rgba(214, 222, 210, 0.58)',
-    paddingHorizontal: 4,
-    paddingVertical: 8,
-  },
-  insightPill: {
-    flex: 1,
-    minWidth: 0,
-    alignItems: 'center',
-    justifyContent: 'flex-start',
-    paddingHorizontal: 2,
-    position: 'relative',
-  },
-  insightDivider: {
-    position: 'absolute',
-    left: 0,
-    top: 4,
-    bottom: 3,
-    width: 1,
-    backgroundColor: '#D6DED2',
-  },
-  insightMetricRow: {
-    minHeight: 22,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 3,
-    marginBottom: 4,
-  },
-  insightIcon: {
-    width: 19,
-    height: 19,
-    borderRadius: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  insightValue: {
-    fontSize: 15,
-    fontWeight: '900',
-    lineHeight: 18,
-  },
-  insightLabel: {
-    width: '100%',
-    color: '#485247',
-    fontSize: 10,
-    fontWeight: '800',
-    lineHeight: 12,
-    textAlign: 'center',
-  },
-  miloSaysCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: theme.colors.white,
-    borderRadius: 28,
-    borderWidth: 1,
-    borderColor: '#ECEFE8',
-    padding: 14,
-    marginBottom: 16,
-    shadowColor: '#223322',
-    shadowOffset: {
-      width: 0,
-      height: 10,
-    },
-    shadowOpacity: 0.065,
-    shadowRadius: 16,
-    elevation: 3,
-  },
-  miloSaysAvatar: {
-    width: 62,
-    height: 62,
-    borderRadius: 22,
-    backgroundColor: '#ECF8EF',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 12,
-    overflow: 'hidden',
-  },
-  miloSaysImage: {
-    marginBottom: -5,
-  },
-  miloSaysCopy: {
-    flex: 1,
-  },
-  miloSaysTitle: {
-    color: '#247A3E',
-    fontSize: 13,
-    fontWeight: '900',
-    marginBottom: 4,
-  },
-  miloSaysText: {
-    color: '#111827',
-    fontSize: 13,
-    fontWeight: '800',
-    lineHeight: 18,
-  },
-  encourageButton: {
-    alignSelf: 'flex-start',
-    marginTop: 10,
-    minHeight: 34,
-    borderRadius: 17,
-    backgroundColor: '#ECF8EF',
-    paddingHorizontal: 14,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  encourageButtonText: {
-    color: '#247A3E',
-    fontSize: 12,
-    fontWeight: '900',
-  },
-  chatBar: {
-    minHeight: 60,
-    backgroundColor: theme.colors.white,
-    borderRadius: 30,
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
-    paddingVertical: 7,
-    paddingLeft: 18,
-    paddingRight: 7,
-    flexDirection: 'row',
-    alignItems: 'center',
-    shadowColor: '#223322',
-    shadowOffset: {
-      width: 0,
-      height: 10,
-    },
-    shadowOpacity: 0.065,
-    shadowRadius: 16,
-    elevation: 3,
-  },
-  chatInput: {
-    flex: 1,
-    color: '#111827',
-    fontSize: 14,
-    fontWeight: '700',
-    paddingVertical: 10,
-    paddingRight: 10,
-  },
-  sendButton: {
-    width: 46,
-    height: 46,
-    borderRadius: 23,
-    backgroundColor: '#247A3E',
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#247A3E',
-    shadowOffset: {
-      width: 0,
-      height: 7,
-    },
-    shadowOpacity: 0.18,
-    shadowRadius: 12,
-    elevation: 4,
-  },
-  sendButtonDisabled: {
-    backgroundColor: theme.colors.muted,
-    opacity: 0.6,
   },
 });
