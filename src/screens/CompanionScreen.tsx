@@ -26,7 +26,7 @@ import * as Speech from 'expo-speech';
 import { LinearGradient } from 'expo-linear-gradient';
 import { VideoView, useVideoPlayer } from 'expo-video';
 import { Ionicons } from '@expo/vector-icons';
-import { useFocusEffect, useNavigation } from '@react-navigation/native';
+import { useFocusEffect, useNavigation, useRoute } from '@react-navigation/native';
 import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 
 import { theme } from '../theme';
@@ -71,7 +71,6 @@ type CompanionDetailModal =
   | 'analytics'
   | 'sessions'
   | 'reaction'
-  | 'talk'
   | 'resources';
 type ResourceFinderMode = 'finder' | 'save' | 'saved';
 
@@ -1022,7 +1021,7 @@ function getTalkPreviewText(analytics: FocusAnalyticsSummary) {
   const latestSession = analytics.latestSession;
 
   if (!latestSession) {
-    return 'I can chat here soon. For now, I can help you plan the next tiny step.';
+    return 'Ask me what to focus on, what is urgent, or how to prepare.';
   }
 
   if (latestSession.status === 'completed') {
@@ -1065,6 +1064,7 @@ function MoodStatusCard({ item }: { item: MoodStatusItem }) {
 
 export default function CompanionScreen() {
   const navigation = useNavigation<any>();
+  const route = useRoute<any>();
   const tabBarHeight = useBottomTabBarHeight();
   const { userName } = useAuth();
   const { tasks } = useTasks();
@@ -1322,6 +1322,51 @@ export default function CompanionScreen() {
   useEffect(() => {
     setSelectedResourceKeywords(resourceKeywords);
   }, [resourceKeywords]);
+
+  useFocusEffect(
+    useCallback(() => {
+      const shouldOpenResourceFinder = Boolean(route.params?.openResourceFinder);
+      const requestedTaskId =
+        typeof route.params?.openResourceFinderForTaskId === 'string'
+          ? route.params.openResourceFinderForTaskId
+          : null;
+
+      if (!shouldOpenResourceFinder && !requestedTaskId) {
+        return undefined;
+      }
+
+      const requestedTask = requestedTaskId
+        ? resourceFinderTasks.find((task) => task.id === requestedTaskId)
+        : null;
+
+      if (requestedTask) {
+        setSelectedResourceTaskId(requestedTask.id);
+        setSelectedResourceKeywords(generateResourceKeywords(requestedTask));
+        setResourceFinderMessage(
+          `Milo picked "${requestedTask.title}" for resource search.`
+        );
+      } else {
+        setSelectedResourceTaskId(null);
+        setSelectedResourceKeywords([]);
+        setResourceFinderMessage('Choose a task and Milo will suggest keywords.');
+      }
+
+      setResourceFinderMode('finder');
+      void openDetailModal('resources');
+      navigation.setParams({
+        openResourceFinder: undefined,
+        openResourceFinderForTaskId: undefined,
+      });
+
+      return undefined;
+    }, [
+      navigation,
+      openDetailModal,
+      resourceFinderTasks,
+      route.params?.openResourceFinder,
+      route.params?.openResourceFinderForTaskId,
+    ])
+  );
 
   const focusAnalytics = useMemo(
     () => createFocusAnalytics(focusHistory, todayDate),
@@ -1585,7 +1630,12 @@ export default function CompanionScreen() {
         clearInactivityTimer();
         stopMiloVideos();
       };
-    }, [clearInactivityTimer, loadFocusHistory, resetInactivityTimer, stopMiloVideos])
+    }, [
+      clearInactivityTimer,
+      loadFocusHistory,
+      resetInactivityTimer,
+      stopMiloVideos,
+    ])
   );
 
   useEffect(() => {
@@ -1659,11 +1709,13 @@ export default function CompanionScreen() {
   };
 
   const handleContinueChat = async () => {
-    await openDetailModal('talk');
-  };
+    try {
+      await Haptics.selectionAsync();
+    } catch {
+      // Navigation should still work when haptics are unavailable.
+    }
 
-  const handleOldMessages = async () => {
-    await openDetailModal('sessions');
+    navigation.navigate('MiloChat');
   };
 
   const handleMiloTap = async () => {
@@ -1828,8 +1880,6 @@ export default function CompanionScreen() {
       ? 'Recent Sessions'
       : activeDetailModal === 'reaction'
       ? "Milo's Focus Reaction"
-      : activeDetailModal === 'talk'
-      ? 'Talk with Milo'
       : activeDetailModal === 'resources'
       ? 'Milo Resource Finder'
       : '';
@@ -2237,26 +2287,6 @@ export default function CompanionScreen() {
     );
   };
 
-  const renderTalkModalContent = () => (
-    <View style={styles.modalTalkContent}>
-      <View style={styles.modalTalkAvatar}>
-        <MiloMoodImage mood="waving" size={78} />
-      </View>
-      <Text style={styles.modalTalkTitle}>Talk with Milo</Text>
-      <Text style={styles.modalTalkText}>
-        Milo chat is coming soon. For now, Milo can help you start a focus block
-        and review your progress.
-      </Text>
-      {renderModalActions({
-        primaryLabel: 'Start Focus',
-        onPrimaryPress: () => void handleStartFocus(),
-        secondaryLabel: 'View Analytics',
-        onSecondaryPress: () => void openDetailModal('analytics'),
-        closeLabel: 'Close',
-      })}
-    </View>
-  );
-
   const renderResourceTaskList = () => (
     <View style={styles.resourceTaskList}>
       {resourceFinderTasks.map((task) => {
@@ -2566,7 +2596,6 @@ export default function CompanionScreen() {
     if (activeDetailModal === 'analytics') return renderAnalyticsModalContent();
     if (activeDetailModal === 'sessions') return renderRecentSessionsModalContent();
     if (activeDetailModal === 'reaction') return renderReactionModalContent();
-    if (activeDetailModal === 'talk') return renderTalkModalContent();
     if (activeDetailModal === 'resources') return renderResourceFinderModalContent();
 
     return null;
@@ -2811,27 +2840,29 @@ export default function CompanionScreen() {
             </TouchableOpacity>
 
             <TouchableOpacity
-              activeOpacity={0.84}
+              activeOpacity={1}
+              disabled
               style={[
                 styles.oldMessagesButton,
+                styles.oldMessagesButtonDisabled,
                 stackTalkCard && styles.talkActionButtonCompact,
               ]}
-              onPress={handleOldMessages}
               accessibilityRole="button"
-              accessibilityLabel="Open old Milo messages"
+              accessibilityState={{ disabled: true }}
+              accessibilityLabel="Chat history coming soon"
             >
               <Ionicons
                 name="time-outline"
                 size={18}
-                color={theme.colors.primaryDark}
+                color={theme.colors.muted}
               />
               <Text
                 numberOfLines={1}
                 adjustsFontSizeToFit
-                minimumFontScale={0.78}
-                style={styles.oldMessagesText}
+                minimumFontScale={0.62}
+                style={[styles.oldMessagesText, styles.oldMessagesTextDisabled]}
               >
-                Old messages
+                Chat history coming soon
               </Text>
             </TouchableOpacity>
           </View>
@@ -3253,6 +3284,7 @@ export default function CompanionScreen() {
         visible={activeDetailModal !== null}
         animationType="fade"
         transparent
+        statusBarTranslucent
         onRequestClose={() => void closeDetailModal()}
       >
         <View style={styles.modalBackdrop}>
@@ -4139,12 +4171,21 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingHorizontal: 12,
   },
+  oldMessagesButtonDisabled: {
+    backgroundColor: '#F7FBF6',
+    borderColor: '#E5ECE3',
+    opacity: 0.78,
+  },
   oldMessagesText: {
     marginLeft: 7,
     color: '#4F6B55',
     fontSize: 12,
     fontWeight: '900',
     flexShrink: 1,
+  },
+  oldMessagesTextDisabled: {
+    color: theme.colors.muted,
+    fontSize: 11,
   },
   focusGuardCard: {
     minHeight: 86,
@@ -4676,6 +4717,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 28,
     justifyContent: 'center',
+    zIndex: 9999,
+    elevation: 9999,
   },
   modalCard: {
     width: '100%',
@@ -4694,6 +4737,7 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.16,
     shadowRadius: 28,
     elevation: 10,
+    zIndex: 10000,
   },
   modalHeader: {
     minHeight: 64,
@@ -5251,32 +5295,6 @@ const styles = StyleSheet.create({
     color: theme.colors.danger,
     fontSize: 12,
     fontWeight: '900',
-  },
-  modalTalkContent: {
-    alignItems: 'center',
-  },
-  modalTalkAvatar: {
-    width: 96,
-    height: 96,
-    borderRadius: 34,
-    backgroundColor: theme.colors.primarySoft,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 14,
-  },
-  modalTalkTitle: {
-    color: '#111827',
-    fontSize: 18,
-    fontWeight: '900',
-    textAlign: 'center',
-  },
-  modalTalkText: {
-    marginTop: 8,
-    color: theme.colors.textSoft,
-    fontSize: 13,
-    fontWeight: '700',
-    lineHeight: 19,
-    textAlign: 'center',
   },
   modalButtonRow: {
     width: '100%',

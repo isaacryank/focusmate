@@ -1,8 +1,10 @@
+import type { NavigatorScreenParams } from '@react-navigation/native';
+
 export type RootStackParamList = {
     Onboarding: undefined;
     Login: undefined;
     Register: undefined;
-    MainTabs: undefined;
+    MainTabs: NavigatorScreenParams<MainTabParamList> | undefined;
     Tasks: undefined;
     AddTask: undefined;
     TaskDetails: {
@@ -14,7 +16,8 @@ export type RootStackParamList = {
     MiloPlan: {
       taskId: string;
     };
-    FocusSession: undefined;
+    MiloChat: undefined;
+    FocusSession: { taskId?: string } | undefined;
     TodayPlan: undefined;
     ReminderCenter: undefined;
     Analytics: undefined;
@@ -25,6 +28,11 @@ export type RootStackParamList = {
     Home: undefined;
     Calendar: undefined;
     AddCenter: undefined;
-    Companion: undefined;
+    Companion:
+      | {
+          openResourceFinder?: boolean;
+          openResourceFinderForTaskId?: string;
+        }
+      | undefined;
     Settings: undefined;
   };

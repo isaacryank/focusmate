@@ -23,6 +23,7 @@ import SettingsScreen from '../screens/SettingsScreen';
 import TaskDetailsScreen from '../screens/TaskDetailsScreen';
 import EditTaskScreen from '../screens/EditTaskScreen';
 import MiloPlanScreen from '../screens/MiloPlanScreen';
+import MiloChatScreen from '../screens/MiloChatScreen';
 import FocusSessionScreen from '../screens/FocusSessionScreen';
 import TodayPlanScreen from '../screens/TodayPlanScreen';
 import ReminderCenterScreen from '../screens/ReminderCenterScreen';
@@ -294,6 +295,12 @@ export default function AppNavigator() {
               name="MiloPlan"
               component={MiloPlanScreen}
               options={{ title: 'Milo Smart Plan' }}
+            />
+
+            <RootStack.Screen
+              name="MiloChat"
+              component={MiloChatScreen}
+              options={{ headerShown: false }}
             />
 
             <RootStack.Screen
