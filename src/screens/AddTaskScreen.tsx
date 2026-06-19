@@ -32,10 +32,12 @@ import {
   formatTimeForStorage,
   timeFromStorage,
 } from '../lib/dateTimeUtils';
+import { isPhysicalLocationLikeValue } from '../lib/locationPickerUtils';
 
 import ScreenContainer from '../components/ui/ScreenContainer';
 import NoticeCard from '../components/ui/NoticeCard';
 import MiloMoodImage from '../components/milo/MiloMoodImage';
+import SmartLocationPickerModal from '../components/SmartLocationPickerModal';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'AddTask'>;
 
@@ -44,6 +46,7 @@ type ScheduleSheet = 'duration' | 'location' | 'reminder' | null;
 type ReminderUnit = 'minutes' | 'hours' | 'days';
 
 const SCHEDULE_MILO_ROTATION_MS = 57000;
+const MAX_RECENT_LOCATION_CHIPS = 3;
 
 const plannerTypes: {
   value: PlannerType;
@@ -719,7 +722,6 @@ export default function AddTaskScreen({ navigation }: Props) {
   const [pickerMode, setPickerMode] = useState<PickerMode>(null);
   const [scheduleSheet, setScheduleSheet] = useState<ScheduleSheet>(null);
   const [customDurationText, setCustomDurationText] = useState('3');
-  const [locationDraft, setLocationDraft] = useState('');
   const [customReminderText, setCustomReminderText] = useState('5');
   const [customReminderUnit, setCustomReminderUnit] =
     useState<ReminderUnit>('minutes');
@@ -831,6 +833,10 @@ export default function AddTaskScreen({ navigation }: Props) {
           return false;
         }
 
+        if (!isPhysicalLocationLikeValue(taskLocation)) {
+          return false;
+        }
+
         const normalizedLocation = taskLocation.toLowerCase();
 
         if (seenLocations.has(normalizedLocation)) {
@@ -840,7 +846,7 @@ export default function AddTaskScreen({ navigation }: Props) {
         seenLocations.add(normalizedLocation);
         return true;
       })
-      .slice(0, 5);
+      .slice(0, MAX_RECENT_LOCATION_CHIPS);
   }, [tasks]);
   const hasScheduleConflict =
     conflictInfo?.level === 'hard' ||
@@ -1010,7 +1016,6 @@ export default function AddTaskScreen({ navigation }: Props) {
   };
 
   const openLocationSheet = () => {
-    setLocationDraft(location);
     setScheduleSheet('location');
   };
 
@@ -1049,8 +1054,8 @@ export default function AddTaskScreen({ navigation }: Props) {
     handleKeepAnyway();
   };
 
-  const applyLocation = () => {
-    setLocation(locationDraft.trim());
+  const applyLocation = (selectedLocation: string) => {
+    setLocation(selectedLocation.trim());
     setScheduleSheet(null);
   };
 
@@ -1563,7 +1568,7 @@ export default function AddTaskScreen({ navigation }: Props) {
       </Modal>
 
       <Modal
-        visible={scheduleSheet !== null}
+        visible={scheduleSheet === 'duration' || scheduleSheet === 'reminder'}
         transparent
         animationType="fade"
         onRequestClose={() => setScheduleSheet(null)}
@@ -1639,46 +1644,6 @@ export default function AddTaskScreen({ navigation }: Props) {
                     >
                       <Text style={styles.customApplyText}>Set</Text>
                     </TouchableOpacity>
-                  </View>
-                </View>
-              </>
-            ) : null}
-
-            {scheduleSheet === 'location' ? (
-              <>
-                <Text style={styles.locationHelperText}>
-                  Type a place name or address. FocusMate will save it with this task.
-                </Text>
-                <TextInput
-                  value={locationDraft}
-                  onChangeText={setLocationDraft}
-                  placeholder="e.g. UTeM FTMK, clinic, office, café"
-                  placeholderTextColor={theme.colors.muted}
-                  style={styles.sheetTextInput}
-                />
-                {recentLocations.length > 0 ? (
-                  <View style={styles.locationQuickRow}>
-                    {recentLocations.map((item) => (
-                      <TouchableOpacity
-                        key={item}
-                        activeOpacity={0.85}
-                        style={styles.quickPill}
-                        onPress={() => setLocationDraft(item)}
-                      >
-                        <Text numberOfLines={1} style={styles.quickPillText}>
-                          {item}
-                        </Text>
-                      </TouchableOpacity>
-                    ))}
-                  </View>
-                ) : null}
-                <View style={styles.sheetActionRow}>
-                  <SecondaryButton
-                    title="Cancel"
-                    onPress={() => setScheduleSheet(null)}
-                  />
-                  <View style={styles.footerPrimary}>
-                    <PrimaryButton title="Save Location" onPress={applyLocation} />
                   </View>
                 </View>
               </>
@@ -1769,6 +1734,14 @@ export default function AddTaskScreen({ navigation }: Props) {
           </View>
         </View>
       </Modal>
+
+      <SmartLocationPickerModal
+        visible={scheduleSheet === 'location'}
+        initialLocation={location}
+        recentLocations={recentLocations}
+        onCancel={() => setScheduleSheet(null)}
+        onSave={applyLocation}
+      />
     </ScreenContainer>
   );
 }
