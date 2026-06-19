@@ -1,5 +1,6 @@
-import React, { useMemo } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import {
+  Alert,
   Image,
   ImageSourcePropType,
   StyleSheet,
@@ -8,7 +9,7 @@ import {
   useWindowDimensions,
   View,
 } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 
 import {
@@ -18,6 +19,12 @@ import {
   miloReactions,
 } from '../assets/generatedAssetMap';
 import { getMiloHomeHero } from '../lib/miloHomeHero';
+import { openLocationInMaps } from '../lib/mapUtils';
+import {
+  loadOnlineMeetingLinks,
+  type OnlineMeetingLink,
+} from '../lib/meetingLinkStorage';
+import { openMeetingLink } from '../lib/meetingLinkUtils';
 import {
   getHomeMiloSummary,
   getMiloRecommendedTasks,
@@ -281,68 +288,237 @@ function CountChip({
   );
 }
 
-function MiloTaskRow({
-  item,
+function AvailabilityChip({
+  available,
+  availableLabel,
+  emptyLabel,
+  availableIcon,
+  emptyIcon,
+  tone,
+}: {
+  available: boolean;
+  availableLabel: string;
+  emptyLabel: string;
+  availableIcon: StatIconName;
+  emptyIcon: StatIconName;
+  tone: 'location' | 'link';
+}) {
+  const color = available
+    ? tone === 'location'
+      ? theme.colors.primaryDark
+      : theme.colors.purple
+    : theme.colors.muted;
+  const chipStyle = available
+    ? tone === 'location'
+      ? styles.availabilityChipLocation
+      : styles.availabilityChipLink
+    : styles.availabilityChipMuted;
+
+  return (
+    <View style={[styles.availabilityChip, chipStyle]}>
+      <Ionicons
+        name={available ? availableIcon : emptyIcon}
+        size={11}
+        color={color}
+      />
+      <Text
+        numberOfLines={1}
+        style={[styles.availabilityChipText, { color }]}
+      >
+        {available ? availableLabel : emptyLabel}
+      </Text>
+    </View>
+  );
+}
+
+function QuickActionButton({
+  label,
+  iconName,
+  tone,
+  compact,
   onPress,
 }: {
-  item: HomeItem;
+  label: string;
+  iconName: StatIconName;
+  tone: 'join' | 'maps' | 'details';
+  compact?: boolean;
   onPress: () => void;
+}) {
+  const colors =
+    tone === 'join'
+      ? {
+          backgroundColor: theme.colors.purpleSoft,
+          borderColor: '#DED6FF',
+          color: theme.colors.purple,
+        }
+      : tone === 'maps'
+      ? {
+          backgroundColor: theme.colors.surface,
+          borderColor: '#CBEFD8',
+          color: theme.colors.primaryDark,
+        }
+      : {
+          backgroundColor: theme.colors.primarySoft,
+          borderColor: '#CBEFD8',
+          color: theme.colors.primaryDark,
+        };
+
+  return (
+    <TouchableOpacity
+      activeOpacity={0.84}
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      style={[
+        styles.quickActionButton,
+        compact ? styles.quickActionButtonCompact : null,
+        {
+          backgroundColor: colors.backgroundColor,
+          borderColor: colors.borderColor,
+        },
+      ]}
+    >
+      <Ionicons name={iconName} size={compact ? 13 : 15} color={colors.color} />
+      <Text
+        numberOfLines={1}
+        adjustsFontSizeToFit
+        minimumFontScale={0.82}
+        style={[styles.quickActionText, { color: colors.color }]}
+      >
+        {label}
+      </Text>
+    </TouchableOpacity>
+  );
+}
+
+function MiloTaskRow({
+  item,
+  meetingLink,
+  onPress,
+  onJoinMeeting,
+  onOpenMaps,
+}: {
+  item: HomeItem;
+  meetingLink?: OnlineMeetingLink;
+  onPress: () => void;
+  onJoinMeeting: (meetingLink: OnlineMeetingLink) => void;
+  onOpenMaps: (location: string) => void;
 }) {
   const { task, urgency, situation, categoryIcon, miloSticker } = item;
   const urgencyColors = getSituationColors(situation, urgency);
   const tone = typeTone[task.plannerType];
   const dateContext = getPlannerDateContext(task);
+  const location = task.location?.trim() || '';
+  const onlineMeetingLink = meetingLink?.url ? meetingLink : null;
+  const hasLocation = Boolean(location);
+  const hasMeetingLink = Boolean(onlineMeetingLink);
+  const hasTwoActions = hasLocation && hasMeetingLink;
 
   return (
-    <TouchableOpacity
-      activeOpacity={0.88}
-      style={styles.itemRow}
-      onPress={onPress}
-      accessibilityRole="button"
-      accessibilityLabel={`Open ${task.title}`}
-    >
-      <View style={[styles.categoryTile, { backgroundColor: tone.backgroundColor }]}>
-        <Image source={categoryIcon} style={styles.categoryIcon} />
-      </View>
-
-      <Image source={miloSticker} style={styles.miloSticker} />
-
-      <View style={styles.itemContent}>
-        <Text numberOfLines={1} style={styles.itemTitle}>
-          {task.title}
-        </Text>
-        <View style={styles.itemMetaRow}>
-          <View style={[styles.typeChip, { backgroundColor: tone.chipBackground }]}>
-            <Text numberOfLines={1} style={[styles.typeChipText, { color: tone.color }]}>
-              {typeLabels[task.plannerType]}
-            </Text>
+    <View style={styles.itemRow}>
+      <TouchableOpacity
+        activeOpacity={0.88}
+        style={styles.itemPressArea}
+        onPress={onPress}
+        accessibilityRole="button"
+        accessibilityLabel={`Open details for ${task.title}`}
+      >
+        <View style={[styles.miloThumb, { backgroundColor: tone.backgroundColor }]}>
+          <Image source={miloSticker} style={styles.miloThumbImage} />
+          <View style={styles.categoryBadge}>
+            <Image source={categoryIcon} style={styles.categoryBadgeIcon} />
           </View>
-          <View
-            style={[
-              styles.itemUrgencyChip,
-              { backgroundColor: urgencyColors.backgroundColor },
-            ]}
-          >
-            <Text
-              numberOfLines={1}
-              adjustsFontSizeToFit
-              minimumFontScale={0.84}
-              style={[styles.itemUrgencyText, { color: urgencyColors.color }]}
-            >
-              {situation.label}
-            </Text>
-          </View>
-          <Text numberOfLines={1} style={styles.itemDateContext}>
-            {dateContext}
-          </Text>
         </View>
-      </View>
 
-      <Text numberOfLines={1} style={styles.itemTime}>
-        {getItemTimeLabel(task, situation)}
-      </Text>
-      <Ionicons name="chevron-forward" size={20} color={theme.colors.muted} />
-    </TouchableOpacity>
+        <View style={styles.itemContent}>
+          <Text numberOfLines={1} style={styles.itemTitle}>
+            {task.title}
+          </Text>
+          <View style={styles.itemMetaRow}>
+            <View style={[styles.typeChip, { backgroundColor: tone.chipBackground }]}>
+              <Text numberOfLines={1} style={[styles.typeChipText, { color: tone.color }]}>
+                {typeLabels[task.plannerType]}
+              </Text>
+            </View>
+            <View
+              style={[
+                styles.itemUrgencyChip,
+                { backgroundColor: urgencyColors.backgroundColor },
+              ]}
+            >
+              <Text
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.84}
+                style={[styles.itemUrgencyText, { color: urgencyColors.color }]}
+              >
+                {situation.label}
+              </Text>
+            </View>
+          </View>
+
+          <View style={styles.itemScheduleRow}>
+            <Ionicons name="calendar-outline" size={12} color={theme.colors.muted} />
+            <Text numberOfLines={1} style={styles.itemScheduleText}>
+              {dateContext}
+            </Text>
+            <View style={styles.itemScheduleDot} />
+            <Ionicons name="time-outline" size={12} color={theme.colors.muted} />
+            <Text numberOfLines={1} style={styles.itemScheduleText}>
+              {getItemTimeLabel(task, situation)}
+            </Text>
+          </View>
+
+          <View style={styles.availabilityRow}>
+            <AvailabilityChip
+              available={hasLocation}
+              availableLabel="Location"
+              emptyLabel="No location"
+              availableIcon="location"
+              emptyIcon="location-outline"
+              tone="location"
+            />
+            <AvailabilityChip
+              available={hasMeetingLink}
+              availableLabel="Online link"
+              emptyLabel="No link"
+              availableIcon="videocam"
+              emptyIcon="videocam-outline"
+              tone="link"
+            />
+          </View>
+        </View>
+      </TouchableOpacity>
+
+      <View style={styles.itemActionColumn}>
+        {onlineMeetingLink ? (
+          <QuickActionButton
+            label="Join"
+            iconName="videocam"
+            tone="join"
+            compact={hasTwoActions}
+            onPress={() => onJoinMeeting(onlineMeetingLink)}
+          />
+        ) : null}
+        {hasLocation ? (
+          <QuickActionButton
+            label="Maps"
+            iconName="navigate"
+            tone="maps"
+            compact={hasTwoActions}
+            onPress={() => onOpenMaps(location)}
+          />
+        ) : null}
+        {!onlineMeetingLink && !hasLocation ? (
+          <QuickActionButton
+            label="Details"
+            iconName="list"
+            tone="details"
+            onPress={onPress}
+          />
+        ) : null}
+      </View>
+    </View>
   );
 }
 
@@ -352,7 +528,44 @@ export default function HomeScreen() {
   const { tasks } = useTasks();
   const { width } = useWindowDimensions();
 
+  const [meetingLinksByTaskId, setMeetingLinksByTaskId] = useState<
+    Record<string, OnlineMeetingLink>
+  >({});
   const compactWidth = width < 380;
+
+  useFocusEffect(
+    useCallback(() => {
+      let isActive = true;
+
+      async function refreshMeetingLinks() {
+        try {
+          const meetingLinks = await loadOnlineMeetingLinks();
+
+          if (!isActive) {
+            return;
+          }
+
+          setMeetingLinksByTaskId(
+            meetingLinks.reduce<Record<string, OnlineMeetingLink>>(
+              (linksByTaskId, meetingLink) => {
+                linksByTaskId[meetingLink.taskId] = meetingLink;
+                return linksByTaskId;
+              },
+              {}
+            )
+          );
+        } catch (error) {
+          console.warn('Failed to refresh online meeting links:', error);
+        }
+      }
+
+      void refreshMeetingLinks();
+
+      return () => {
+        isActive = false;
+      };
+    }, [])
+  );
 
   const homeInsights = useMemo(() => {
     const now = new Date();
@@ -393,6 +606,57 @@ export default function HomeScreen() {
     smartSituation: homeInsights.strongestSituation,
     packedDay: homeInsights.packedDay,
   });
+
+  const openTaskDetails = useCallback(
+    (taskId: string) => {
+      navigation.navigate('TaskDetails', { taskId });
+    },
+    [navigation]
+  );
+
+  const confirmJoinMeeting = useCallback((meetingLink?: OnlineMeetingLink) => {
+    if (!meetingLink?.url) {
+      return;
+    }
+
+    Alert.alert(
+      'Join online meeting?',
+      'FocusMate will open this link outside the app.',
+      [
+        {
+          text: 'Cancel',
+          style: 'cancel',
+        },
+        {
+          text: 'Join',
+          onPress: () => void openMeetingLink(meetingLink.url),
+        },
+      ]
+    );
+  }, []);
+
+  const confirmOpenMaps = useCallback((location?: string) => {
+    const trimmedLocation = location?.trim();
+
+    if (!trimmedLocation) {
+      return;
+    }
+
+    Alert.alert(
+      'Open in Google Maps?',
+      'FocusMate will open this location outside the app.',
+      [
+        {
+          text: 'Cancel',
+          style: 'cancel',
+        },
+        {
+          text: 'Open Maps',
+          onPress: () => void openLocationInMaps(trimmedLocation),
+        },
+      ]
+    );
+  }, []);
 
   return (
     <ScreenContainer topPadding={12} bottomPadding={132}>
@@ -620,7 +884,6 @@ export default function HomeScreen() {
               style={styles.viewAllPill}
             >
               <Text style={styles.viewAllText}>View All</Text>
-              <Ionicons name="chevron-forward" size={12} color={theme.colors.primaryDark} />
             </TouchableOpacity>
           ) : null}
         </View>
@@ -631,11 +894,10 @@ export default function HomeScreen() {
               <MiloTaskRow
                 key={item.task.id}
                 item={item}
-                onPress={() =>
-                  navigation.navigate('TaskDetails', {
-                    taskId: item.task.id,
-                  })
-                }
+                meetingLink={meetingLinksByTaskId[item.task.id]}
+                onPress={() => openTaskDetails(item.task.id)}
+                onJoinMeeting={confirmJoinMeeting}
+                onOpenMaps={confirmOpenMaps}
               />
             ))}
           </View>
@@ -934,17 +1196,19 @@ const styles = StyleSheet.create({
     fontWeight: '900',
   },
   actionCard: {
-    borderRadius: 26,
+    borderRadius: 28,
     backgroundColor: theme.colors.surface,
-    padding: 12,
-    marginBottom: 12,
+    padding: 14,
+    marginBottom: 14,
+    borderWidth: 1,
+    borderColor: '#DDEBE2',
     ...theme.shadowSoft,
   },
   actionHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 10,
+    marginBottom: 12,
   },
   actionHeaderTitle: {
     flex: 1,
@@ -953,18 +1217,20 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   headerSparkle: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
     backgroundColor: theme.colors.primarySoft,
+    borderWidth: 1,
+    borderColor: '#CBEFD8',
     alignItems: 'center',
     justifyContent: 'center',
-    marginRight: 8,
+    marginRight: 9,
   },
   actionSectionTitle: {
     color: theme.colors.text,
-    fontSize: 14,
-    lineHeight: 19,
+    fontSize: 15,
+    lineHeight: 20,
     fontWeight: '900',
   },
   actionHeaderCopy: {
@@ -972,74 +1238,96 @@ const styles = StyleSheet.create({
     minWidth: 0,
   },
   actionSubtitle: {
-    marginTop: 1,
+    marginTop: 2,
     color: theme.colors.muted,
-    fontSize: 10,
-    lineHeight: 13,
+    fontSize: 11,
+    lineHeight: 14,
     fontWeight: '700',
   },
   viewAllPill: {
+    minHeight: 32,
     borderRadius: theme.radius.pill,
     backgroundColor: theme.colors.primarySoft,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
+    borderWidth: 1,
+    borderColor: '#CBEFD8',
+    paddingHorizontal: 12,
+    paddingVertical: 7,
     marginLeft: 10,
     flexDirection: 'row',
     alignItems: 'center',
   },
   viewAllText: {
     color: theme.colors.primaryDark,
-    fontSize: 10,
+    fontSize: 11,
     fontWeight: '900',
-    marginRight: 2,
   },
   itemList: {
-    marginBottom: -8,
+    marginBottom: 0,
   },
   itemRow: {
-    minHeight: 82,
-    borderRadius: 20,
-    backgroundColor: theme.colors.backgroundSoft,
+    minHeight: 92,
+    borderRadius: 22,
+    backgroundColor: '#FBFEFC',
     marginBottom: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
+    padding: 8,
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    borderWidth: 1,
+    borderColor: '#DDEBE2',
+  },
+  itemPressArea: {
+    flex: 1,
+    minWidth: 0,
     flexDirection: 'row',
     alignItems: 'center',
-    borderWidth: 1,
-    borderColor: theme.colors.border,
+    paddingRight: 6,
   },
-  categoryTile: {
-    width: 60,
-    height: 60,
-    borderRadius: 20,
-    backgroundColor: theme.colors.primarySoft,
+  miloThumb: {
+    width: 48,
+    height: 48,
+    borderRadius: 19,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 9,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.82)',
+  },
+  miloThumbImage: {
+    width: 52,
+    height: 52,
+    resizeMode: 'contain',
+  },
+  categoryBadge: {
+    position: 'absolute',
+    right: -4,
+    bottom: -4,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: theme.colors.surface,
+    borderWidth: 1,
+    borderColor: '#DDEBE2',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  categoryIcon: {
-    width: 50,
-    height: 50,
+  categoryBadgeIcon: {
+    width: 17,
+    height: 17,
     resizeMode: 'contain',
-  },
-  miloSticker: {
-    width: 64,
-    height: 64,
-    resizeMode: 'contain',
-    marginLeft: -13,
-    marginRight: 3,
   },
   itemContent: {
     flex: 1,
     minWidth: 0,
+    justifyContent: 'center',
   },
   itemTitle: {
     color: theme.colors.text,
-    fontSize: 15,
-    lineHeight: 20,
+    fontSize: 14,
+    lineHeight: 18,
     fontWeight: '900',
   },
   itemMetaRow: {
-    marginTop: 6,
+    marginTop: 4,
     flexDirection: 'row',
     alignItems: 'center',
     flexWrap: 'wrap',
@@ -1047,16 +1335,21 @@ const styles = StyleSheet.create({
   typeChip: {
     borderRadius: theme.radius.pill,
     backgroundColor: theme.colors.background,
+    borderWidth: 1,
+    borderColor: 'rgba(221,235,226,0.72)',
     paddingHorizontal: 7,
     paddingVertical: 3,
   },
   typeChipText: {
     color: theme.colors.textSoft,
     fontSize: 9,
+    lineHeight: 12,
     fontWeight: '900',
   },
   itemUrgencyChip: {
     borderRadius: theme.radius.pill,
+    borderWidth: 1,
+    borderColor: 'rgba(221,235,226,0.72)',
     paddingHorizontal: 7,
     paddingVertical: 3,
     marginLeft: 4,
@@ -1064,24 +1357,90 @@ const styles = StyleSheet.create({
   itemUrgencyText: {
     flexShrink: 1,
     fontSize: 9,
+    lineHeight: 12,
     fontWeight: '900',
   },
-  itemDateContext: {
-    maxWidth: 74,
-    marginLeft: 6,
+  itemScheduleRow: {
+    marginTop: 5,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  itemScheduleText: {
+    flexShrink: 1,
+    marginLeft: 3,
     color: theme.colors.muted,
-    fontSize: 10,
+    fontSize: 11,
     lineHeight: 14,
-    fontWeight: '700',
+    fontWeight: '800',
   },
-  itemTime: {
-    maxWidth: 58,
-    marginLeft: 6,
-    marginRight: 2,
-    color: theme.colors.text,
-    fontSize: 10,
-    lineHeight: 14,
+  itemScheduleDot: {
+    width: 3,
+    height: 3,
+    borderRadius: 1.5,
+    backgroundColor: theme.colors.border,
+    marginHorizontal: 6,
+  },
+  availabilityRow: {
+    marginTop: 5,
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'nowrap',
+  },
+  availabilityChip: {
+    flexShrink: 1,
+    minHeight: 22,
+    borderRadius: theme.radius.pill,
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+    marginRight: 5,
+    borderWidth: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  availabilityChipLocation: {
+    backgroundColor: theme.colors.primarySoft,
+    borderColor: '#CBEFD8',
+  },
+  availabilityChipLink: {
+    backgroundColor: theme.colors.purpleSoft,
+    borderColor: '#DED6FF',
+  },
+  availabilityChipMuted: {
+    backgroundColor: '#F9FBFA',
+    borderColor: '#E2EEE7',
+  },
+  availabilityChipText: {
+    flexShrink: 1,
+    marginLeft: 3,
+    fontSize: 9,
+    lineHeight: 12,
     fontWeight: '900',
-    textAlign: 'right',
+  },
+  itemActionColumn: {
+    width: 56,
+    justifyContent: 'center',
+    alignItems: 'stretch',
+  },
+  quickActionButton: {
+    minHeight: 34,
+    borderRadius: 15,
+    borderWidth: 1,
+    paddingHorizontal: 5,
+    paddingVertical: 5,
+    marginVertical: 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  quickActionButtonCompact: {
+    minHeight: 31,
+    borderRadius: 14,
+    paddingVertical: 3,
+  },
+  quickActionText: {
+    marginTop: 2,
+    fontSize: 9,
+    lineHeight: 12,
+    fontWeight: '900',
+    textAlign: 'center',
   },
 });

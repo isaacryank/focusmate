@@ -1,5 +1,13 @@
-import React, { useMemo, useState } from 'react';
-import { Alert, Linking, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import React, { useEffect, useMemo, useState } from 'react';
+import {
+  Alert,
+  Modal,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from 'react-native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 
@@ -9,6 +17,19 @@ import { theme } from '../theme';
 import { useTasks } from '../lib/TaskContext';
 import { getMiloReaction } from '../lib/miloReaction';
 import { openLocationInMaps } from '../lib/mapUtils';
+import {
+  deleteOnlineMeetingLinkForTask,
+  getOnlineMeetingLinkForTask,
+  saveOnlineMeetingLink,
+} from '../lib/meetingLinkStorage';
+import type { OnlineMeetingLink } from '../lib/meetingLinkStorage';
+import {
+  buildMeetingDisplayLabel,
+  detectMeetingProvider,
+  isLikelyMeetingUrl,
+  normalizeMeetingUrl,
+  openMeetingLink,
+} from '../lib/meetingLinkUtils';
 import {
   calculateMiloUrgency,
   generateMiloSmartNudges,
@@ -30,12 +51,6 @@ type DisplayPlanItem = {
 };
 
 type DetailTab = 'plan' | 'nudges' | 'timeline';
-
-function extractUrl(...values: Array<string | undefined>) {
-  const text = values.filter(Boolean).join(' ');
-  const match = text.match(/https?:\/\/[^\s]+/i);
-  return match?.[0];
-}
 
 function formatReminder(reminder?: string, manualReminderMinutes?: number) {
   if (!reminder || reminder === 'none') return 'None';
@@ -301,8 +316,51 @@ export default function TaskDetailsScreen({ navigation, route }: Props) {
     title: string;
     message: string;
   } | null>(null);
+  const [onlineMeetingLink, setOnlineMeetingLink] =
+    useState<OnlineMeetingLink | null>(null);
+  const [isMeetingModalVisible, setIsMeetingModalVisible] = useState(false);
+  const [meetingLinkInput, setMeetingLinkInput] = useState('');
+  const [meetingLinkError, setMeetingLinkError] = useState('');
+  const [isSavingMeetingLink, setIsSavingMeetingLink] = useState(false);
 
   const task = tasks.find((item) => item.id === route.params.taskId);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    if (!task?.id) {
+      setOnlineMeetingLink(null);
+      return () => {
+        isMounted = false;
+      };
+    }
+
+    getOnlineMeetingLinkForTask(task.id)
+      .then((savedMeetingLink) => {
+        if (isMounted) {
+          setOnlineMeetingLink(savedMeetingLink);
+        }
+      })
+      .catch((error) => {
+        console.warn('Failed to load online meeting link:', error);
+
+        if (isMounted) {
+          setOnlineMeetingLink(null);
+        }
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [task?.id]);
+
+  const detectedMeetingProvider = useMemo(() => {
+    if (!meetingLinkInput.trim()) {
+      return null;
+    }
+
+    return detectMeetingProvider(meetingLinkInput);
+  }, [meetingLinkInput]);
 
   const miloData = useMemo(() => {
     if (!task) {
@@ -354,7 +412,10 @@ export default function TaskDetailsScreen({ navigation, route }: Props) {
     planItems.length > 0 ? Math.round((completedPlanItems / planItems.length) * 100) : 0;
   const miloUrgency = task.miloUrgency || calculateMiloUrgency(task);
   const smartNudges = task.miloSmartNudges || generateMiloSmartNudges(task);
-  const joinUrl = extractUrl(task.description, task.location);
+  const joinUrl = onlineMeetingLink?.url;
+  const onlineMeetingLabel =
+    onlineMeetingLink?.label ||
+    (onlineMeetingLink ? buildMeetingDisplayLabel(onlineMeetingLink.url) : '');
   const taskLocation = task.location?.trim() || '';
 
   const heroMessage =
@@ -405,6 +466,7 @@ export default function TaskDetailsScreen({ navigation, route }: Props) {
           text: 'Delete',
           style: 'destructive',
           onPress: async () => {
+            await deleteOnlineMeetingLinkForTask(task.id).catch(() => undefined);
             await deleteTask(task.id);
             navigation.goBack();
           },
@@ -527,9 +589,125 @@ export default function TaskDetailsScreen({ navigation, route }: Props) {
     });
   };
 
+  const closeMeetingModal = () => {
+    if (isSavingMeetingLink) {
+      return;
+    }
+
+    setIsMeetingModalVisible(false);
+    setMeetingLinkError('');
+  };
+
+  const openMeetingModal = () => {
+    setMeetingLinkInput(onlineMeetingLink?.url || '');
+    setMeetingLinkError('');
+    setIsMeetingModalVisible(true);
+  };
+
+  const confirmOpenMeetingLink = (url?: string) => {
+    const normalizedUrl = normalizeMeetingUrl(url || '');
+
+    if (!isLikelyMeetingUrl(normalizedUrl)) {
+      Alert.alert(
+        'Meeting link unavailable',
+        'This online meeting link does not look valid yet.'
+      );
+      return;
+    }
+
+    Alert.alert(
+      'Join online meeting?',
+      'FocusMate will open this link outside the app.',
+      [
+        {
+          text: 'Cancel',
+          style: 'cancel',
+        },
+        {
+          text: 'Join',
+          onPress: () => void openMeetingLink(normalizedUrl),
+        },
+      ]
+    );
+  };
+
+  const handleSaveMeetingLink = async () => {
+    const normalizedUrl = normalizeMeetingUrl(meetingLinkInput);
+
+    if (!normalizedUrl) {
+      setMeetingLinkError('Paste a meeting link first.');
+      return;
+    }
+
+    if (!isLikelyMeetingUrl(normalizedUrl)) {
+      setMeetingLinkError('This does not look like a valid meeting link.');
+      return;
+    }
+
+    setIsSavingMeetingLink(true);
+    setMeetingLinkError('');
+
+    try {
+      const savedMeetingLink = await saveOnlineMeetingLink({
+        taskId: task.id,
+        taskTitle: task.title,
+        url: normalizedUrl,
+      });
+
+      setOnlineMeetingLink(savedMeetingLink);
+      setIsMeetingModalVisible(false);
+      setNotice({
+        type: 'success',
+        title: 'Online meeting saved',
+        message: `${savedMeetingLink.provider} is linked to this planner item.`,
+      });
+    } catch (error) {
+      console.warn('Failed to save online meeting link:', error);
+      setMeetingLinkError('FocusMate could not save this link. Please try again.');
+    } finally {
+      setIsSavingMeetingLink(false);
+    }
+  };
+
+  const handleRemoveMeetingLink = () => {
+    Alert.alert(
+      'Remove online meeting link?',
+      'This keeps the planner item and only removes the saved meeting link.',
+      [
+        {
+          text: 'Cancel',
+          style: 'cancel',
+        },
+        {
+          text: 'Remove',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await deleteOnlineMeetingLinkForTask(task.id);
+              setOnlineMeetingLink(null);
+              setMeetingLinkInput('');
+              setNotice({
+                type: 'info',
+                title: 'Online meeting removed',
+                message: 'This planner item no longer has a meeting link.',
+              });
+            } catch (error) {
+              console.warn('Failed to remove online meeting link:', error);
+              setNotice({
+                type: 'error',
+                title: 'Could not remove link',
+                message: 'Please try again in a moment.',
+              });
+            }
+          },
+        },
+      ]
+    );
+  };
+
   const handlePrimaryAction = () => {
     if (task.plannerType === 'meeting' && joinUrl) {
-      Linking.openURL(joinUrl);
+      confirmOpenMeetingLink(joinUrl);
       return;
     }
 
@@ -652,6 +830,86 @@ export default function TaskDetailsScreen({ navigation, route }: Props) {
           </TouchableOpacity>
         </View>
       ) : null}
+
+      <View style={styles.onlineMeetingCard}>
+        <View style={styles.onlineMeetingHeader}>
+          <View style={styles.onlineMeetingIconWrap}>
+            <MaterialCommunityIcons
+              name="video-outline"
+              size={18}
+              color={theme.colors.purple}
+            />
+          </View>
+          <View style={styles.onlineMeetingCopy}>
+            <Text numberOfLines={1} style={styles.onlineMeetingLabel}>
+              Online Meeting
+            </Text>
+            {onlineMeetingLink ? (
+              <Text numberOfLines={1} style={styles.onlineMeetingProvider}>
+                {onlineMeetingLink.provider}
+              </Text>
+            ) : (
+              <Text style={styles.onlineMeetingEmptyText}>
+                No online meeting link added yet.
+              </Text>
+            )}
+          </View>
+        </View>
+
+        {onlineMeetingLink ? (
+          <>
+            <View style={styles.onlineMeetingLinkBox}>
+              <Ionicons name="link-outline" size={14} color={theme.colors.purple} />
+              <Text numberOfLines={1} style={styles.onlineMeetingLinkText}>
+                {onlineMeetingLabel}
+              </Text>
+            </View>
+
+            <View style={styles.onlineMeetingActionRow}>
+              <TouchableOpacity
+                activeOpacity={0.84}
+                style={styles.meetingPrimaryButton}
+                onPress={() => confirmOpenMeetingLink(onlineMeetingLink.url)}
+                accessibilityRole="button"
+                accessibilityLabel="Join online meeting"
+              >
+                <Text style={styles.meetingPrimaryButtonText}>Join Meeting</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                activeOpacity={0.84}
+                style={styles.meetingSecondaryButton}
+                onPress={openMeetingModal}
+                accessibilityRole="button"
+                accessibilityLabel="Edit online meeting link"
+              >
+                <Text style={styles.meetingSecondaryButtonText}>Edit</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                activeOpacity={0.84}
+                style={styles.meetingDangerButton}
+                onPress={handleRemoveMeetingLink}
+                accessibilityRole="button"
+                accessibilityLabel="Remove online meeting link"
+              >
+                <Text style={styles.meetingDangerButtonText}>Remove</Text>
+              </TouchableOpacity>
+            </View>
+          </>
+        ) : (
+          <TouchableOpacity
+            activeOpacity={0.84}
+            style={styles.addMeetingButton}
+            onPress={openMeetingModal}
+            accessibilityRole="button"
+            accessibilityLabel="Add online meeting link"
+          >
+            <Ionicons name="add" size={16} color={theme.colors.purple} />
+            <Text style={styles.addMeetingButtonText}>Add Link</Text>
+          </TouchableOpacity>
+        )}
+      </View>
 
       {task.conflictAccepted ? (
         <View style={styles.conflictFocusCard}>
@@ -846,6 +1104,93 @@ export default function TaskDetailsScreen({ navigation, route }: Props) {
       >
         <Text style={styles.deleteLinkText}>Delete planner item</Text>
       </TouchableOpacity>
+
+      <Modal
+        visible={isMeetingModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={closeMeetingModal}
+      >
+        <View style={styles.meetingModalOverlay}>
+          <View style={styles.meetingModalCard}>
+            <View style={styles.meetingModalHeader}>
+              <Text style={styles.meetingModalTitle}>Set Online Meeting</Text>
+              <TouchableOpacity
+                activeOpacity={0.82}
+                style={styles.meetingModalClose}
+                onPress={closeMeetingModal}
+                accessibilityRole="button"
+                accessibilityLabel="Close online meeting editor"
+              >
+                <Ionicons name="close" size={18} color={theme.colors.text} />
+              </TouchableOpacity>
+            </View>
+
+            <Text style={styles.meetingModalHelper}>
+              Paste a Google Meet, Teams, Zoom, or other meeting link.
+            </Text>
+
+            <TextInput
+              value={meetingLinkInput}
+              onChangeText={(value) => {
+                setMeetingLinkInput(value);
+                setMeetingLinkError('');
+              }}
+              placeholder="https://meet.google.com/abc-defg-hij"
+              placeholderTextColor={theme.colors.muted}
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="url"
+              style={[
+                styles.meetingInput,
+                meetingLinkError ? styles.meetingInputInvalid : null,
+              ]}
+            />
+
+            {meetingLinkInput.trim() ? (
+              <View style={styles.detectedProviderPill}>
+                <Ionicons name="sparkles-outline" size={13} color={theme.colors.purple} />
+                <Text style={styles.detectedProviderText}>
+                  Detected: {detectedMeetingProvider || 'Custom'}
+                </Text>
+              </View>
+            ) : null}
+
+            {meetingLinkError ? (
+              <Text style={styles.meetingErrorText}>{meetingLinkError}</Text>
+            ) : null}
+
+            <View style={styles.meetingModalActions}>
+              <TouchableOpacity
+                activeOpacity={0.84}
+                style={styles.meetingModalCancel}
+                onPress={closeMeetingModal}
+                disabled={isSavingMeetingLink}
+                accessibilityRole="button"
+                accessibilityLabel="Cancel online meeting editor"
+              >
+                <Text style={styles.meetingModalCancelText}>Cancel</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                activeOpacity={0.84}
+                style={[
+                  styles.meetingModalSave,
+                  isSavingMeetingLink && styles.meetingModalSaveDisabled,
+                ]}
+                onPress={handleSaveMeetingLink}
+                disabled={isSavingMeetingLink}
+                accessibilityRole="button"
+                accessibilityLabel="Save online meeting link"
+              >
+                <Text style={styles.meetingModalSaveText}>
+                  {isSavingMeetingLink ? 'Saving...' : 'Save Link'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </ScreenContainer>
   );
 }
@@ -1045,6 +1390,138 @@ const styles = StyleSheet.create({
     color: theme.colors.primaryDark,
     fontSize: 11,
     fontWeight: '900',
+  },
+  onlineMeetingCard: {
+    borderRadius: 18,
+    backgroundColor: theme.colors.surface,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    padding: 11,
+    marginBottom: 10,
+    ...theme.shadowSoft,
+  },
+  onlineMeetingHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  onlineMeetingIconWrap: {
+    width: 38,
+    height: 38,
+    borderRadius: 15,
+    backgroundColor: theme.colors.purpleSoft,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 10,
+  },
+  onlineMeetingCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  onlineMeetingLabel: {
+    color: theme.colors.purple,
+    fontSize: 10,
+    fontWeight: '900',
+  },
+  onlineMeetingProvider: {
+    marginTop: 3,
+    color: theme.colors.text,
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  onlineMeetingEmptyText: {
+    marginTop: 3,
+    color: theme.colors.textSoft,
+    fontSize: 12,
+    fontWeight: '800',
+    lineHeight: 17,
+  },
+  onlineMeetingLinkBox: {
+    minHeight: 34,
+    borderRadius: 16,
+    backgroundColor: theme.colors.backgroundSoft,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 10,
+    paddingHorizontal: 10,
+  },
+  onlineMeetingLinkText: {
+    flex: 1,
+    color: theme.colors.textSoft,
+    fontSize: 12,
+    fontWeight: '800',
+    marginLeft: 5,
+  },
+  onlineMeetingActionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 10,
+  },
+  meetingPrimaryButton: {
+    flex: 1,
+    minHeight: 36,
+    borderRadius: 17,
+    backgroundColor: theme.colors.purple,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 10,
+    marginRight: 7,
+  },
+  meetingPrimaryButtonText: {
+    color: '#FFFFFF',
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  meetingSecondaryButton: {
+    minHeight: 36,
+    borderRadius: 17,
+    backgroundColor: theme.colors.purpleSoft,
+    borderWidth: 1,
+    borderColor: '#DDD4FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+    marginRight: 7,
+  },
+  meetingSecondaryButtonText: {
+    color: theme.colors.purple,
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  meetingDangerButton: {
+    minHeight: 36,
+    borderRadius: 17,
+    backgroundColor: theme.colors.dangerSoft,
+    borderWidth: 1,
+    borderColor: '#F8CACA',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+  },
+  meetingDangerButtonText: {
+    color: theme.colors.danger,
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  addMeetingButton: {
+    alignSelf: 'flex-start',
+    minHeight: 35,
+    borderRadius: 17,
+    backgroundColor: theme.colors.purpleSoft,
+    borderWidth: 1,
+    borderColor: '#DDD4FF',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+    marginTop: 10,
+  },
+  addMeetingButtonText: {
+    color: theme.colors.purple,
+    fontSize: 11,
+    fontWeight: '900',
+    marginLeft: 4,
   },
   tabControl: {
     flexDirection: 'row',
@@ -1470,6 +1947,125 @@ const styles = StyleSheet.create({
   deleteLinkText: {
     color: theme.colors.muted,
     fontSize: 12,
+    fontWeight: '900',
+  },
+  meetingModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(34, 40, 49, 0.28)',
+    justifyContent: 'flex-end',
+    padding: 14,
+  },
+  meetingModalCard: {
+    backgroundColor: theme.colors.surface,
+    borderRadius: 24,
+    padding: 15,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    ...theme.shadow,
+  },
+  meetingModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+  },
+  meetingModalTitle: {
+    color: theme.colors.text,
+    fontSize: 16,
+    fontWeight: '900',
+  },
+  meetingModalClose: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: theme.colors.backgroundSoft,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  meetingModalHelper: {
+    color: theme.colors.textSoft,
+    fontSize: 12,
+    fontWeight: '700',
+    lineHeight: 18,
+    marginBottom: 10,
+  },
+  meetingInput: {
+    minHeight: 48,
+    borderRadius: 16,
+    backgroundColor: theme.colors.backgroundSoft,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    color: theme.colors.text,
+    fontSize: 14,
+    fontWeight: '800',
+    paddingHorizontal: 13,
+  },
+  meetingInputInvalid: {
+    backgroundColor: '#FFFAFA',
+    borderColor: '#F8CACA',
+  },
+  detectedProviderPill: {
+    alignSelf: 'flex-start',
+    minHeight: 30,
+    borderRadius: 15,
+    backgroundColor: theme.colors.purpleSoft,
+    borderWidth: 1,
+    borderColor: '#DDD4FF',
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    marginTop: 10,
+  },
+  detectedProviderText: {
+    color: theme.colors.purple,
+    fontSize: 11,
+    fontWeight: '900',
+    marginLeft: 5,
+  },
+  meetingErrorText: {
+    color: theme.colors.danger,
+    fontSize: 12,
+    fontWeight: '800',
+    lineHeight: 17,
+    marginTop: 9,
+  },
+  meetingModalActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 13,
+  },
+  meetingModalCancel: {
+    flex: 1,
+    minHeight: 44,
+    borderRadius: 17,
+    backgroundColor: theme.colors.surface,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 9,
+  },
+  meetingModalCancelText: {
+    color: theme.colors.text,
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  meetingModalSave: {
+    flex: 1,
+    minHeight: 44,
+    borderRadius: 17,
+    backgroundColor: theme.colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  meetingModalSaveDisabled: {
+    opacity: 0.65,
+  },
+  meetingModalSaveText: {
+    color: '#FFFFFF',
+    fontSize: 13,
     fontWeight: '900',
   },
 });

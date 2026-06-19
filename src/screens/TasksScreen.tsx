@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -7,10 +7,12 @@ import {
   FlatList,
   Alert,
   Image,
+  ImageSourcePropType,
+  Pressable,
   ScrollView,
   TextInput,
 } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 
@@ -19,10 +21,19 @@ import { useTasks } from '../lib/TaskContext';
 import { PlannerType, Task } from '../types/task';
 import { getTaskUrgency } from '../lib/taskUrgency';
 import { openLocationInMaps } from '../lib/mapUtils';
+import {
+  deleteOnlineMeetingLinkForTask,
+  loadOnlineMeetingLinks,
+} from '../lib/meetingLinkStorage';
+import type { OnlineMeetingLink } from '../lib/meetingLinkStorage';
+import { openMeetingLink } from '../lib/meetingLinkUtils';
 
 const miloFocusedImage = require('../../assets/mascot/milo_focused.png');
 const miloWavingImage = require('../../assets/mascot/milo_waving.png');
 const miloWorriedImage = require('../../assets/mascot/milo_worried.png');
+const miloCelebratingImage = require('../../assets/mascot/milo_celebrating.png');
+
+type IconName = React.ComponentProps<typeof Ionicons>['name'];
 
 type FilterType =
   | 'all'
@@ -78,12 +89,73 @@ function getTypeConfig(type: PlannerType) {
   };
 }
 
+function buildMeetingLinksByTaskId(meetingLinks: OnlineMeetingLink[]) {
+  return meetingLinks.reduce<Record<string, OnlineMeetingLink>>(
+    (lookup, meetingLink) => ({
+      ...lookup,
+      [meetingLink.taskId]: meetingLink,
+    }),
+    {}
+  );
+}
+
+const filterOptions: { label: string; value: FilterType; iconName: IconName }[] = [
+  { label: 'All', value: 'all', iconName: 'sparkles' },
+  { label: 'Tasks', value: 'task', iconName: 'checkbox-outline' },
+  { label: 'Meetings', value: 'meeting', iconName: 'people-outline' },
+  { label: 'Dates', value: 'date', iconName: 'heart-outline' },
+  { label: 'High Focus', value: 'high', iconName: 'flame-outline' },
+];
+
+function getTaskMiloImage(task: Task): ImageSourcePropType {
+  if (task.status === 'completed') return miloCelebratingImage;
+  if (task.priority === 'high') return miloWorriedImage;
+  if (task.plannerType === 'meeting') return miloFocusedImage;
+  if (task.plannerType === 'date') return miloWavingImage;
+
+  return miloFocusedImage;
+}
+
+function getPriorityTone(priority: Task['priority'], fallbackColor: string) {
+  if (priority === 'high') {
+    return {
+      color: '#9A6B00',
+      backgroundColor: theme.colors.yellowSoft,
+      borderColor: '#F5D990',
+    };
+  }
+
+  if (priority === 'medium') {
+    return {
+      color: fallbackColor,
+      backgroundColor: `${fallbackColor}18`,
+      borderColor: `${fallbackColor}36`,
+    };
+  }
+
+  return {
+    color: theme.colors.blue,
+    backgroundColor: theme.colors.blueSoft,
+    borderColor: '#CFE5FB',
+  };
+}
+
+function getMeetingChipLabel(meetingLink: OnlineMeetingLink) {
+  if (meetingLink.provider === 'Custom') {
+    return meetingLink.label ? `Online (${meetingLink.label})` : 'Online Meeting';
+  }
+
+  return `Online (${meetingLink.provider})`;
+}
+
 function FilterChip({
   label,
+  iconName,
   active,
   onPress,
 }: {
   label: string;
+  iconName: IconName;
   active: boolean;
   onPress: () => void;
 }) {
@@ -93,7 +165,136 @@ function FilterChip({
       onPress={onPress}
       style={[styles.filterChip, active && styles.filterChipActive]}
     >
+      <Ionicons
+        name={iconName}
+        size={13}
+        color={active ? theme.colors.white : theme.colors.primaryDark}
+      />
       <Text style={[styles.filterText, active && styles.filterTextActive]}>
+        {label}
+      </Text>
+    </TouchableOpacity>
+  );
+}
+
+function StatSummaryCard({
+  label,
+  value,
+  iconName,
+  color,
+  backgroundColor,
+}: {
+  label: string;
+  value: number;
+  iconName: IconName;
+  color: string;
+  backgroundColor: string;
+}) {
+  return (
+    <View style={[styles.summaryCard, { backgroundColor }]}>
+      <View style={[styles.summaryIconWrap, { backgroundColor: `${color}18` }]}>
+        <Ionicons name={iconName} size={16} color={color} />
+      </View>
+      <Text style={[styles.summaryNumber, { color }]}>{value}</Text>
+      <Text numberOfLines={1} style={styles.summaryLabel}>
+        {label}
+      </Text>
+    </View>
+  );
+}
+
+function TaskMetaChip({
+  iconName,
+  label,
+  color,
+  backgroundColor,
+  borderColor,
+}: {
+  iconName?: IconName;
+  label: string;
+  color: string;
+  backgroundColor: string;
+  borderColor: string;
+}) {
+  return (
+    <View style={[styles.metaChip, { backgroundColor, borderColor }]}>
+      {iconName ? <Ionicons name={iconName} size={12} color={color} /> : null}
+      <Text
+        numberOfLines={1}
+        style={[styles.metaChipText, !iconName && styles.metaChipTextSolo, { color }]}
+      >
+        {label}
+      </Text>
+    </View>
+  );
+}
+
+function TaskInfoPill({
+  iconName,
+  label,
+  tone,
+}: {
+  iconName: IconName;
+  label: string;
+  tone: 'location' | 'meeting';
+}) {
+  const color = tone === 'location' ? theme.colors.primaryDark : theme.colors.purple;
+  const containerStyle =
+    tone === 'location' ? styles.locationInfoPill : styles.meetingInfoPill;
+
+  return (
+    <View style={[styles.infoPill, containerStyle]}>
+      <Ionicons name={iconName} size={14} color={color} />
+      <Text numberOfLines={1} style={[styles.infoPillText, { color }]}>
+        {label}
+      </Text>
+    </View>
+  );
+}
+
+function TaskActionButton({
+  label,
+  iconName,
+  tone,
+  onPress,
+}: {
+  label: string;
+  iconName: IconName;
+  tone: 'maps' | 'join';
+  onPress: () => void;
+}) {
+  const colors =
+    tone === 'join'
+      ? {
+          backgroundColor: theme.colors.primaryDark,
+          borderColor: theme.colors.primaryDark,
+          color: theme.colors.white,
+        }
+      : {
+          backgroundColor: theme.colors.surface,
+          borderColor: '#CFEFDA',
+          color: theme.colors.primaryDark,
+        };
+
+  return (
+    <TouchableOpacity
+      activeOpacity={0.82}
+      style={[
+        styles.taskActionButton,
+        {
+          backgroundColor: colors.backgroundColor,
+          borderColor: colors.borderColor,
+        },
+      ]}
+      onPress={(event) => {
+        event.stopPropagation();
+        onPress();
+      }}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+    >
+      <Ionicons name={iconName} size={13} color={colors.color} />
+      <Text numberOfLines={1} style={[styles.taskActionText, { color: colors.color }]}>
         {label}
       </Text>
     </TouchableOpacity>
@@ -102,21 +303,26 @@ function FilterChip({
 
 function TaskCard({
   task,
+  meetingLink,
   onToggle,
   onDelete,
   onOpen,
   onOpenMaps,
+  onJoinMeeting,
 }: {
   task: Task;
+  meetingLink?: OnlineMeetingLink;
   onToggle: () => void;
   onDelete: () => void;
   onOpen: () => void;
   onOpenMaps: () => void;
+  onJoinMeeting: () => void;
 }) {
   const isCompleted = task.status === 'completed';
   const typeConfig = getTypeConfig(task.plannerType);
   const urgency = getTaskUrgency(task);
   const urgencyColor = theme.colors[urgency.colorKey];
+  const priorityTone = getPriorityTone(task.priority, typeConfig.color);
 
   const accentColor =
     urgency.level === 'overdue' || urgency.level === 'urgent'
@@ -132,23 +338,55 @@ function TaskCard({
   const checklistCount = task.subtasks?.length || 0;
   const completedChecklistCount =
     task.subtasks?.filter((subtask) => subtask.completed).length || 0;
+  const description = task.description?.trim();
+  const location = task.location?.trim();
 
   return (
-    <TouchableOpacity activeOpacity={0.9} style={styles.taskCard} onPress={onOpen}>
-      <View style={[styles.accentBar, { backgroundColor: typeConfig.color }]} />
+    <Pressable
+      style={({ pressed }) => [
+        styles.taskCard,
+        isCompleted && styles.taskCardCompleted,
+        pressed && styles.taskCardPressed,
+      ]}
+      onPress={onOpen}
+      accessibilityRole="button"
+      accessibilityLabel={`Open details for ${task.title}`}
+    >
+      <View style={[styles.accentBar, { backgroundColor: accentColor }]} />
 
-      <TouchableOpacity
-        activeOpacity={0.85}
-        onPress={onToggle}
-        style={styles.checkboxArea}
-      >
-        <View style={[styles.checkbox, isCompleted && styles.checkboxCompleted]}>
-          {isCompleted && <Ionicons name="checkmark" size={18} color="#FFFFFF" />}
+      <View style={styles.taskTopRow}>
+        <TouchableOpacity
+          activeOpacity={0.85}
+          onPress={(event) => {
+            event.stopPropagation();
+            onToggle();
+          }}
+          style={styles.checkboxArea}
+          accessibilityRole="checkbox"
+          accessibilityState={{ checked: isCompleted }}
+          accessibilityLabel={`Mark ${task.title} as ${
+            isCompleted ? 'pending' : 'completed'
+          }`}
+        >
+          <View style={[styles.checkbox, isCompleted && styles.checkboxCompleted]}>
+            {isCompleted && <Ionicons name="checkmark" size={17} color="#FFFFFF" />}
+          </View>
+        </TouchableOpacity>
+
+        <View
+          style={[
+            styles.taskMiloBubble,
+            { backgroundColor: typeConfig.background },
+          ]}
+        >
+          <Image
+            source={getTaskMiloImage(task)}
+            style={styles.taskMiloImage}
+            resizeMode="contain"
+          />
         </View>
-      </TouchableOpacity>
 
-      <View style={styles.taskContent}>
-        <View style={styles.titleRow}>
+        <View style={styles.taskContent}>
           <Text
             numberOfLines={1}
             style={[styles.taskTitle, isCompleted && styles.completedTitle]}
@@ -156,94 +394,129 @@ function TaskCard({
             {task.title}
           </Text>
 
-          <View style={[styles.typeBadge, { backgroundColor: typeConfig.background }]}>
-            <Ionicons name={typeConfig.icon} size={11} color={typeConfig.color} />
-            <Text style={[styles.typeBadgeText, { color: typeConfig.color }]}>
-              {typeConfig.label}
+          {description ? (
+            <Text numberOfLines={1} style={styles.taskDescription}>
+              {description}
             </Text>
-          </View>
+          ) : null}
         </View>
 
-        <Text numberOfLines={2} style={styles.taskDescription}>
-          {task.description || 'No description added'}
-        </Text>
-
-        <View style={styles.metaRow}>
-          <View style={[styles.priorityPill, { backgroundColor: `${accentColor}22` }]}>
-            <Text style={[styles.priorityText, { color: accentColor }]}>
-              {task.priority}
-            </Text>
-          </View>
-
+        <View style={styles.cardRightRail}>
           <View
             style={[
-              styles.statusPill,
+              styles.typeBadge,
               {
-                backgroundColor: `${urgencyColor}18`,
-                borderColor: `${urgencyColor}45`,
+                backgroundColor: typeConfig.background,
+                borderColor: `${typeConfig.color}30`,
               },
             ]}
           >
-            <Text style={[styles.statusPillText, { color: urgencyColor }]}>
-              {urgency.label}
+            <Ionicons name={typeConfig.icon} size={11} color={typeConfig.color} />
+            <Text
+              numberOfLines={1}
+              style={[styles.typeBadgeText, { color: typeConfig.color }]}
+            >
+              {typeConfig.label}
             </Text>
           </View>
 
-          <View style={styles.datePill}>
-            <Ionicons name="calendar-outline" size={13} color={theme.colors.muted} />
-            <Text style={styles.dateText}>{task.dueDate || 'No date'}</Text>
-          </View>
-
-          {task.dueTime ? (
-            <View style={styles.datePill}>
-              <Ionicons name="time-outline" size={13} color={theme.colors.muted} />
-              <Text style={styles.dateText}>{task.dueTime}</Text>
-            </View>
-          ) : null}
-
-          {checklistCount > 0 ? (
-            <View style={styles.datePill}>
-              <Ionicons name="list-outline" size={13} color={theme.colors.muted} />
-              <Text style={styles.dateText}>
-                {completedChecklistCount}/{checklistCount}
-              </Text>
-            </View>
-          ) : null}
-
-          {task.location ? (
-            <View style={styles.locationActionRow}>
-              <View style={styles.locationPill}>
-                <Ionicons
-                  name="location-outline"
-                  size={13}
-                  color={theme.colors.primaryDark}
-                />
-                <Text numberOfLines={1} style={styles.locationText}>
-                  {task.location}
-                </Text>
-              </View>
-              <TouchableOpacity
-                activeOpacity={0.82}
-                style={styles.mapsButton}
-                onPress={onOpenMaps}
-                accessibilityRole="button"
-                accessibilityLabel={`Open ${task.location} in Maps`}
-              >
-                <Text style={styles.mapsButtonText}>Open Maps</Text>
-              </TouchableOpacity>
-            </View>
-          ) : null}
+          <TouchableOpacity
+            activeOpacity={0.75}
+            style={styles.deleteButton}
+            onPress={(event) => {
+              event.stopPropagation();
+              onDelete();
+            }}
+            accessibilityRole="button"
+            accessibilityLabel={`Delete ${task.title}`}
+          >
+            <Ionicons name="trash-outline" size={18} color={theme.colors.danger} />
+          </TouchableOpacity>
         </View>
       </View>
 
-      <TouchableOpacity
-        activeOpacity={0.75}
-        style={styles.deleteButton}
-        onPress={onDelete}
-      >
-        <Ionicons name="trash-outline" size={20} color={theme.colors.danger} />
-      </TouchableOpacity>
-    </TouchableOpacity>
+      <View style={styles.metaRow}>
+        <TaskMetaChip
+          label={`${task.priority.charAt(0).toUpperCase()}${task.priority.slice(1)}`}
+          color={priorityTone.color}
+          backgroundColor={priorityTone.backgroundColor}
+          borderColor={priorityTone.borderColor}
+        />
+        <TaskMetaChip
+          label={urgency.label}
+          color={urgencyColor}
+          backgroundColor={`${urgencyColor}14`}
+          borderColor={`${urgencyColor}35`}
+        />
+        <TaskMetaChip
+          iconName="calendar-outline"
+          label={task.dueDate || 'Any day'}
+          color={theme.colors.textSoft}
+          backgroundColor="#F9FBFA"
+          borderColor="#E2EEE7"
+        />
+        {task.dueTime ? (
+          <TaskMetaChip
+            iconName="time-outline"
+            label={task.dueTime}
+            color={theme.colors.textSoft}
+            backgroundColor="#F9FBFA"
+            borderColor="#E2EEE7"
+          />
+        ) : null}
+        {checklistCount > 0 ? (
+          <TaskMetaChip
+            iconName="list-outline"
+            label={`${completedChecklistCount}/${checklistCount}`}
+            color={theme.colors.textSoft}
+            backgroundColor="#F9FBFA"
+            borderColor="#E2EEE7"
+          />
+        ) : null}
+      </View>
+
+      {location || meetingLink ? (
+        <View style={styles.utilityRow}>
+          <View style={styles.utilityPillRow}>
+            {location ? (
+              <TaskInfoPill
+                iconName="location-outline"
+                label={location}
+                tone="location"
+              />
+            ) : null}
+
+            {meetingLink ? (
+              <TaskInfoPill
+                iconName="videocam-outline"
+                label={getMeetingChipLabel(meetingLink)}
+                tone="meeting"
+              />
+            ) : null}
+          </View>
+
+          <View style={styles.utilityActionRow}>
+            {location ? (
+              <TaskActionButton
+                label="Open Maps"
+                iconName="navigate-outline"
+                tone="maps"
+                onPress={onOpenMaps}
+              />
+            ) : null}
+
+            {meetingLink ? (
+              <TaskActionButton
+                label="Join"
+                iconName="videocam"
+                tone="join"
+                onPress={onJoinMeeting}
+              />
+            ) : null}
+          </View>
+        </View>
+      ) : null}
+    </Pressable>
   );
 }
 
@@ -253,8 +526,35 @@ export default function TasksScreen() {
 
   const [filter, setFilter] = useState<FilterType>('all');
   const [searchText, setSearchText] = useState('');
+  const [meetingLinksByTaskId, setMeetingLinksByTaskId] = useState<
+    Record<string, OnlineMeetingLink>
+  >({});
 
   const todayDate = getTodayDate();
+
+  useFocusEffect(
+    useCallback(() => {
+      let isActive = true;
+
+      loadOnlineMeetingLinks()
+        .then((meetingLinks) => {
+          if (isActive) {
+            setMeetingLinksByTaskId(buildMeetingLinksByTaskId(meetingLinks));
+          }
+        })
+        .catch((error) => {
+          console.warn('Failed to load online meeting links:', error);
+
+          if (isActive) {
+            setMeetingLinksByTaskId({});
+          }
+        });
+
+      return () => {
+        isActive = false;
+      };
+    }, [])
+  );
 
   const filteredTasks = useMemo(() => {
     let result = tasks;
@@ -290,29 +590,37 @@ export default function TasksScreen() {
         const title = task.title.toLowerCase();
         const description = task.description?.toLowerCase() || '';
         const location = task.location?.toLowerCase() || '';
+        const meetingLink = meetingLinksByTaskId[task.id];
+        const meetingLinkText = [
+          meetingLink?.provider,
+          meetingLink?.label,
+          meetingLink?.url,
+        ]
+          .filter(Boolean)
+          .join(' ')
+          .toLowerCase();
 
         return (
           title.includes(keyword) ||
           description.includes(keyword) ||
-          location.includes(keyword)
+          location.includes(keyword) ||
+          meetingLinkText.includes(keyword)
         );
       });
     }
 
     return result;
-  }, [filter, searchText, tasks, todayDate]);
+  }, [filter, meetingLinksByTaskId, searchText, tasks, todayDate]);
 
   const taskStats = useMemo(() => {
     const pending = tasks.filter((task) => task.status === 'pending').length;
     const completed = tasks.filter((task) => task.status === 'completed').length;
-    const meetings = tasks.filter((task) => task.plannerType === 'meeting').length;
     const today = tasks.filter((task) => task.dueDate === todayDate).length;
 
     return {
       total: tasks.length,
       pending,
       completed,
-      meetings,
       today,
     };
   }, [tasks, todayDate]);
@@ -330,8 +638,30 @@ export default function TasksScreen() {
           text: 'Delete',
           style: 'destructive',
           onPress: async () => {
+            await deleteOnlineMeetingLinkForTask(task.id).catch(() => undefined);
             await deleteTask(task.id);
           },
+        },
+      ]
+    );
+  };
+
+  const confirmJoinMeeting = (meetingLink?: OnlineMeetingLink) => {
+    if (!meetingLink?.url) {
+      return;
+    }
+
+    Alert.alert(
+      'Join online meeting?',
+      'FocusMate will open this link outside the app.',
+      [
+        {
+          text: 'Cancel',
+          style: 'cancel',
+        },
+        {
+          text: 'Join',
+          onPress: () => void openMeetingLink(meetingLink.url),
         },
       ]
     );
@@ -360,100 +690,149 @@ export default function TasksScreen() {
     );
   };
 
+  const hasActiveFilters = filter !== 'all' || Boolean(searchText.trim());
+
+  const resetSearchAndFilters = () => {
+    setSearchText('');
+    setFilter('all');
+  };
+
   return (
     <View style={styles.screen}>
-      <LinearGradient
-        colors={['#F9FFFB', '#DDF8E7']}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-        style={styles.headerCard}
-      >
-        <View style={styles.headerTextArea}>
-          <Text style={styles.headerLabel}>Planner Items</Text>
-          <Text style={styles.headerTitle}>Manage your focus</Text>
-          <Text style={styles.headerSubtitle}>
-            Search, filter, and ask Milo to plan your tasks.
-          </Text>
-        </View>
-
-        <View style={styles.headerMiloCircle}>
-          <Image source={miloFocusedImage} style={styles.headerMiloImage} resizeMode="contain" />
-        </View>
-      </LinearGradient>
-
-      <View style={styles.searchWrapper}>
-        <Ionicons name="search-outline" size={20} color={theme.colors.muted} />
-        <TextInput
-          style={styles.searchInput}
-          placeholder="Search tasks, meetings, dates..."
-          placeholderTextColor={theme.colors.muted}
-          value={searchText}
-          onChangeText={setSearchText}
-        />
-
-        {searchText ? (
-          <TouchableOpacity onPress={() => setSearchText('')}>
-            <Ionicons name="close-circle" size={20} color={theme.colors.muted} />
-          </TouchableOpacity>
-        ) : null}
-      </View>
-
-      <View style={styles.summaryRow}>
-        <View style={styles.summaryCard}>
-          <Text style={styles.summaryNumber}>{taskStats.total}</Text>
-          <Text style={styles.summaryLabel}>Total</Text>
-        </View>
-
-        <View style={styles.summaryCard}>
-          <Text style={[styles.summaryNumber, { color: theme.colors.yellow }]}>
-            {taskStats.pending}
-          </Text>
-          <Text style={styles.summaryLabel}>Pending</Text>
-        </View>
-
-        <View style={styles.summaryCard}>
-          <Text style={[styles.summaryNumber, { color: theme.colors.blue }]}>
-            {taskStats.completed}
-          </Text>
-          <Text style={styles.summaryLabel}>Done</Text>
-        </View>
-
-        <View style={styles.summaryCard}>
-          <Text style={[styles.summaryNumber, { color: theme.colors.purple }]}>
-            {taskStats.today}
-          </Text>
-          <Text style={styles.summaryLabel}>Today</Text>
-        </View>
-      </View>
-
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.filterRow}
-      >
-        <FilterChip label="All" active={filter === 'all'} onPress={() => setFilter('all')} />
-        <FilterChip label="Today" active={filter === 'today'} onPress={() => setFilter('today')} />
-        <FilterChip label="Upcoming" active={filter === 'upcoming'} onPress={() => setFilter('upcoming')} />
-        <FilterChip label="High" active={filter === 'high'} onPress={() => setFilter('high')} />
-        <FilterChip label="Pending" active={filter === 'pending'} onPress={() => setFilter('pending')} />
-        <FilterChip label="Done" active={filter === 'completed'} onPress={() => setFilter('completed')} />
-        <FilterChip label="Tasks" active={filter === 'task'} onPress={() => setFilter('task')} />
-        <FilterChip label="Meetings" active={filter === 'meeting'} onPress={() => setFilter('meeting')} />
-        <FilterChip label="Dates" active={filter === 'date'} onPress={() => setFilter('date')} />
-      </ScrollView>
-
       <FlatList
         data={filteredTasks}
         keyExtractor={(item) => item.id}
+        style={styles.taskList}
         showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
         contentContainerStyle={styles.listContent}
+        ListHeaderComponent={
+          <View style={styles.listHeader}>
+            <LinearGradient
+              colors={['#F8FFF9', '#DDF7E6']}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={styles.headerCard}
+            >
+              <View style={styles.heroGlowLarge} />
+              <View style={styles.heroGlowSmall} />
+
+              <View style={styles.headerTextArea}>
+                <Text style={styles.headerLabel}>Milo Planner</Text>
+                <Text style={styles.headerTitle}>Let's plan your best focus day!</Text>
+                <Text style={styles.headerSubtitle}>
+                  Search, filter, and ask Milo to plan your tasks.
+                </Text>
+              </View>
+
+              <View style={styles.headerMiloCircle}>
+                <Image
+                  source={miloFocusedImage}
+                  style={styles.headerMiloImage}
+                  resizeMode="contain"
+                />
+              </View>
+            </LinearGradient>
+
+            <View style={styles.searchRow}>
+              <View style={styles.searchWrapper}>
+                <Ionicons name="search-outline" size={18} color={theme.colors.muted} />
+                <TextInput
+                  style={styles.searchInput}
+                  placeholder="Search tasks, meetings, dates..."
+                  placeholderTextColor={theme.colors.muted}
+                  value={searchText}
+                  onChangeText={setSearchText}
+                />
+
+                {searchText ? (
+                  <TouchableOpacity
+                    activeOpacity={0.75}
+                    onPress={() => setSearchText('')}
+                    accessibilityRole="button"
+                    accessibilityLabel="Clear search"
+                  >
+                    <Ionicons name="close-circle" size={18} color={theme.colors.muted} />
+                  </TouchableOpacity>
+                ) : null}
+              </View>
+
+              <TouchableOpacity
+                activeOpacity={0.82}
+                style={[
+                  styles.filterIconButton,
+                  hasActiveFilters && styles.filterIconButtonActive,
+                ]}
+                onPress={resetSearchAndFilters}
+                accessibilityRole="button"
+                accessibilityLabel="Reset search and filters"
+              >
+                <Ionicons
+                  name="options-outline"
+                  size={19}
+                  color={hasActiveFilters ? theme.colors.white : theme.colors.primaryDark}
+                />
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.summaryRow}>
+              <StatSummaryCard
+                label="Total"
+                value={taskStats.total}
+                iconName="albums-outline"
+                color={theme.colors.primaryDark}
+                backgroundColor="#F5FCF7"
+              />
+              <StatSummaryCard
+                label="Pending"
+                value={taskStats.pending}
+                iconName="hourglass-outline"
+                color="#D97706"
+                backgroundColor="#FFF9EB"
+              />
+              <StatSummaryCard
+                label="Done"
+                value={taskStats.completed}
+                iconName="checkmark-circle-outline"
+                color={theme.colors.blue}
+                backgroundColor="#F4FAFF"
+              />
+              <StatSummaryCard
+                label="Today"
+                value={taskStats.today}
+                iconName="today-outline"
+                color={theme.colors.purple}
+                backgroundColor="#F8F5FF"
+              />
+            </View>
+
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              style={styles.filterScroller}
+              contentContainerStyle={styles.filterRow}
+            >
+              {filterOptions.map((option) => (
+                <FilterChip
+                  key={option.value}
+                  label={option.label}
+                  iconName={option.iconName}
+                  active={filter === option.value}
+                  onPress={() => setFilter(option.value)}
+                />
+              ))}
+            </ScrollView>
+          </View>
+        }
         renderItem={({ item }) => (
           <TaskCard
             task={item}
+            meetingLink={meetingLinksByTaskId[item.id]}
             onToggle={() => toggleTask(item.id)}
             onDelete={() => confirmDelete(item)}
             onOpen={() => navigation.navigate('TaskDetails', { taskId: item.id })}
             onOpenMaps={() => confirmOpenMaps(item.location)}
+            onJoinMeeting={() => confirmJoinMeeting(meetingLinksByTaskId[item.id])}
           />
         )}
         ListEmptyComponent={
@@ -486,138 +865,222 @@ export default function TasksScreen() {
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
-    backgroundColor: theme.colors.background,
-    paddingHorizontal: 18,
-    paddingTop: 18,
+    backgroundColor: '#F6FBF4',
+  },
+  taskList: {
+    flex: 1,
+  },
+  listHeader: {
+    marginBottom: 2,
   },
   headerCard: {
-    borderRadius: theme.radius.xl,
-    padding: 18,
+    minHeight: 128,
+    borderRadius: 26,
+    padding: 15,
     marginBottom: 14,
     flexDirection: 'row',
     alignItems: 'center',
     overflow: 'hidden',
-    ...theme.shadow,
+    borderWidth: 1,
+    borderColor: '#D6F1DF',
+    ...theme.shadowSoft,
+  },
+  heroGlowLarge: {
+    position: 'absolute',
+    right: -48,
+    top: -46,
+    width: 164,
+    height: 164,
+    borderRadius: 82,
+    backgroundColor: 'rgba(255,255,255,0.46)',
+  },
+  heroGlowSmall: {
+    position: 'absolute',
+    right: 96,
+    bottom: 22,
+    width: 54,
+    height: 54,
+    borderRadius: 27,
+    backgroundColor: 'rgba(255,255,255,0.28)',
   },
   headerTextArea: {
     flex: 1,
-    paddingRight: 8,
+    minWidth: 0,
+    paddingRight: 10,
+    zIndex: 2,
   },
   headerLabel: {
-    fontSize: 13,
+    alignSelf: 'flex-start',
+    overflow: 'hidden',
+    borderRadius: theme.radius.pill,
+    backgroundColor: 'rgba(255,255,255,0.84)',
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    fontSize: 11,
     color: theme.colors.primaryDark,
     fontWeight: '900',
-    marginBottom: 4,
+    marginBottom: 6,
   },
   headerTitle: {
-    fontSize: 24,
-    fontWeight: '900',
     color: theme.colors.text,
-    letterSpacing: -0.5,
+    fontSize: 20,
+    lineHeight: 24,
+    fontWeight: '900',
   },
   headerSubtitle: {
-    marginTop: 4,
-    color: theme.colors.muted,
-    fontWeight: '600',
-    lineHeight: 19,
+    marginTop: 5,
+    color: theme.colors.textSoft,
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '700',
   },
   headerMiloCircle: {
-    width: 96,
-    height: 96,
-    borderRadius: 48,
-    backgroundColor: '#FFFFFF',
+    width: 84,
+    height: 84,
+    borderRadius: 42,
+    backgroundColor: 'rgba(255,255,255,0.88)',
     justifyContent: 'center',
     alignItems: 'center',
-    marginRight: -4,
+    marginRight: -6,
+    zIndex: 2,
   },
   headerMiloImage: {
-    width: 112,
-    height: 112,
+    width: 102,
+    height: 102,
   },
-  searchWrapper: {
-    height: 54,
-    borderRadius: theme.radius.md,
-    backgroundColor: theme.colors.surface,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    paddingHorizontal: 14,
+  searchRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 14,
-    ...theme.shadow,
+    marginBottom: 11,
+  },
+  searchWrapper: {
+    flex: 1,
+    minWidth: 0,
+    height: 46,
+    borderRadius: 18,
+    backgroundColor: theme.colors.surface,
+    borderWidth: 1,
+    borderColor: '#DDEBE2',
+    paddingHorizontal: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    ...theme.shadowSoft,
   },
   searchInput: {
     flex: 1,
-    marginLeft: 9,
-    marginRight: 9,
+    marginLeft: 8,
+    marginRight: 8,
     color: theme.colors.text,
-    fontWeight: '700',
+    fontWeight: '800',
     fontSize: 14,
+  },
+  filterIconButton: {
+    width: 46,
+    height: 46,
+    borderRadius: 18,
+    backgroundColor: theme.colors.surface,
+    borderWidth: 1,
+    borderColor: '#DDEBE2',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: 9,
+    ...theme.shadowSoft,
+  },
+  filterIconButtonActive: {
+    backgroundColor: theme.colors.primaryDark,
+    borderColor: theme.colors.primaryDark,
   },
   summaryRow: {
     flexDirection: 'row',
-    marginBottom: 14,
+    marginHorizontal: -4,
+    marginBottom: 12,
   },
   summaryCard: {
     flex: 1,
-    backgroundColor: theme.colors.surface,
-    borderRadius: theme.radius.lg,
-    paddingVertical: 14,
+    minWidth: 0,
+    minHeight: 76,
+    borderRadius: 16,
+    paddingHorizontal: 6,
+    paddingVertical: 8,
     alignItems: 'center',
-    marginRight: 8,
+    marginHorizontal: 4,
     borderWidth: 1,
-    borderColor: theme.colors.border,
+    borderColor: 'rgba(221,235,226,0.82)',
+  },
+  summaryIconWrap: {
+    width: 25,
+    height: 25,
+    borderRadius: 11,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 3,
   },
   summaryNumber: {
-    fontSize: 22,
+    fontSize: 19,
+    lineHeight: 22,
     fontWeight: '900',
-    color: theme.colors.primaryDark,
   },
   summaryLabel: {
-    marginTop: 3,
-    fontSize: 11,
-    fontWeight: '800',
-    color: theme.colors.muted,
+    marginTop: 2,
+    fontSize: 10,
+    fontWeight: '900',
+    color: theme.colors.textSoft,
+  },
+  filterScroller: {
+    marginBottom: 14,
   },
   filterRow: {
-    paddingBottom: 15,
+    paddingRight: 18,
   },
   filterChip: {
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 999,
+    minHeight: 34,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: theme.radius.pill,
     backgroundColor: theme.colors.surface,
     borderWidth: 1,
-    borderColor: theme.colors.border,
-    marginRight: 10,
+    borderColor: '#DDEBE2',
+    marginRight: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
   },
   filterChipActive: {
-    backgroundColor: theme.colors.primary,
-    borderColor: theme.colors.primary,
+    backgroundColor: theme.colors.primaryDark,
+    borderColor: theme.colors.primaryDark,
   },
   filterText: {
-    fontWeight: '800',
-    color: theme.colors.muted,
-    fontSize: 13,
+    marginLeft: 5,
+    fontWeight: '900',
+    color: theme.colors.primaryDark,
+    fontSize: 12,
   },
   filterTextActive: {
-    color: '#FFFFFF',
+    color: theme.colors.white,
   },
   listContent: {
+    flexGrow: 1,
+    paddingTop: 14,
+    paddingHorizontal: 18,
     paddingBottom: 130,
   },
   taskCard: {
     backgroundColor: theme.colors.surface,
-    borderRadius: 24,
-    paddingVertical: 15,
-    paddingHorizontal: 14,
-    marginBottom: 13,
-    flexDirection: 'row',
-    alignItems: 'center',
+    borderRadius: 20,
+    paddingVertical: 10,
+    paddingLeft: 13,
+    paddingRight: 10,
+    marginBottom: 10,
     overflow: 'hidden',
     borderWidth: 1,
-    borderColor: theme.colors.border,
-    ...theme.shadow,
+    borderColor: '#DDEBE2',
+    ...theme.shadowSoft,
+  },
+  taskCardPressed: {
+    opacity: 0.88,
+  },
+  taskCardCompleted: {
+    backgroundColor: '#FBFEFC',
+    opacity: 0.88,
   },
   accentBar: {
     position: 'absolute',
@@ -626,164 +1089,193 @@ const styles = StyleSheet.create({
     bottom: 0,
     width: 5,
   },
+  taskTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
   checkboxArea: {
-    marginRight: 12,
+    marginRight: 8,
   },
   checkbox: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
     borderWidth: 2,
-    borderColor: '#CCD4DD',
+    borderColor: '#C9D8CE',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#FFFFFF',
+    backgroundColor: theme.colors.surface,
   },
   checkboxCompleted: {
     borderColor: theme.colors.primary,
     backgroundColor: theme.colors.primary,
   },
+  taskMiloBubble: {
+    width: 46,
+    height: 46,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 9,
+  },
+  taskMiloImage: {
+    width: 52,
+    height: 52,
+  },
   taskContent: {
     flex: 1,
-    paddingRight: 8,
-  },
-  titleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 3,
+    minWidth: 0,
   },
   taskTitle: {
-    flex: 1,
-    fontSize: 16,
     color: theme.colors.text,
+    fontSize: 15,
+    lineHeight: 19,
     fontWeight: '900',
-    paddingRight: 8,
   },
   completedTitle: {
     color: theme.colors.muted,
     textDecorationLine: 'line-through',
   },
+  taskDescription: {
+    marginTop: 2,
+    color: theme.colors.muted,
+    fontSize: 12,
+    lineHeight: 15,
+    fontWeight: '700',
+  },
+  cardRightRail: {
+    width: 70,
+    marginLeft: 7,
+    alignItems: 'flex-end',
+    alignSelf: 'stretch',
+    justifyContent: 'space-between',
+  },
   typeBadge: {
-    borderRadius: 999,
-    paddingHorizontal: 8,
+    maxWidth: 70,
+    borderRadius: theme.radius.pill,
+    paddingHorizontal: 7,
     paddingVertical: 4,
+    borderWidth: 1,
     flexDirection: 'row',
     alignItems: 'center',
   },
   typeBadgeText: {
-    fontSize: 10,
+    fontSize: 9,
+    lineHeight: 11,
     fontWeight: '900',
     marginLeft: 3,
   },
-  taskDescription: {
-    marginTop: 4,
-    color: theme.colors.muted,
-    fontSize: 13,
-    lineHeight: 18,
-    fontWeight: '600',
+  deleteButton: {
+    width: 31,
+    height: 31,
+    borderRadius: 15.5,
+    backgroundColor: '#FFF3F3',
+    borderWidth: 1,
+    borderColor: '#FFE0E0',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: 6,
   },
   metaRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginTop: 9,
+    flexWrap: 'wrap',
+    marginTop: 8,
+  },
+  metaChip: {
+    minHeight: 24,
+    borderRadius: theme.radius.pill,
+    borderWidth: 1,
+    paddingHorizontal: 7,
+    paddingVertical: 4,
+    marginRight: 5,
+    marginBottom: 5,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  metaChipText: {
+    marginLeft: 3,
+    fontSize: 9,
+    lineHeight: 12,
+    fontWeight: '900',
+  },
+  metaChipTextSolo: {
+    marginLeft: 0,
+  },
+  utilityRow: {
+    marginTop: 7,
+    borderTopWidth: 1,
+    borderTopColor: '#EEF5F0',
+    paddingTop: 7,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  utilityPillRow: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
     flexWrap: 'wrap',
   },
-  priorityPill: {
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 999,
-    marginRight: 9,
-    marginBottom: 4,
+  utilityActionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    marginLeft: 6,
   },
-  priorityText: {
-    fontSize: 11,
-    fontWeight: '900',
-    textTransform: 'capitalize',
-  },
-  statusPill: {
+  infoPill: {
+    maxWidth: 150,
+    minHeight: 28,
+    borderRadius: 14,
     borderWidth: 1,
-    borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    marginRight: 9,
-    marginBottom: 4,
-  },
-  statusPillText: {
-    fontSize: 11,
-    fontWeight: '900',
-  },
-  datePill: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginRight: 9,
+    paddingHorizontal: 8,
+    marginRight: 5,
     marginBottom: 4,
   },
-  dateText: {
-    marginLeft: 4,
-    color: theme.colors.muted,
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  locationActionRow: {
-    width: '100%',
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: 5,
-    marginBottom: 2,
-  },
-  locationPill: {
-    flex: 1,
-    minWidth: 0,
-    minHeight: 30,
-    borderRadius: 15,
+  locationInfoPill: {
     backgroundColor: theme.colors.primarySoft,
-    borderWidth: 1,
-    borderColor: '#CFEFDA',
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 9,
-    marginRight: 8,
+    borderColor: '#CBEFD8',
   },
-  locationText: {
-    flex: 1,
+  meetingInfoPill: {
+    backgroundColor: theme.colors.purpleSoft,
+    borderColor: '#DED6FF',
+  },
+  infoPillText: {
+    maxWidth: 112,
     minWidth: 0,
     marginLeft: 4,
-    color: theme.colors.primaryDark,
-    fontSize: 12,
-    fontWeight: '800',
-  },
-  mapsButton: {
-    minHeight: 30,
-    borderRadius: 15,
-    backgroundColor: theme.colors.surface,
-    borderWidth: 1,
-    borderColor: '#DBE7DB',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 10,
-  },
-  mapsButtonText: {
-    color: theme.colors.primaryDark,
-    fontSize: 11,
+    fontSize: 10,
+    lineHeight: 12,
     fontWeight: '900',
   },
-  deleteButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: '#FFF0F0',
-    justifyContent: 'center',
+  taskActionButton: {
+    minWidth: 58,
+    minHeight: 28,
+    borderRadius: 14,
+    borderWidth: 1,
+    paddingHorizontal: 8,
+    marginLeft: 5,
+    flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
+  },
+  taskActionText: {
+    marginLeft: 3,
+    fontSize: 9,
+    lineHeight: 12,
+    fontWeight: '900',
   },
   emptyCard: {
-    marginTop: 28,
+    marginTop: 26,
     backgroundColor: theme.colors.surface,
     borderRadius: theme.radius.xl,
-    padding: 28,
+    padding: 26,
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: theme.colors.border,
-    ...theme.shadow,
+    borderColor: '#DDEBE2',
+    ...theme.shadowSoft,
   },
   emptyMiloImage: {
     width: 135,
@@ -798,19 +1290,19 @@ const styles = StyleSheet.create({
   emptyText: {
     marginTop: 6,
     color: theme.colors.muted,
-    fontWeight: '600',
+    fontWeight: '700',
     textAlign: 'center',
     lineHeight: 20,
   },
   emptyButton: {
     marginTop: 18,
-    backgroundColor: theme.colors.primary,
+    backgroundColor: theme.colors.primaryDark,
     paddingHorizontal: 22,
     paddingVertical: 12,
-    borderRadius: 999,
+    borderRadius: theme.radius.pill,
   },
   emptyButtonText: {
-    color: '#FFFFFF',
+    color: theme.colors.white,
     fontWeight: '900',
   },
 });
