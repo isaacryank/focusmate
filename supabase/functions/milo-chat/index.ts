@@ -67,12 +67,18 @@ type MiloProposedTaskUpdate = {
   reason?: string | null;
 };
 
+type MiloProposedTaskCompletion = {
+  taskId: string;
+  reason?: string | null;
+};
+
 type MiloChatResponse = {
   text: string;
   relatedTaskId?: string | null;
   suggestedActions?: MiloChatAction[];
   proposedTask?: MiloProposedTask | null;
   proposedTaskUpdate?: MiloProposedTaskUpdate | null;
+  proposedTaskCompletion?: MiloProposedTaskCompletion | null;
   usedAi: boolean;
 };
 
@@ -116,6 +122,7 @@ function fallbackResponse() {
     suggestedActions: [],
     proposedTask: null,
     proposedTaskUpdate: null,
+    proposedTaskCompletion: null,
     usedAi: false,
   } satisfies MiloChatResponse);
 }
@@ -314,6 +321,34 @@ function sanitizeProposedTaskUpdate(
   };
 }
 
+function sanitizeProposedTaskCompletion(
+  rawCompletion: unknown,
+  tasks: MiloChatTaskContext[]
+): MiloProposedTaskCompletion | null {
+  if (
+    !rawCompletion ||
+    typeof rawCompletion !== 'object' ||
+    Array.isArray(rawCompletion)
+  ) {
+    return null;
+  }
+
+  const completion = rawCompletion as Record<string, unknown>;
+  const taskId = trimText(completion.taskId, 80);
+  const task = taskId
+    ? tasks.find((item) => item.id === taskId || item.local_id === taskId)
+    : undefined;
+
+  if (!taskId || !task || task.completed) {
+    return null;
+  }
+
+  return {
+    taskId,
+    reason: trimText(completion.reason, 260) || null,
+  };
+}
+
 function userAskedForResources(message: string) {
   const normalizedMessage = message.toLowerCase();
 
@@ -376,6 +411,22 @@ function getUpdateIntentInfo(message: string) {
   return {
     hasUpdateIntent,
     shouldPreferProposedTaskUpdate: hasUpdateIntent,
+  };
+}
+
+function getCompletionIntentInfo(message: string) {
+  const normalizedMessage = message.toLowerCase().replace(/\s+/g, ' ').trim();
+  const hasCompletionIntent =
+    /\b(finished|completed|complete|done with|already did|have finished|mark as done|mark done|mark completed)\b/.test(
+      normalizedMessage
+    ) ||
+    /\bfinish\s+(task|meeting|assignment|date|project|report|lab|[\w])/.test(
+      normalizedMessage
+    );
+
+  return {
+    hasCompletionIntent,
+    shouldPreferProposedTaskCompletion: hasCompletionIntent,
   };
 }
 
@@ -531,7 +582,14 @@ function buildSystemPrompt() {
     'If the update request is ambiguous, such as "change my meeting to 3pm" when multiple meetings exist, ask which task and set proposedTaskUpdate to null.',
     'If the task is not found, say Milo could not find it and ask the user to check the title. Do not create a new task automatically.',
     'Do not claim an update is already done. Ask the user to confirm.',
-    'Do not propose deleting tasks, marking tasks complete, or silently changing existing tasks.',
+    'For completion intent, return proposedTaskCompletion instead of proposedTask or proposedTaskUpdate.',
+    'Completion intent examples include finished, completed, done with, mark as done, mark completed, I already did, I have finished, and finish task.',
+    'For proposedTaskCompletion.taskId, use the id of exactly one existing pending task from the provided task context.',
+    'If a completion request is ambiguous, such as "mark my meeting as done" when multiple meetings exist, ask which task and set proposedTaskCompletion to null.',
+    'If the task is not found, say Milo could not find it and ask the user to check the title. Do not create a new task.',
+    'If the matching task is already completed, say it already looks completed and set proposedTaskCompletion to null.',
+    'Do not claim a task is already marked done. Ask the user to confirm before completion.',
+    'Do not propose deleting tasks, marking multiple tasks complete, or silently changing existing tasks.',
     'Return plain text only in the text field.',
     'Do not use Markdown formatting.',
     'Do not use **bold** markers.',
@@ -560,6 +618,7 @@ function buildUserInput({
     currentDate: getCurrentDateKey(),
     creationIntent: getCreationIntentInfo(message),
     updateIntent: getUpdateIntentInfo(message),
+    completionIntent: getCompletionIntentInfo(message),
   });
 }
 
@@ -733,6 +792,19 @@ async function callOpenAi({
                 },
                 required: ['taskId', 'changes', 'reason'],
               },
+              proposedTaskCompletion: {
+                type: ['object', 'null'],
+                additionalProperties: false,
+                properties: {
+                  taskId: {
+                    type: 'string',
+                  },
+                  reason: {
+                    type: ['string', 'null'],
+                  },
+                },
+                required: ['taskId', 'reason'],
+              },
             },
             required: [
               'text',
@@ -741,6 +813,7 @@ async function callOpenAi({
               'usedAi',
               'proposedTask',
               'proposedTaskUpdate',
+              'proposedTaskCompletion',
             ],
           },
         },
@@ -807,20 +880,29 @@ Deno.serve(async (request) => {
     }
 
     const parsedResponse = JSON.parse(outputText) as Partial<MiloChatResponse>;
-    const proposedTaskUpdate = sanitizeProposedTaskUpdate(
-      parsedResponse.proposedTaskUpdate,
+    const proposedTaskCompletion = sanitizeProposedTaskCompletion(
+      parsedResponse.proposedTaskCompletion,
       tasks
     );
-    const proposedTask = proposedTaskUpdate
+    const proposedTaskUpdate = proposedTaskCompletion
+      ? null
+      : sanitizeProposedTaskUpdate(
+          parsedResponse.proposedTaskUpdate,
+          tasks
+        );
+    const proposedTask = proposedTaskUpdate || proposedTaskCompletion
       ? null
       : sanitizeProposedTask(parsedResponse.proposedTask);
     const creationIntent = getCreationIntentInfo(message);
     const updateIntent = getUpdateIntentInfo(message);
+    const completionIntent = getCompletionIntentInfo(message);
     const shouldSuppressExistingTaskLink =
       Boolean(proposedTask) ||
       Boolean(proposedTaskUpdate) ||
+      Boolean(proposedTaskCompletion) ||
       creationIntent.shouldPreferProposedTask ||
-      updateIntent.shouldPreferProposedTaskUpdate;
+      updateIntent.shouldPreferProposedTaskUpdate ||
+      completionIntent.shouldPreferProposedTaskCompletion;
     const relatedTask =
       !shouldSuppressExistingTaskLink &&
       typeof parsedResponse.relatedTaskId === 'string'
@@ -841,6 +923,7 @@ Deno.serve(async (request) => {
           }),
       proposedTask,
       proposedTaskUpdate,
+      proposedTaskCompletion,
       usedAi: true,
     } satisfies MiloChatResponse);
   } catch (error) {

@@ -30,6 +30,7 @@ import {
 import {
   askMiloAi,
   buildMiloAiRecentMessages,
+  type MiloAiProposedTaskCompletion,
   type MiloAiProposedTask,
   type MiloAiProposedTaskUpdate,
   type MiloAiSuggestedAction,
@@ -53,6 +54,7 @@ type MiloTalkRole = 'user' | 'milo';
 type MiloTalkBrainStatus = 'ready' | 'online' | 'fallback';
 type MiloProposedTaskStatus = 'pending' | 'created' | 'cancelled';
 type MiloProposedTaskUpdateStatus = 'pending' | 'updated' | 'cancelled';
+type MiloProposedTaskCompletionStatus = 'pending' | 'completed' | 'cancelled';
 
 type MiloTalkMessage = {
   id: string;
@@ -68,6 +70,8 @@ type MiloTalkMessage = {
   proposedTaskSourceText?: string;
   proposedTaskUpdate?: MiloAiProposedTaskUpdate;
   proposedTaskUpdateStatus?: MiloProposedTaskUpdateStatus;
+  proposedTaskCompletion?: MiloAiProposedTaskCompletion;
+  proposedTaskCompletionStatus?: MiloProposedTaskCompletionStatus;
 };
 
 const MILO_TALK_INITIAL_TEXT =
@@ -746,10 +750,67 @@ function validateProposedTaskUpdateForSave({
   };
 }
 
+function getCompletionDetailRows(task?: Task) {
+  if (!task) {
+    return [];
+  }
+
+  const dueText = [task.dueDate, task.dueTime].filter(Boolean).join(' ');
+
+  return [
+    {
+      label: 'Type',
+      value: titleCase(task.plannerType),
+    },
+    {
+      label: 'Priority',
+      value: titleCase(task.priority),
+    },
+    ...(dueText
+      ? [
+          {
+            label: 'Due',
+            value: dueText,
+          },
+        ]
+      : []),
+  ];
+}
+
+function validateProposedTaskCompletionForSave({
+  proposedCompletion,
+  tasks,
+}: {
+  proposedCompletion: MiloAiProposedTaskCompletion;
+  tasks: Task[];
+}) {
+  const task = tasks.find((item) => item.id === proposedCompletion.taskId);
+
+  if (!task) {
+    return {
+      ok: false as const,
+      message:
+        "Milo can't find that task right now. Can you check the task title and try again?",
+    };
+  }
+
+  if (task.status === 'completed') {
+    return {
+      ok: false as const,
+      message: 'Awww, Milo sees that one is already completed 💚',
+    };
+  }
+
+  return {
+    ok: true as const,
+    task,
+  };
+}
+
 export default function MiloChatScreen() {
   const navigation = useNavigation<any>();
   const insets = useSafeAreaInsets();
-  const { tasks, addTask, updateTask } = useTasks();
+  const { tasks, addTask, updateTask, toggleTask } = useTasks();
   const talkScrollRef = useRef<ScrollView | null>(null);
   const mountedRef = useRef(true);
 
@@ -852,11 +913,15 @@ export default function MiloChatScreen() {
       });
 
       if (aiReply.usedAi && aiReply.text) {
-        const proposedTaskUpdate = aiReply.proposedTaskUpdate || undefined;
-        const proposedTask = proposedTaskUpdate
+        const proposedTask = aiReply.proposedTask || undefined;
+        const proposedTaskUpdate = proposedTask
           ? undefined
-          : aiReply.proposedTask || undefined;
-        const relatedTask = proposedTask || proposedTaskUpdate
+          : aiReply.proposedTaskUpdate || undefined;
+        const proposedTaskCompletion = proposedTask || proposedTaskUpdate
+          ? undefined
+          : aiReply.proposedTaskCompletion || undefined;
+        const relatedTask =
+          proposedTask || proposedTaskUpdate || proposedTaskCompletion
           ? undefined
           : findRelatedTaskByAiId(tasks, aiReply.relatedTaskId);
 
@@ -873,13 +938,19 @@ export default function MiloChatScreen() {
             onlineMeetingLinks,
             relatedTask,
             suggestedActions:
-              proposedTask || proposedTaskUpdate ? [] : aiReply.suggestedActions,
+              proposedTask || proposedTaskUpdate || proposedTaskCompletion
+                ? []
+                : aiReply.suggestedActions,
           }),
           proposedTask,
           proposedTaskStatus: proposedTask ? 'pending' : undefined,
           proposedTaskSourceText: proposedTask ? prompt : undefined,
           proposedTaskUpdate,
           proposedTaskUpdateStatus: proposedTaskUpdate ? 'pending' : undefined,
+          proposedTaskCompletion,
+          proposedTaskCompletionStatus: proposedTaskCompletion
+            ? 'pending'
+            : undefined,
           createdAt: new Date().toISOString(),
         };
         nextStatus = 'online';
@@ -1016,6 +1087,22 @@ export default function MiloChatScreen() {
           ? {
               ...message,
               proposedTaskUpdateStatus: status,
+            }
+          : message
+      )
+    );
+  };
+
+  const updateProposedTaskCompletionStatus = (
+    messageId: string,
+    status: MiloProposedTaskCompletionStatus
+  ) => {
+    setChatMessages((currentMessages) =>
+      currentMessages.map((message) =>
+        message.id === messageId
+          ? {
+              ...message,
+              proposedTaskCompletionStatus: status,
             }
           : message
       )
@@ -1192,6 +1279,84 @@ export default function MiloChatScreen() {
     updateProposedTaskUpdateStatus(message.id, 'cancelled');
     appendMiloMessage({
       text: "No worries, Milo won't change it.",
+    });
+  };
+
+  const handleCompleteProposedTask = async (message: MiloTalkMessage) => {
+    if (
+      !message.proposedTaskCompletion ||
+      (message.proposedTaskCompletionStatus || 'pending') !== 'pending'
+    ) {
+      return;
+    }
+
+    try {
+      await Haptics.selectionAsync();
+    } catch {
+      // Completing from chat should still work when haptics are unavailable.
+    }
+
+    const validation = validateProposedTaskCompletionForSave({
+      proposedCompletion: message.proposedTaskCompletion,
+      tasks,
+    });
+
+    if (!validation.ok) {
+      appendMiloMessage({
+        text: validation.message,
+      });
+      return;
+    }
+
+    try {
+      await toggleTask(validation.task.id);
+      const completedTask: Task = {
+        ...validation.task,
+        status: 'completed',
+        notificationId: undefined,
+      };
+
+      updateProposedTaskCompletionStatus(message.id, 'completed');
+      appendMiloMessage({
+        text: 'Yayyy! Milo marked it as done. Proud of you 🦖✨',
+        relatedTask: completedTask,
+        relatedTaskSummary: buildMiloTalkTaskSummary(completedTask),
+        actions: [
+          {
+            type: 'viewTask',
+            label: 'View Task',
+            taskId: validation.task.id,
+          },
+        ],
+      });
+    } catch (error) {
+      console.warn('Failed to mark task done from Milo chat:', error);
+      appendMiloMessage({
+        text:
+          "Milo couldn't mark that as done just now. Please try again in a moment.",
+      });
+    }
+  };
+
+  const handleCancelProposedTaskCompletion = async (
+    message: MiloTalkMessage
+  ) => {
+    if (
+      !message.proposedTaskCompletion ||
+      (message.proposedTaskCompletionStatus || 'pending') !== 'pending'
+    ) {
+      return;
+    }
+
+    try {
+      await Haptics.selectionAsync();
+    } catch {
+      // Cancelling from chat should still work when haptics are unavailable.
+    }
+
+    updateProposedTaskCompletionStatus(message.id, 'cancelled');
+    appendMiloMessage({
+      text: "No worries, Milo won't mark it as done.",
     });
   };
 
@@ -1491,6 +1656,103 @@ export default function MiloChatScreen() {
     );
   };
 
+  const renderProposedTaskCompletionCard = (message: MiloTalkMessage) => {
+    const proposedTaskCompletion = message.proposedTaskCompletion;
+
+    if (!proposedTaskCompletion) {
+      return null;
+    }
+
+    const task = tasks.find((item) => item.id === proposedTaskCompletion.taskId);
+    const status = message.proposedTaskCompletionStatus || 'pending';
+    const isPending = status === 'pending';
+    const detailRows = getCompletionDetailRows(task);
+
+    return (
+      <View style={styles.taskCompletionCard}>
+        <View style={styles.proposedTaskHeader}>
+          <View style={styles.proposedTaskIcon}>
+            <Ionicons
+              name={task ? proposedTaskIcons[task.plannerType] : 'checkmark-done-outline'}
+              size={17}
+              color={theme.colors.primaryDark}
+            />
+          </View>
+          <View style={styles.proposedTaskHeaderCopy}>
+            <Text style={styles.proposedTaskEyebrow}>Mark done?</Text>
+            <Text numberOfLines={2} style={styles.proposedTaskTitle}>
+              {task?.title || 'Task not found'}
+            </Text>
+          </View>
+        </View>
+
+        {detailRows.length ? (
+          <View style={styles.proposedTaskRows}>
+            {detailRows.map((detail) => (
+              <View key={detail.label} style={styles.proposedTaskRow}>
+                <Text style={styles.proposedTaskLabel}>{detail.label}</Text>
+                <Text numberOfLines={2} style={styles.proposedTaskValue}>
+                  {detail.value}
+                </Text>
+              </View>
+            ))}
+          </View>
+        ) : null}
+
+        {proposedTaskCompletion.reason ? (
+          <Text style={styles.taskCompletionReason}>
+            {proposedTaskCompletion.reason}
+          </Text>
+        ) : null}
+
+        {isPending ? (
+          <View style={styles.proposedTaskActions}>
+            <TouchableOpacity
+              activeOpacity={0.84}
+              style={styles.proposedTaskCreateButton}
+              onPress={() => void handleCompleteProposedTask(message)}
+              accessibilityRole="button"
+              accessibilityLabel="Mark proposed task as done"
+            >
+              <Ionicons
+                name="checkmark-done-outline"
+                size={16}
+                color={theme.colors.white}
+              />
+              <Text style={styles.proposedTaskCreateText}>Mark Done</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              activeOpacity={0.84}
+              style={styles.proposedTaskCancelButton}
+              onPress={() => void handleCancelProposedTaskCompletion(message)}
+              accessibilityRole="button"
+              accessibilityLabel="Cancel proposed task completion"
+            >
+              <Text style={styles.proposedTaskCancelText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        ) : (
+          <View
+            style={[
+              styles.proposedTaskStatusPill,
+              status === 'cancelled' && styles.proposedTaskStatusPillMuted,
+            ]}
+          >
+            <Text
+              style={[
+                styles.proposedTaskStatusText,
+                status === 'cancelled' && styles.proposedTaskStatusTextMuted,
+              ]}
+            >
+              {status === 'completed' ? 'Marked done' : 'Cancelled'}
+            </Text>
+          </View>
+        )}
+      </View>
+    );
+  };
+
   const renderTalkMessage = (message: MiloTalkMessage) => {
     if (message.role === 'user') {
       return (
@@ -1522,11 +1784,15 @@ export default function MiloChatScreen() {
               {message.text}
             </Text>
 
+            {message.proposedTask ? renderProposedTaskCard(message) : null}
+
             {message.proposedTaskUpdate
               ? renderProposedTaskUpdateCard(message)
               : null}
 
-            {message.proposedTask ? renderProposedTaskCard(message) : null}
+            {message.proposedTaskCompletion
+              ? renderProposedTaskCompletionCard(message)
+              : null}
 
             {message.relatedTask ? (
               <View style={styles.miloTalkTaskCard}>
@@ -1974,6 +2240,22 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '900',
     lineHeight: 14,
+  },
+  taskCompletionCard: {
+    marginTop: 12,
+    borderRadius: 18,
+    backgroundColor: '#F7FBF6',
+    borderWidth: 1,
+    borderColor: '#DCEADC',
+    paddingHorizontal: 11,
+    paddingVertical: 11,
+  },
+  taskCompletionReason: {
+    marginTop: 9,
+    color: theme.colors.textSoft,
+    fontSize: 11,
+    fontWeight: '800',
+    lineHeight: 16,
   },
   miloTalkTaskCard: {
     marginTop: 12,

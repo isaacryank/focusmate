@@ -61,12 +61,18 @@ export type MiloAiProposedTaskUpdate = {
   reason?: string | null;
 };
 
+export type MiloAiProposedTaskCompletion = {
+  taskId: string;
+  reason?: string | null;
+};
+
 export type MiloAiResponse = {
   text: string;
   relatedTaskId?: string | null;
   suggestedActions?: MiloAiSuggestedAction[];
   proposedTask?: MiloAiProposedTask | null;
   proposedTaskUpdate?: MiloAiProposedTaskUpdate | null;
+  proposedTaskCompletion?: MiloAiProposedTaskCompletion | null;
   usedAi: boolean;
 };
 
@@ -295,6 +301,30 @@ function sanitizeMiloAiProposedTaskUpdate(
   };
 }
 
+function sanitizeMiloAiProposedTaskCompletion(
+  proposedTaskCompletion: unknown
+): MiloAiProposedTaskCompletion | null {
+  if (
+    !proposedTaskCompletion ||
+    typeof proposedTaskCompletion !== 'object' ||
+    Array.isArray(proposedTaskCompletion)
+  ) {
+    return null;
+  }
+
+  const completion = proposedTaskCompletion as Record<string, unknown>;
+  const taskId = trimUnknownText(completion.taskId, 80);
+
+  if (!taskId) {
+    return null;
+  }
+
+  return {
+    taskId,
+    reason: trimUnknownText(completion.reason, MAX_DESCRIPTION_LENGTH) || null,
+  };
+}
+
 function getTaskSortKey(task: Task) {
   return [task.dueDate || '9999-99-99', task.dueTime || '99:99'].join(' ');
 }
@@ -405,6 +435,9 @@ export async function askMiloAi({
     proposedTask: sanitizeMiloAiProposedTask(data.proposedTask),
     proposedTaskUpdate: sanitizeMiloAiProposedTaskUpdate(
       data.proposedTaskUpdate
+    ),
+    proposedTaskCompletion: sanitizeMiloAiProposedTaskCompletion(
+      data.proposedTaskCompletion
     ),
     usedAi: data.usedAi === true,
   };
