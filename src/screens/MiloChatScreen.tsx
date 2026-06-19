@@ -31,6 +31,7 @@ import {
   askMiloAi,
   buildMiloAiRecentMessages,
   type MiloAiProposedTaskCompletion,
+  type MiloAiProposedTaskDeletion,
   type MiloAiProposedTask,
   type MiloAiProposedTaskUpdate,
   type MiloAiSuggestedAction,
@@ -55,6 +56,7 @@ type MiloTalkBrainStatus = 'ready' | 'online' | 'fallback';
 type MiloProposedTaskStatus = 'pending' | 'created' | 'cancelled';
 type MiloProposedTaskUpdateStatus = 'pending' | 'updated' | 'cancelled';
 type MiloProposedTaskCompletionStatus = 'pending' | 'completed' | 'cancelled';
+type MiloProposedTaskDeletionStatus = 'pending' | 'removed' | 'cancelled';
 
 type MiloTalkMessage = {
   id: string;
@@ -72,6 +74,9 @@ type MiloTalkMessage = {
   proposedTaskUpdateStatus?: MiloProposedTaskUpdateStatus;
   proposedTaskCompletion?: MiloAiProposedTaskCompletion;
   proposedTaskCompletionStatus?: MiloProposedTaskCompletionStatus;
+  proposedTaskDeletion?: MiloAiProposedTaskDeletion;
+  proposedTaskDeletionStatus?: MiloProposedTaskDeletionStatus;
+  proposedTaskDeletionSnapshot?: Task;
 };
 
 const MILO_TALK_INITIAL_TEXT =
@@ -807,10 +812,68 @@ function validateProposedTaskCompletionForSave({
   };
 }
 
+function getDeletionDetailRows(task?: Task) {
+  if (!task) {
+    return [];
+  }
+
+  const dueText = [task.dueDate, task.dueTime].filter(Boolean).join(' ');
+
+  return [
+    {
+      label: 'Type',
+      value: titleCase(task.plannerType),
+    },
+    {
+      label: 'Priority',
+      value: titleCase(task.priority),
+    },
+    ...(dueText
+      ? [
+          {
+            label: 'Due',
+            value: dueText,
+          },
+        ]
+      : []),
+    ...(task.location
+      ? [
+          {
+            label: 'Location',
+            value: task.location,
+          },
+        ]
+      : []),
+  ];
+}
+
+function validateProposedTaskDeletionForSave({
+  proposedDeletion,
+  tasks,
+}: {
+  proposedDeletion: MiloAiProposedTaskDeletion;
+  tasks: Task[];
+}) {
+  const task = tasks.find((item) => item.id === proposedDeletion.taskId);
+
+  if (!task) {
+    return {
+      ok: false as const,
+      message:
+        "Milo can't find that task right now. Can you check the task title and try again?",
+    };
+  }
+
+  return {
+    ok: true as const,
+    task,
+  };
+}
+
 export default function MiloChatScreen() {
   const navigation = useNavigation<any>();
   const insets = useSafeAreaInsets();
-  const { tasks, addTask, updateTask, toggleTask } = useTasks();
+  const { tasks, addTask, updateTask, toggleTask, deleteTask } = useTasks();
   const talkScrollRef = useRef<ScrollView | null>(null);
   const mountedRef = useRef(true);
 
@@ -920,10 +983,20 @@ export default function MiloChatScreen() {
         const proposedTaskCompletion = proposedTask || proposedTaskUpdate
           ? undefined
           : aiReply.proposedTaskCompletion || undefined;
-        const relatedTask =
+        const proposedTaskDeletion =
           proposedTask || proposedTaskUpdate || proposedTaskCompletion
-          ? undefined
-          : findRelatedTaskByAiId(tasks, aiReply.relatedTaskId);
+            ? undefined
+            : aiReply.proposedTaskDeletion || undefined;
+        const hasProposal = Boolean(
+          proposedTask ||
+            proposedTaskUpdate ||
+            proposedTaskCompletion ||
+            proposedTaskDeletion
+        );
+        const relatedTask =
+          hasProposal
+            ? undefined
+            : findRelatedTaskByAiId(tasks, aiReply.relatedTaskId);
 
         replyMessage = {
           id: createMiloTalkMessageId('milo'),
@@ -938,9 +1011,7 @@ export default function MiloChatScreen() {
             onlineMeetingLinks,
             relatedTask,
             suggestedActions:
-              proposedTask || proposedTaskUpdate || proposedTaskCompletion
-                ? []
-                : aiReply.suggestedActions,
+              hasProposal ? [] : aiReply.suggestedActions,
           }),
           proposedTask,
           proposedTaskStatus: proposedTask ? 'pending' : undefined,
@@ -950,6 +1021,13 @@ export default function MiloChatScreen() {
           proposedTaskCompletion,
           proposedTaskCompletionStatus: proposedTaskCompletion
             ? 'pending'
+            : undefined,
+          proposedTaskDeletion,
+          proposedTaskDeletionStatus: proposedTaskDeletion
+            ? 'pending'
+            : undefined,
+          proposedTaskDeletionSnapshot: proposedTaskDeletion
+            ? tasks.find((task) => task.id === proposedTaskDeletion.taskId)
             : undefined,
           createdAt: new Date().toISOString(),
         };
@@ -1103,6 +1181,22 @@ export default function MiloChatScreen() {
           ? {
               ...message,
               proposedTaskCompletionStatus: status,
+            }
+          : message
+      )
+    );
+  };
+
+  const updateProposedTaskDeletionStatus = (
+    messageId: string,
+    status: MiloProposedTaskDeletionStatus
+  ) => {
+    setChatMessages((currentMessages) =>
+      currentMessages.map((message) =>
+        message.id === messageId
+          ? {
+              ...message,
+              proposedTaskDeletionStatus: status,
             }
           : message
       )
@@ -1357,6 +1451,69 @@ export default function MiloChatScreen() {
     updateProposedTaskCompletionStatus(message.id, 'cancelled');
     appendMiloMessage({
       text: "No worries, Milo won't mark it as done.",
+    });
+  };
+
+  const handleDeleteProposedTask = async (message: MiloTalkMessage) => {
+    if (
+      !message.proposedTaskDeletion ||
+      (message.proposedTaskDeletionStatus || 'pending') !== 'pending'
+    ) {
+      return;
+    }
+
+    try {
+      await Haptics.selectionAsync();
+    } catch {
+      // Removing from chat should still work when haptics are unavailable.
+    }
+
+    const validation = validateProposedTaskDeletionForSave({
+      proposedDeletion: message.proposedTaskDeletion,
+      tasks,
+    });
+
+    if (!validation.ok) {
+      appendMiloMessage({
+        text: validation.message,
+      });
+      return;
+    }
+
+    try {
+      await deleteTask(validation.task.id);
+      updateProposedTaskDeletionStatus(message.id, 'removed');
+      appendMiloMessage({
+        text: 'Done, Milo removed it from your plan 🦖💚',
+      });
+    } catch (error) {
+      console.warn('Failed to remove task from Milo chat:', error);
+      appendMiloMessage({
+        text:
+          "Milo couldn't remove that task just now. Please try again in a moment.",
+      });
+    }
+  };
+
+  const handleCancelProposedTaskDeletion = async (
+    message: MiloTalkMessage
+  ) => {
+    if (
+      !message.proposedTaskDeletion ||
+      (message.proposedTaskDeletionStatus || 'pending') !== 'pending'
+    ) {
+      return;
+    }
+
+    try {
+      await Haptics.selectionAsync();
+    } catch {
+      // Cancelling from chat should still work when haptics are unavailable.
+    }
+
+    updateProposedTaskDeletionStatus(message.id, 'cancelled');
+    appendMiloMessage({
+      text: "No worries, Milo won't remove it.",
     });
   };
 
@@ -1753,6 +1910,107 @@ export default function MiloChatScreen() {
     );
   };
 
+  const renderProposedTaskDeletionCard = (message: MiloTalkMessage) => {
+    const proposedTaskDeletion = message.proposedTaskDeletion;
+
+    if (!proposedTaskDeletion) {
+      return null;
+    }
+
+    const task =
+      tasks.find((item) => item.id === proposedTaskDeletion.taskId) ||
+      message.proposedTaskDeletionSnapshot;
+    const status = message.proposedTaskDeletionStatus || 'pending';
+    const isPending = status === 'pending';
+    const detailRows = getDeletionDetailRows(task);
+
+    return (
+      <View style={styles.taskDeletionCard}>
+        <View style={styles.proposedTaskHeader}>
+          <View style={styles.proposedTaskIcon}>
+            <Ionicons
+              name={
+                task ? proposedTaskIcons[task.plannerType] : 'trash-outline'
+              }
+              size={17}
+              color={theme.colors.primaryDark}
+            />
+          </View>
+          <View style={styles.proposedTaskHeaderCopy}>
+            <Text style={styles.proposedTaskEyebrow}>Remove task?</Text>
+            <Text numberOfLines={2} style={styles.proposedTaskTitle}>
+              {task?.title || 'Task not found'}
+            </Text>
+          </View>
+        </View>
+
+        {detailRows.length ? (
+          <View style={styles.proposedTaskRows}>
+            {detailRows.map((detail) => (
+              <View key={detail.label} style={styles.proposedTaskRow}>
+                <Text style={styles.proposedTaskLabel}>{detail.label}</Text>
+                <Text numberOfLines={2} style={styles.proposedTaskValue}>
+                  {detail.value}
+                </Text>
+              </View>
+            ))}
+          </View>
+        ) : null}
+
+        {proposedTaskDeletion.reason ? (
+          <Text style={styles.taskDeletionReason}>
+            {proposedTaskDeletion.reason}
+          </Text>
+        ) : null}
+
+        {isPending ? (
+          <View style={styles.proposedTaskActions}>
+            <TouchableOpacity
+              activeOpacity={0.84}
+              style={styles.proposedTaskCreateButton}
+              onPress={() => void handleDeleteProposedTask(message)}
+              accessibilityRole="button"
+              accessibilityLabel="Remove proposed task"
+            >
+              <Ionicons
+                name="trash-outline"
+                size={16}
+                color={theme.colors.white}
+              />
+              <Text style={styles.proposedTaskCreateText}>Remove Task</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              activeOpacity={0.84}
+              style={styles.proposedTaskCancelButton}
+              onPress={() => void handleCancelProposedTaskDeletion(message)}
+              accessibilityRole="button"
+              accessibilityLabel="Cancel proposed task removal"
+            >
+              <Text style={styles.proposedTaskCancelText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        ) : (
+          <View
+            style={[
+              styles.proposedTaskStatusPill,
+              status === 'cancelled' && styles.proposedTaskStatusPillMuted,
+            ]}
+          >
+            <Text
+              style={[
+                styles.proposedTaskStatusText,
+                status === 'cancelled' && styles.proposedTaskStatusTextMuted,
+              ]}
+            >
+              {status === 'removed' ? 'Removed' : 'Cancelled'}
+            </Text>
+          </View>
+        )}
+      </View>
+    );
+  };
+
   const renderTalkMessage = (message: MiloTalkMessage) => {
     if (message.role === 'user') {
       return (
@@ -1792,6 +2050,10 @@ export default function MiloChatScreen() {
 
             {message.proposedTaskCompletion
               ? renderProposedTaskCompletionCard(message)
+              : null}
+
+            {message.proposedTaskDeletion
+              ? renderProposedTaskDeletionCard(message)
               : null}
 
             {message.relatedTask ? (
@@ -2251,6 +2513,22 @@ const styles = StyleSheet.create({
     paddingVertical: 11,
   },
   taskCompletionReason: {
+    marginTop: 9,
+    color: theme.colors.textSoft,
+    fontSize: 11,
+    fontWeight: '800',
+    lineHeight: 16,
+  },
+  taskDeletionCard: {
+    marginTop: 12,
+    borderRadius: 18,
+    backgroundColor: '#FFF8F6',
+    borderWidth: 1,
+    borderColor: '#F1D8D2',
+    paddingHorizontal: 11,
+    paddingVertical: 11,
+  },
+  taskDeletionReason: {
     marginTop: 9,
     color: theme.colors.textSoft,
     fontSize: 11,

@@ -72,6 +72,11 @@ type MiloProposedTaskCompletion = {
   reason?: string | null;
 };
 
+type MiloProposedTaskDeletion = {
+  taskId: string;
+  reason?: string | null;
+};
+
 type MiloChatResponse = {
   text: string;
   relatedTaskId?: string | null;
@@ -79,6 +84,7 @@ type MiloChatResponse = {
   proposedTask?: MiloProposedTask | null;
   proposedTaskUpdate?: MiloProposedTaskUpdate | null;
   proposedTaskCompletion?: MiloProposedTaskCompletion | null;
+  proposedTaskDeletion?: MiloProposedTaskDeletion | null;
   usedAi: boolean;
 };
 
@@ -123,6 +129,7 @@ function fallbackResponse() {
     proposedTask: null,
     proposedTaskUpdate: null,
     proposedTaskCompletion: null,
+    proposedTaskDeletion: null,
     usedAi: false,
   } satisfies MiloChatResponse);
 }
@@ -349,6 +356,34 @@ function sanitizeProposedTaskCompletion(
   };
 }
 
+function sanitizeProposedTaskDeletion(
+  rawDeletion: unknown,
+  tasks: MiloChatTaskContext[]
+): MiloProposedTaskDeletion | null {
+  if (
+    !rawDeletion ||
+    typeof rawDeletion !== 'object' ||
+    Array.isArray(rawDeletion)
+  ) {
+    return null;
+  }
+
+  const deletion = rawDeletion as Record<string, unknown>;
+  const taskId = trimText(deletion.taskId, 80);
+  const taskExists = taskId
+    ? tasks.some((task) => task.id === taskId || task.local_id === taskId)
+    : false;
+
+  if (!taskId || !taskExists) {
+    return null;
+  }
+
+  return {
+    taskId,
+    reason: trimText(deletion.reason, 260) || null,
+  };
+}
+
 function userAskedForResources(message: string) {
   const normalizedMessage = message.toLowerCase();
 
@@ -364,8 +399,49 @@ function userAskedForResources(message: string) {
   ].some((keyword) => normalizedMessage.includes(keyword));
 }
 
+function normalizeSearchText(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/[\u2018\u2019]/g, "'")
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function getDeletionIntentInfo(message: string) {
+  const normalizedMessage = message
+    .toLowerCase()
+    .replace(/[\u2018\u2019]/g, "'")
+    .replace(/\s+/g, ' ')
+    .trim();
+  const normalizedSearchText = normalizeSearchText(message);
+  const hasDeletionIntent =
+    /\b(delete|remove|cancel|canceled|cancelled)\b/.test(normalizedMessage) ||
+    /\bcancel\s+(my\s+|the\s+)?[\w\s]{0,80}\b(task|date|meeting|plan)\b/.test(
+      normalizedMessage
+    ) ||
+    /\b(no longer need|do not need|dont need|don't need|don’t need|not happening anymore)\b/.test(
+      normalizedMessage
+    ) ||
+    /\b(no longer need|do not need|dont need|don t need|not happening anymore)\b/.test(
+      normalizedSearchText
+    ) ||
+    /\b(has been|been|is|was)\s+(cancel|canceled|cancelled)\b/.test(
+      normalizedMessage
+    ) ||
+    /\bremove\s+(it|this|that)\s+from\s+(my\s+|the\s+)?plan\b/.test(
+      normalizedMessage
+    );
+
+  return {
+    hasDeletionIntent,
+    shouldPreferProposedTaskDeletion: hasDeletionIntent,
+  };
+}
+
 function getCreationIntentInfo(message: string) {
   const normalizedMessage = message.toLowerCase().replace(/\s+/g, ' ').trim();
+  const deletionIntent = getDeletionIntentInfo(message);
   const hasCreationIntent =
     /\b(set|create|add|schedule|plan)\s+(a\s+|an\s+|my\s+)?(date|task|meeting)\b/.test(
       normalizedMessage
@@ -393,6 +469,7 @@ function getCreationIntentInfo(message: string) {
     hasQuotedTitleWithScheduleDetails: hasQuotedTitle && hasDateOrTime,
     shouldPreferProposedTask:
       (hasCreationIntent || (hasQuotedTitle && hasDateOrTime)) &&
+      !deletionIntent.hasDeletionIntent &&
       !hasExplicitExistingTaskIntent,
   };
 }
@@ -427,6 +504,192 @@ function getCompletionIntentInfo(message: string) {
   return {
     hasCompletionIntent,
     shouldPreferProposedTaskCompletion: hasCompletionIntent,
+  };
+}
+
+const taskMatchStopWords = new Set([
+  'a',
+  'an',
+  'and',
+  'at',
+  'date',
+  'event',
+  'for',
+  'meeting',
+  'my',
+  'plan',
+  'task',
+  'the',
+  'to',
+  'with',
+]);
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function isAffirmativeDeletionFollowUp(message: string) {
+  const normalizedMessage = normalizeSearchText(message);
+
+  if (!normalizedMessage) {
+    return false;
+  }
+
+  return (
+    /^(yes|yeah|yep|yup|sure|okay|ok|correct|confirm)\b/.test(
+      normalizedMessage
+    ) ||
+    /^(that one|yes please|do it|remove it|go ahead|please do)\b/.test(
+      normalizedMessage
+    ) ||
+    /\b(that one|yes please|do it|remove it|go ahead|confirm)\b/.test(
+      normalizedMessage
+    )
+  );
+}
+
+function getTaskMatchWords(title: string) {
+  return normalizeSearchText(title)
+    .split(' ')
+    .filter(
+      (word) =>
+        word.length >= 2 &&
+        !taskMatchStopWords.has(word)
+    );
+}
+
+function containsSearchWord(text: string, word: string) {
+  return new RegExp(`\\b${escapeRegExp(word)}\\b`).test(text);
+}
+
+function getTaskMentionScore(text: string, task: MiloChatTaskContext) {
+  const normalizedTitle = normalizeSearchText(task.title);
+
+  if (!normalizedTitle) {
+    return 0;
+  }
+
+  if (text.includes(normalizedTitle)) {
+    return 100 + normalizedTitle.length;
+  }
+
+  const titleWords = getTaskMatchWords(task.title);
+  const matchedWords = titleWords.filter((word) =>
+    containsSearchWord(text, word)
+  );
+
+  if (matchedWords.length === 0) {
+    return 0;
+  }
+
+  if (matchedWords.length === titleWords.length && titleWords.length > 1) {
+    return 80 + matchedWords.join('').length;
+  }
+
+  const distinctiveMatch = matchedWords.find((word) => word.length >= 5);
+
+  if (distinctiveMatch) {
+    return 50 + distinctiveMatch.length;
+  }
+
+  if (titleWords.length === 1) {
+    return 40 + matchedWords[0].length;
+  }
+
+  return 0;
+}
+
+function getDeletionFollowUpInfo({
+  message,
+  recentMessages,
+  tasks,
+}: {
+  message: string;
+  recentMessages: MiloChatRecentMessage[];
+  tasks: MiloChatTaskContext[];
+}) {
+  const hasAffirmativeFollowUp = isAffirmativeDeletionFollowUp(message);
+
+  if (!hasAffirmativeFollowUp) {
+    return {
+      hasAffirmativeFollowUp,
+      hasRecentDeletionDiscussion: false,
+      status: 'none' as const,
+      taskId: null,
+      taskTitle: null,
+      candidateTaskTitles: [],
+      reason: null,
+    };
+  }
+
+  const recentConversationText = recentMessages
+    .slice(-6)
+    .map((recentMessage) => `${recentMessage.role}: ${recentMessage.text}`)
+    .join('\n');
+  const hasRecentDeletionDiscussion =
+    getDeletionIntentInfo(recentConversationText).hasDeletionIntent;
+
+  if (!hasRecentDeletionDiscussion) {
+    return {
+      hasAffirmativeFollowUp,
+      hasRecentDeletionDiscussion,
+      status: 'none' as const,
+      taskId: null,
+      taskTitle: null,
+      candidateTaskTitles: [],
+      reason: null,
+    };
+  }
+
+  const matchText = normalizeSearchText(`${recentConversationText}\n${message}`);
+  const scoredTasks = tasks
+    .map((task) => ({
+      task,
+      score: getTaskMentionScore(matchText, task),
+    }))
+    .filter((candidate) => candidate.score > 0);
+
+  if (scoredTasks.length === 0) {
+    return {
+      hasAffirmativeFollowUp,
+      hasRecentDeletionDiscussion,
+      status: 'not_found' as const,
+      taskId: null,
+      taskTitle: null,
+      candidateTaskTitles: [],
+      reason: null,
+    };
+  }
+
+  const topScore = Math.max(...scoredTasks.map((candidate) => candidate.score));
+  const topCandidates = scoredTasks.filter(
+    (candidate) => candidate.score === topScore
+  );
+
+  if (topCandidates.length > 1) {
+    return {
+      hasAffirmativeFollowUp,
+      hasRecentDeletionDiscussion,
+      status: 'ambiguous' as const,
+      taskId: null,
+      taskTitle: null,
+      candidateTaskTitles: topCandidates
+        .map((candidate) => candidate.task.title)
+        .slice(0, 4),
+      reason: null,
+    };
+  }
+
+  const matchedTask = topCandidates[0].task;
+
+  return {
+    hasAffirmativeFollowUp,
+    hasRecentDeletionDiscussion,
+    status: 'matched' as const,
+    taskId: matchedTask.id,
+    taskTitle: matchedTask.title,
+    candidateTaskTitles: [matchedTask.title],
+    reason: 'User confirmed they want to remove this canceled task.',
   };
 }
 
@@ -560,6 +823,16 @@ function buildSystemPrompt() {
     'Use join_meeting only when the related task has hasMeetingLink true.',
     'Set usedAi to true when you answer successfully.',
     `Today is ${currentDate}. Use this date for relative dates like today, tomorrow, and this week.`,
+    'For delete/remove intent, return proposedTaskDeletion instead of proposedTask, proposedTaskUpdate, proposedTaskCompletion, relatedTaskId, or suggestedActions.',
+    'Delete/remove intent examples include delete, remove, cancel task, cancel date, cancel meeting, no longer need, not happening anymore, has been canceled, has been cancelled, and remove it from my plan.',
+    'For proposedTaskDeletion.taskId, use the id of exactly one existing task from the provided task context.',
+    'If a delete request is ambiguous, such as "delete my meeting" when multiple meetings exist, ask which task and set proposedTaskDeletion to null.',
+    'If the task is not found, say Milo could not find it and ask the user to check the title. Do not delete anything.',
+    'Do not claim a task is already deleted or removed. Ask the user to confirm before deletion.',
+    'Do not propose deleting multiple tasks at once.',
+    'Deletion intent has higher priority than creation, update, completion, existing task links, and suggested actions.',
+    'If Milo already asked whether the user wants to remove a specific task and the user replies affirmatively, return proposedTaskDeletion instead of asking again.',
+    'Affirmative delete follow-up replies include yes, yeah, yup, sure, okay, ok, correct, that one, yes please, do it, remove it, go ahead, and confirm.',
     'When the user asks to create, add, set, schedule, remind, or plan a task/date/meeting, return proposedTask instead of saying it was created.',
     'Creation intent has higher priority than existing task matching.',
     'If creationIntent.shouldPreferProposedTask is true, ignore existing task matches and return proposedTask with relatedTaskId null and suggestedActions empty.',
@@ -589,7 +862,7 @@ function buildSystemPrompt() {
     'If the task is not found, say Milo could not find it and ask the user to check the title. Do not create a new task.',
     'If the matching task is already completed, say it already looks completed and set proposedTaskCompletion to null.',
     'Do not claim a task is already marked done. Ask the user to confirm before completion.',
-    'Do not propose deleting tasks, marking multiple tasks complete, or silently changing existing tasks.',
+    'Do not silently delete, complete, or change existing tasks.',
     'Return plain text only in the text field.',
     'Do not use Markdown formatting.',
     'Do not use **bold** markers.',
@@ -616,6 +889,12 @@ function buildUserInput({
     tasks,
     recentMessages,
     currentDate: getCurrentDateKey(),
+    deletionIntent: getDeletionIntentInfo(message),
+    deletionFollowUpIntent: getDeletionFollowUpInfo({
+      message,
+      recentMessages,
+      tasks,
+    }),
     creationIntent: getCreationIntentInfo(message),
     updateIntent: getUpdateIntentInfo(message),
     completionIntent: getCompletionIntentInfo(message),
@@ -805,6 +1084,19 @@ async function callOpenAi({
                 },
                 required: ['taskId', 'reason'],
               },
+              proposedTaskDeletion: {
+                type: ['object', 'null'],
+                additionalProperties: false,
+                properties: {
+                  taskId: {
+                    type: 'string',
+                  },
+                  reason: {
+                    type: ['string', 'null'],
+                  },
+                },
+                required: ['taskId', 'reason'],
+              },
             },
             required: [
               'text',
@@ -814,6 +1106,7 @@ async function callOpenAi({
               'proposedTask',
               'proposedTaskUpdate',
               'proposedTaskCompletion',
+              'proposedTaskDeletion',
             ],
           },
         },
@@ -866,6 +1159,62 @@ Deno.serve(async (request) => {
         .filter((item): item is MiloChatRecentMessage => Boolean(item))
         .slice(-MAX_RECENT_MESSAGES)
     : [];
+  const deletionFollowUpIntent = getDeletionFollowUpInfo({
+    message,
+    recentMessages,
+    tasks,
+  });
+
+  if (deletionFollowUpIntent.status === 'matched') {
+    const matchedTask = tasks.find(
+      (task) => task.id === deletionFollowUpIntent.taskId
+    );
+
+    if (matchedTask) {
+      return jsonResponse({
+        text: `Awww okay, Milo found ${matchedTask.title}.\n\nDo you want me to remove it from your plan?`,
+        relatedTaskId: null,
+        suggestedActions: [],
+        proposedTask: null,
+        proposedTaskUpdate: null,
+        proposedTaskCompletion: null,
+        proposedTaskDeletion: {
+          taskId: matchedTask.id,
+          reason: deletionFollowUpIntent.reason,
+        },
+        usedAi: true,
+      } satisfies MiloChatResponse);
+    }
+  }
+
+  if (deletionFollowUpIntent.status === 'ambiguous') {
+    const taskList = deletionFollowUpIntent.candidateTaskTitles.join(', ');
+
+    return jsonResponse({
+      text: `Awww okay, which one should Milo remove? I found ${taskList}.`,
+      relatedTaskId: null,
+      suggestedActions: [],
+      proposedTask: null,
+      proposedTaskUpdate: null,
+      proposedTaskCompletion: null,
+      proposedTaskDeletion: null,
+      usedAi: true,
+    } satisfies MiloChatResponse);
+  }
+
+  if (deletionFollowUpIntent.status === 'not_found') {
+    return jsonResponse({
+      text:
+        "Milo can't find that task yet. Can you check the task title and tell me again?",
+      relatedTaskId: null,
+      suggestedActions: [],
+      proposedTask: null,
+      proposedTaskUpdate: null,
+      proposedTaskCompletion: null,
+      proposedTaskDeletion: null,
+      usedAi: true,
+    } satisfies MiloChatResponse);
+  }
 
   try {
     const openAiResponse = await callOpenAi({
@@ -879,30 +1228,43 @@ Deno.serve(async (request) => {
       throw new Error('OpenAI returned no output text.');
     }
 
-    const parsedResponse = JSON.parse(outputText) as Partial<MiloChatResponse>;
-    const proposedTaskCompletion = sanitizeProposedTaskCompletion(
-      parsedResponse.proposedTaskCompletion,
-      tasks
-    );
-    const proposedTaskUpdate = proposedTaskCompletion
-      ? null
-      : sanitizeProposedTaskUpdate(
-          parsedResponse.proposedTaskUpdate,
-          tasks
-        );
-    const proposedTask = proposedTaskUpdate || proposedTaskCompletion
-      ? null
-      : sanitizeProposedTask(parsedResponse.proposedTask);
     const creationIntent = getCreationIntentInfo(message);
     const updateIntent = getUpdateIntentInfo(message);
     const completionIntent = getCompletionIntentInfo(message);
+    const deletionIntent = getDeletionIntentInfo(message);
+    const parsedResponse = JSON.parse(outputText) as Partial<MiloChatResponse>;
+    const proposedTask = deletionIntent.shouldPreferProposedTaskDeletion
+      ? null
+      : sanitizeProposedTask(parsedResponse.proposedTask);
+    const proposedTaskUpdate =
+      proposedTask || deletionIntent.shouldPreferProposedTaskDeletion
+        ? null
+        : sanitizeProposedTaskUpdate(parsedResponse.proposedTaskUpdate, tasks);
+    const proposedTaskCompletion =
+      proposedTask ||
+      proposedTaskUpdate ||
+      deletionIntent.shouldPreferProposedTaskDeletion
+        ? null
+        : sanitizeProposedTaskCompletion(
+            parsedResponse.proposedTaskCompletion,
+            tasks
+          );
+    const proposedTaskDeletion =
+      proposedTask || proposedTaskUpdate || proposedTaskCompletion
+        ? null
+        : sanitizeProposedTaskDeletion(
+            parsedResponse.proposedTaskDeletion,
+            tasks
+          );
     const shouldSuppressExistingTaskLink =
       Boolean(proposedTask) ||
       Boolean(proposedTaskUpdate) ||
       Boolean(proposedTaskCompletion) ||
+      Boolean(proposedTaskDeletion) ||
       creationIntent.shouldPreferProposedTask ||
       updateIntent.shouldPreferProposedTaskUpdate ||
-      completionIntent.shouldPreferProposedTaskCompletion;
+      completionIntent.shouldPreferProposedTaskCompletion ||
+      deletionIntent.shouldPreferProposedTaskDeletion;
     const relatedTask =
       !shouldSuppressExistingTaskLink &&
       typeof parsedResponse.relatedTaskId === 'string'
@@ -924,6 +1286,7 @@ Deno.serve(async (request) => {
       proposedTask,
       proposedTaskUpdate,
       proposedTaskCompletion,
+      proposedTaskDeletion,
       usedAi: true,
     } satisfies MiloChatResponse);
   } catch (error) {
