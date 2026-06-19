@@ -49,11 +49,30 @@ type MiloProposedTask = {
   meeting_link?: string | null;
 };
 
+type MiloTaskUpdateChanges = {
+  title?: string;
+  description?: string | null;
+  type?: 'task' | 'meeting' | 'date';
+  priority?: 'low' | 'medium' | 'high';
+  due_date?: string | null;
+  due_time?: string | null;
+  estimated_duration_minutes?: number | null;
+  location?: string | null;
+  meeting_link?: string | null;
+};
+
+type MiloProposedTaskUpdate = {
+  taskId: string;
+  changes: MiloTaskUpdateChanges;
+  reason?: string | null;
+};
+
 type MiloChatResponse = {
   text: string;
   relatedTaskId?: string | null;
   suggestedActions?: MiloChatAction[];
   proposedTask?: MiloProposedTask | null;
+  proposedTaskUpdate?: MiloProposedTaskUpdate | null;
   usedAi: boolean;
 };
 
@@ -96,6 +115,7 @@ function fallbackResponse() {
     relatedTaskId: null,
     suggestedActions: [],
     proposedTask: null,
+    proposedTaskUpdate: null,
     usedAi: false,
   } satisfies MiloChatResponse);
 }
@@ -214,6 +234,86 @@ function sanitizeProposedTask(rawTask: unknown): MiloProposedTask | null {
   };
 }
 
+function sanitizePlannerType(value: unknown) {
+  return value === 'task' || value === 'meeting' || value === 'date'
+    ? value
+    : undefined;
+}
+
+function addTextChange(
+  changes: MiloTaskUpdateChanges,
+  key: keyof Pick<
+    MiloTaskUpdateChanges,
+    'title' | 'description' | 'due_date' | 'due_time' | 'location' | 'meeting_link'
+  >,
+  value: unknown,
+  maxLength: number
+) {
+  const text = trimText(value, maxLength);
+
+  if (text) {
+    changes[key] = text;
+  }
+}
+
+function sanitizeProposedTaskUpdate(
+  rawUpdate: unknown,
+  tasks: MiloChatTaskContext[]
+): MiloProposedTaskUpdate | null {
+  if (!rawUpdate || typeof rawUpdate !== 'object' || Array.isArray(rawUpdate)) {
+    return null;
+  }
+
+  const update = rawUpdate as Record<string, unknown>;
+  const taskId = trimText(update.taskId, 80);
+  const taskExists = taskId
+    ? tasks.some((task) => task.id === taskId || task.local_id === taskId)
+    : false;
+
+  if (!taskId || !taskExists) {
+    return null;
+  }
+
+  const rawChanges = update.changes;
+  if (!rawChanges || typeof rawChanges !== 'object' || Array.isArray(rawChanges)) {
+    return null;
+  }
+
+  const updateChanges = rawChanges as Record<string, unknown>;
+  const changes: MiloTaskUpdateChanges = {};
+  const type = sanitizePlannerType(updateChanges.type);
+  const priority = sanitizePriority(updateChanges.priority);
+
+  addTextChange(changes, 'title', updateChanges.title, 120);
+  addTextChange(changes, 'description', updateChanges.description, 260);
+  if (type) changes.type = type;
+  if (priority) changes.priority = priority;
+  addTextChange(changes, 'due_date', updateChanges.due_date, 20);
+  addTextChange(changes, 'due_time', updateChanges.due_time, 30);
+
+  if (
+    typeof updateChanges.estimated_duration_minutes === 'number' &&
+    Number.isFinite(updateChanges.estimated_duration_minutes) &&
+    updateChanges.estimated_duration_minutes > 0
+  ) {
+    changes.estimated_duration_minutes =
+      updateChanges.estimated_duration_minutes;
+  }
+
+  addTextChange(changes, 'location', updateChanges.location, 160);
+  addTextChange(changes, 'meeting_link', updateChanges.meeting_link, 300);
+
+  if (Object.keys(changes).length === 0) {
+    return null;
+  }
+
+  return {
+    taskId,
+    changes,
+    reason: trimText(update.reason, 260) || null,
+  };
+}
+
 function userAskedForResources(message: string) {
   const normalizedMessage = message.toLowerCase();
 
@@ -259,6 +359,23 @@ function getCreationIntentInfo(message: string) {
     shouldPreferProposedTask:
       (hasCreationIntent || (hasQuotedTitle && hasDateOrTime)) &&
       !hasExplicitExistingTaskIntent,
+  };
+}
+
+function getUpdateIntentInfo(message: string) {
+  const normalizedMessage = message.toLowerCase().replace(/\s+/g, ' ').trim();
+  const hasUpdateIntent =
+    /\b(update|edit|change|move|reschedule|rename)\b/.test(normalizedMessage) ||
+    /\badd\s+(location|place|venue|meeting link|link)\b/.test(
+      normalizedMessage
+    ) ||
+    /\bchange\s+(priority|time|date|location|title|name|type)\b/.test(
+      normalizedMessage
+    );
+
+  return {
+    hasUpdateIntent,
+    shouldPreferProposedTaskUpdate: hasUpdateIntent,
   };
 }
 
@@ -406,7 +523,15 @@ function buildSystemPrompt() {
     'For proposedTask.due_time, use the app style like 10:00 AM or 8:00 PM.',
     'For scheduled requests, date plans, and meetings, include date and time when provided. If important date/time/title details are missing, ask for the missing detail and set proposedTask to null.',
     'Never say a proposed task has already been created or saved. Ask the user to confirm first.',
-    'Do not propose deleting tasks, editing tasks, or silently changing existing tasks.',
+    'For update/edit intent, return proposedTaskUpdate instead of proposedTask.',
+    'Update intent examples include update, edit, change, move, reschedule, rename, add location to an existing task, add meeting link to an existing task, and change priority.',
+    'For proposedTaskUpdate.taskId, use the id of the existing task from the provided task context.',
+    'For proposedTaskUpdate.changes, include only fields the user wants to change.',
+    'Allowed update fields are title, description, type, priority, due_date, due_time, estimated_duration_minutes, location, and meeting_link.',
+    'If the update request is ambiguous, such as "change my meeting to 3pm" when multiple meetings exist, ask which task and set proposedTaskUpdate to null.',
+    'If the task is not found, say Milo could not find it and ask the user to check the title. Do not create a new task automatically.',
+    'Do not claim an update is already done. Ask the user to confirm.',
+    'Do not propose deleting tasks, marking tasks complete, or silently changing existing tasks.',
     'Return plain text only in the text field.',
     'Do not use Markdown formatting.',
     'Do not use **bold** markers.',
@@ -434,6 +559,7 @@ function buildUserInput({
     recentMessages,
     currentDate: getCurrentDateKey(),
     creationIntent: getCreationIntentInfo(message),
+    updateIntent: getUpdateIntentInfo(message),
   });
 }
 
@@ -548,6 +674,65 @@ async function callOpenAi({
                   'meeting_link',
                 ],
               },
+              proposedTaskUpdate: {
+                type: ['object', 'null'],
+                additionalProperties: false,
+                properties: {
+                  taskId: {
+                    type: 'string',
+                  },
+                  changes: {
+                    type: 'object',
+                    additionalProperties: false,
+                    properties: {
+                      title: {
+                        type: ['string', 'null'],
+                      },
+                      description: {
+                        type: ['string', 'null'],
+                      },
+                      type: {
+                        type: ['string', 'null'],
+                        enum: ['task', 'meeting', 'date', null],
+                      },
+                      priority: {
+                        type: ['string', 'null'],
+                        enum: ['low', 'medium', 'high', null],
+                      },
+                      due_date: {
+                        type: ['string', 'null'],
+                      },
+                      due_time: {
+                        type: ['string', 'null'],
+                      },
+                      estimated_duration_minutes: {
+                        type: ['number', 'null'],
+                      },
+                      location: {
+                        type: ['string', 'null'],
+                      },
+                      meeting_link: {
+                        type: ['string', 'null'],
+                      },
+                    },
+                    required: [
+                      'title',
+                      'description',
+                      'type',
+                      'priority',
+                      'due_date',
+                      'due_time',
+                      'estimated_duration_minutes',
+                      'location',
+                      'meeting_link',
+                    ],
+                  },
+                  reason: {
+                    type: ['string', 'null'],
+                  },
+                },
+                required: ['taskId', 'changes', 'reason'],
+              },
             },
             required: [
               'text',
@@ -555,6 +740,7 @@ async function callOpenAi({
               'suggestedActions',
               'usedAi',
               'proposedTask',
+              'proposedTaskUpdate',
             ],
           },
         },
@@ -621,10 +807,20 @@ Deno.serve(async (request) => {
     }
 
     const parsedResponse = JSON.parse(outputText) as Partial<MiloChatResponse>;
-    const proposedTask = sanitizeProposedTask(parsedResponse.proposedTask);
+    const proposedTaskUpdate = sanitizeProposedTaskUpdate(
+      parsedResponse.proposedTaskUpdate,
+      tasks
+    );
+    const proposedTask = proposedTaskUpdate
+      ? null
+      : sanitizeProposedTask(parsedResponse.proposedTask);
     const creationIntent = getCreationIntentInfo(message);
+    const updateIntent = getUpdateIntentInfo(message);
     const shouldSuppressExistingTaskLink =
-      Boolean(proposedTask) || creationIntent.shouldPreferProposedTask;
+      Boolean(proposedTask) ||
+      Boolean(proposedTaskUpdate) ||
+      creationIntent.shouldPreferProposedTask ||
+      updateIntent.shouldPreferProposedTaskUpdate;
     const relatedTask =
       !shouldSuppressExistingTaskLink &&
       typeof parsedResponse.relatedTaskId === 'string'
@@ -644,6 +840,7 @@ Deno.serve(async (request) => {
             relatedTask,
           }),
       proposedTask,
+      proposedTaskUpdate,
       usedAi: true,
     } satisfies MiloChatResponse);
   } catch (error) {

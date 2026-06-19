@@ -31,13 +31,19 @@ import {
   askMiloAi,
   buildMiloAiRecentMessages,
   type MiloAiProposedTask,
+  type MiloAiProposedTaskUpdate,
   type MiloAiSuggestedAction,
 } from '../lib/miloAiClient';
 import {
   loadOnlineMeetingLinks,
+  saveOnlineMeetingLink,
   type OnlineMeetingLink,
 } from '../lib/meetingLinkStorage';
-import { openMeetingLink } from '../lib/meetingLinkUtils';
+import {
+  isLikelyMeetingUrl,
+  normalizeMeetingUrl,
+  openMeetingLink,
+} from '../lib/meetingLinkUtils';
 import type { Task } from '../types/task';
 
 import MiloMoodImage from '../components/milo/MiloMoodImage';
@@ -46,6 +52,7 @@ type IconName = React.ComponentProps<typeof Ionicons>['name'];
 type MiloTalkRole = 'user' | 'milo';
 type MiloTalkBrainStatus = 'ready' | 'online' | 'fallback';
 type MiloProposedTaskStatus = 'pending' | 'created' | 'cancelled';
+type MiloProposedTaskUpdateStatus = 'pending' | 'updated' | 'cancelled';
 
 type MiloTalkMessage = {
   id: string;
@@ -59,6 +66,8 @@ type MiloTalkMessage = {
   proposedTask?: MiloAiProposedTask;
   proposedTaskStatus?: MiloProposedTaskStatus;
   proposedTaskSourceText?: string;
+  proposedTaskUpdate?: MiloAiProposedTaskUpdate;
+  proposedTaskUpdateStatus?: MiloProposedTaskUpdateStatus;
 };
 
 const MILO_TALK_INITIAL_TEXT =
@@ -451,10 +460,296 @@ function validateProposedTaskForSave(
   };
 }
 
+type ValidatedTaskUpdate = {
+  task: Task;
+  updates: Partial<
+    Pick<
+      Task,
+      | 'title'
+      | 'description'
+      | 'plannerType'
+      | 'priority'
+      | 'dueDate'
+      | 'dueTime'
+      | 'estimatedDurationMinutes'
+      | 'location'
+    >
+  >;
+  meetingLinkUrl?: string;
+  nextTask: Task;
+};
+
+function getMeetingUrlForTask(
+  taskId: string,
+  meetingLinks: OnlineMeetingLink[]
+) {
+  return meetingLinks.find((meetingLink) => meetingLink.taskId === taskId)?.url;
+}
+
+function formatUpdateCardValue(value?: string | number | null) {
+  if (typeof value === 'number') {
+    return `${value} min`;
+  }
+
+  const trimmed = value?.trim();
+  return trimmed || 'Not set';
+}
+
+function getProposedTaskUpdateRows({
+  meetingLinks,
+  proposedUpdate,
+  task,
+}: {
+  meetingLinks: OnlineMeetingLink[];
+  proposedUpdate: MiloAiProposedTaskUpdate;
+  task?: Task;
+}) {
+  const changes = proposedUpdate.changes;
+  const rows: { label: string; currentValue: string; nextValue: string }[] = [];
+  const addRow = (
+    label: string,
+    currentValue: string | number | undefined | null,
+    nextValue: string | number | undefined | null
+  ) => {
+    rows.push({
+      label,
+      currentValue: formatUpdateCardValue(currentValue),
+      nextValue: formatUpdateCardValue(nextValue),
+    });
+  };
+
+  if (changes.title) addRow('Title', task?.title, changes.title);
+  if (changes.description) {
+    addRow('Description', task?.description, changes.description);
+  }
+  if (changes.type) {
+    addRow(
+      'Type',
+      task ? titleCase(task.plannerType) : undefined,
+      titleCase(changes.type)
+    );
+  }
+  if (changes.priority) {
+    addRow(
+      'Priority',
+      task ? titleCase(task.priority) : undefined,
+      titleCase(changes.priority)
+    );
+  }
+  if (changes.due_date) {
+    addRow(
+      'Date',
+      task?.dueDate ? formatProposedDateLabel(task.dueDate) : undefined,
+      formatProposedDateLabel(changes.due_date)
+    );
+  }
+  if (changes.due_time) {
+    addRow(
+      'Time',
+      task?.dueTime,
+      normalizeProposedTime(changes.due_time) || changes.due_time
+    );
+  }
+  if (typeof changes.estimated_duration_minutes === 'number') {
+    addRow(
+      'Duration',
+      task?.estimatedDurationMinutes,
+      changes.estimated_duration_minutes
+    );
+  }
+  if (changes.location) addRow('Location', task?.location, changes.location);
+  if (changes.meeting_link) {
+    addRow(
+      'Meeting link',
+      task ? getMeetingUrlForTask(task.id, meetingLinks) : undefined,
+      changes.meeting_link
+    );
+  }
+
+  return rows;
+}
+
+function validateProposedTaskUpdateForSave({
+  meetingLinks,
+  proposedUpdate,
+  tasks,
+}: {
+  meetingLinks: OnlineMeetingLink[];
+  proposedUpdate: MiloAiProposedTaskUpdate;
+  tasks: Task[];
+}): { ok: false; message: string } | ({ ok: true } & ValidatedTaskUpdate) {
+  const task = tasks.find((item) => item.id === proposedUpdate.taskId);
+
+  if (!task) {
+    return {
+      ok: false,
+      message:
+        "Milo can't find that task right now. Can you check the task title and try again?",
+    };
+  }
+
+  const changes = proposedUpdate.changes;
+  const updates: ValidatedTaskUpdate['updates'] = {};
+  let meetingLinkUrl: string | undefined;
+
+  if (changes.title !== undefined) {
+    const title = changes.title.trim();
+
+    if (!title) {
+      return {
+        ok: false,
+        message: 'Milo needs a clear new title before updating this task.',
+      };
+    }
+
+    if (title !== task.title) {
+      updates.title = title;
+    }
+  }
+
+  if (changes.description !== undefined) {
+    const description = changes.description?.trim() || '';
+
+    if (description !== (task.description || '')) {
+      updates.description = description;
+    }
+  }
+
+  if (changes.type !== undefined) {
+    if (
+      changes.type !== 'task' &&
+      changes.type !== 'meeting' &&
+      changes.type !== 'date'
+    ) {
+      return {
+        ok: false,
+        message: 'Milo can only change the type to task, meeting, or date.',
+      };
+    }
+
+    if (changes.type !== task.plannerType) {
+      updates.plannerType = changes.type;
+    }
+  }
+
+  if (changes.priority !== undefined) {
+    if (
+      changes.priority !== 'low' &&
+      changes.priority !== 'medium' &&
+      changes.priority !== 'high'
+    ) {
+      return {
+        ok: false,
+        message: 'Milo can only set priority to low, medium, or high.',
+      };
+    }
+
+    if (changes.priority !== task.priority) {
+      updates.priority = changes.priority;
+    }
+  }
+
+  if (changes.due_date !== undefined) {
+    const dueDate = normalizeProposedDate(changes.due_date);
+
+    if (!dueDate) {
+      return {
+        ok: false,
+        message:
+          'Milo needs a clearer date before updating this. Try a date like 2026-06-27.',
+      };
+    }
+
+    if (dueDate !== (task.dueDate || '')) {
+      updates.dueDate = dueDate;
+    }
+  }
+
+  if (changes.due_time !== undefined) {
+    const dueTime = normalizeProposedTime(changes.due_time);
+
+    if (!dueTime) {
+      return {
+        ok: false,
+        message:
+          'Milo needs a clearer time before updating this. Try something like 6:00 PM.',
+      };
+    }
+
+    if (dueTime !== (task.dueTime || '')) {
+      updates.dueTime = dueTime;
+    }
+  }
+
+  if (changes.estimated_duration_minutes !== undefined) {
+    const duration = changes.estimated_duration_minutes;
+
+    if (
+      typeof duration !== 'number' ||
+      !Number.isFinite(duration) ||
+      duration <= 0
+    ) {
+      return {
+        ok: false,
+        message: 'Milo needs a positive duration before updating this task.',
+      };
+    }
+
+    if (duration !== task.estimatedDurationMinutes) {
+      updates.estimatedDurationMinutes = duration;
+    }
+  }
+
+  if (changes.location !== undefined) {
+    const location = changes.location?.trim() || '';
+
+    if (location !== (task.location || '')) {
+      updates.location = location;
+    }
+  }
+
+  if (changes.meeting_link !== undefined) {
+    const normalizedMeetingLink = normalizeMeetingUrl(
+      changes.meeting_link?.trim() || ''
+    );
+
+    if (!isLikelyMeetingUrl(normalizedMeetingLink)) {
+      return {
+        ok: false,
+        message:
+          'Milo needs a valid meeting link before saving it to this task.',
+      };
+    }
+
+    if (normalizedMeetingLink !== getMeetingUrlForTask(task.id, meetingLinks)) {
+      meetingLinkUrl = normalizedMeetingLink;
+    }
+  }
+
+  if (Object.keys(updates).length === 0 && !meetingLinkUrl) {
+    return {
+      ok: false,
+      message:
+        "Milo doesn't see a new change to save yet. Tell me what should be different.",
+    };
+  }
+
+  return {
+    ok: true,
+    task,
+    updates,
+    meetingLinkUrl,
+    nextTask: {
+      ...task,
+      ...updates,
+    },
+  };
+}
+
 export default function MiloChatScreen() {
   const navigation = useNavigation<any>();
   const insets = useSafeAreaInsets();
-  const { tasks, addTask } = useTasks();
+  const { tasks, addTask, updateTask } = useTasks();
   const talkScrollRef = useRef<ScrollView | null>(null);
   const mountedRef = useRef(true);
 
@@ -557,8 +852,11 @@ export default function MiloChatScreen() {
       });
 
       if (aiReply.usedAi && aiReply.text) {
-        const proposedTask = aiReply.proposedTask || undefined;
-        const relatedTask = proposedTask
+        const proposedTaskUpdate = aiReply.proposedTaskUpdate || undefined;
+        const proposedTask = proposedTaskUpdate
+          ? undefined
+          : aiReply.proposedTask || undefined;
+        const relatedTask = proposedTask || proposedTaskUpdate
           ? undefined
           : findRelatedTaskByAiId(tasks, aiReply.relatedTaskId);
 
@@ -574,11 +872,14 @@ export default function MiloChatScreen() {
             message: prompt,
             onlineMeetingLinks,
             relatedTask,
-            suggestedActions: proposedTask ? [] : aiReply.suggestedActions,
+            suggestedActions:
+              proposedTask || proposedTaskUpdate ? [] : aiReply.suggestedActions,
           }),
           proposedTask,
           proposedTaskStatus: proposedTask ? 'pending' : undefined,
           proposedTaskSourceText: proposedTask ? prompt : undefined,
+          proposedTaskUpdate,
+          proposedTaskUpdateStatus: proposedTaskUpdate ? 'pending' : undefined,
           createdAt: new Date().toISOString(),
         };
         nextStatus = 'online';
@@ -705,6 +1006,22 @@ export default function MiloChatScreen() {
     );
   };
 
+  const updateProposedTaskUpdateStatus = (
+    messageId: string,
+    status: MiloProposedTaskUpdateStatus
+  ) => {
+    setChatMessages((currentMessages) =>
+      currentMessages.map((message) =>
+        message.id === messageId
+          ? {
+              ...message,
+              proposedTaskUpdateStatus: status,
+            }
+          : message
+      )
+    );
+  };
+
   const handleCreateProposedTask = async (message: MiloTalkMessage) => {
     if (
       !message.proposedTask ||
@@ -792,6 +1109,89 @@ export default function MiloChatScreen() {
     updateProposedTaskStatus(message.id, 'cancelled');
     appendMiloMessage({
       text: "No worries, Milo won't add it.",
+    });
+  };
+
+  const handleUpdateProposedTask = async (message: MiloTalkMessage) => {
+    if (
+      !message.proposedTaskUpdate ||
+      (message.proposedTaskUpdateStatus || 'pending') !== 'pending'
+    ) {
+      return;
+    }
+
+    try {
+      await Haptics.selectionAsync();
+    } catch {
+      // Updating from chat should still work when haptics are unavailable.
+    }
+
+    const validation = validateProposedTaskUpdateForSave({
+      meetingLinks: onlineMeetingLinks,
+      proposedUpdate: message.proposedTaskUpdate,
+      tasks,
+    });
+
+    if (!validation.ok) {
+      appendMiloMessage({
+        text: validation.message,
+      });
+      return;
+    }
+
+    try {
+      if (Object.keys(validation.updates).length > 0) {
+        await updateTask(validation.task.id, validation.updates);
+      }
+
+      if (validation.meetingLinkUrl) {
+        await saveOnlineMeetingLink({
+          taskId: validation.task.id,
+          taskTitle: validation.nextTask.title,
+          url: validation.meetingLinkUrl,
+        });
+        await refreshOnlineMeetingLinks();
+      }
+
+      updateProposedTaskUpdateStatus(message.id, 'updated');
+      appendMiloMessage({
+        text: 'Done! Milo updated it for you 🦖✨',
+        relatedTask: validation.nextTask,
+        relatedTaskSummary: buildMiloTalkTaskSummary(validation.nextTask),
+        actions: [
+          {
+            type: 'viewTask',
+            label: 'View Task',
+            taskId: validation.task.id,
+          },
+        ],
+      });
+    } catch (error) {
+      console.warn('Failed to update task from Milo chat:', error);
+      appendMiloMessage({
+        text:
+          "Milo couldn't save that update just now. Please try again in a moment.",
+      });
+    }
+  };
+
+  const handleCancelProposedTaskUpdate = async (message: MiloTalkMessage) => {
+    if (
+      !message.proposedTaskUpdate ||
+      (message.proposedTaskUpdateStatus || 'pending') !== 'pending'
+    ) {
+      return;
+    }
+
+    try {
+      await Haptics.selectionAsync();
+    } catch {
+      // Cancelling from chat should still work when haptics are unavailable.
+    }
+
+    updateProposedTaskUpdateStatus(message.id, 'cancelled');
+    appendMiloMessage({
+      text: "No worries, Milo won't change it.",
     });
   };
 
@@ -976,6 +1376,121 @@ export default function MiloChatScreen() {
     );
   };
 
+  const renderProposedTaskUpdateCard = (message: MiloTalkMessage) => {
+    const proposedTaskUpdate = message.proposedTaskUpdate;
+
+    if (!proposedTaskUpdate) {
+      return null;
+    }
+
+    const task = tasks.find((item) => item.id === proposedTaskUpdate.taskId);
+    const status = message.proposedTaskUpdateStatus || 'pending';
+    const isPending = status === 'pending';
+    const updateRows = getProposedTaskUpdateRows({
+      meetingLinks: onlineMeetingLinks,
+      proposedUpdate: proposedTaskUpdate,
+      task,
+    });
+
+    return (
+      <View style={styles.taskUpdateCard}>
+        <View style={styles.proposedTaskHeader}>
+          <View style={styles.proposedTaskIcon}>
+            <Ionicons
+              name={task ? proposedTaskIcons[task.plannerType] : 'create-outline'}
+              size={17}
+              color={theme.colors.primaryDark}
+            />
+          </View>
+          <View style={styles.proposedTaskHeaderCopy}>
+            <Text style={styles.proposedTaskEyebrow}>Proposed update</Text>
+            <Text numberOfLines={2} style={styles.proposedTaskTitle}>
+              {task?.title || 'Task not found'}
+            </Text>
+          </View>
+        </View>
+
+        {proposedTaskUpdate.reason ? (
+          <Text style={styles.taskUpdateReason}>
+            {proposedTaskUpdate.reason}
+          </Text>
+        ) : null}
+
+        <View style={styles.taskUpdateRows}>
+          {updateRows.map((row) => (
+            <View key={row.label} style={styles.taskUpdateRow}>
+              <Text style={styles.taskUpdateLabel}>{row.label}</Text>
+              <View style={styles.taskUpdateValues}>
+                <View style={styles.taskUpdateValueBox}>
+                  <Text style={styles.taskUpdateValueLabel}>Current</Text>
+                  <Text numberOfLines={2} style={styles.taskUpdateValueText}>
+                    {row.currentValue}
+                  </Text>
+                </View>
+                <Ionicons
+                  name="arrow-forward"
+                  size={13}
+                  color={theme.colors.textSoft}
+                />
+                <View style={styles.taskUpdateValueBox}>
+                  <Text style={styles.taskUpdateValueLabel}>New</Text>
+                  <Text numberOfLines={2} style={styles.taskUpdateValueText}>
+                    {row.nextValue}
+                  </Text>
+                </View>
+              </View>
+            </View>
+          ))}
+        </View>
+
+        {isPending ? (
+          <View style={styles.proposedTaskActions}>
+            <TouchableOpacity
+              activeOpacity={0.84}
+              style={styles.proposedTaskCreateButton}
+              onPress={() => void handleUpdateProposedTask(message)}
+              accessibilityRole="button"
+              accessibilityLabel="Update proposed task"
+            >
+              <Ionicons
+                name="checkmark-circle-outline"
+                size={16}
+                color={theme.colors.white}
+              />
+              <Text style={styles.proposedTaskCreateText}>Update Task</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              activeOpacity={0.84}
+              style={styles.proposedTaskCancelButton}
+              onPress={() => void handleCancelProposedTaskUpdate(message)}
+              accessibilityRole="button"
+              accessibilityLabel="Cancel proposed task update"
+            >
+              <Text style={styles.proposedTaskCancelText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        ) : (
+          <View
+            style={[
+              styles.proposedTaskStatusPill,
+              status === 'cancelled' && styles.proposedTaskStatusPillMuted,
+            ]}
+          >
+            <Text
+              style={[
+                styles.proposedTaskStatusText,
+                status === 'cancelled' && styles.proposedTaskStatusTextMuted,
+              ]}
+            >
+              {status === 'updated' ? 'Updated' : 'Cancelled'}
+            </Text>
+          </View>
+        )}
+      </View>
+    );
+  };
+
   const renderTalkMessage = (message: MiloTalkMessage) => {
     if (message.role === 'user') {
       return (
@@ -1006,6 +1521,10 @@ export default function MiloChatScreen() {
             >
               {message.text}
             </Text>
+
+            {message.proposedTaskUpdate
+              ? renderProposedTaskUpdateCard(message)
+              : null}
 
             {message.proposedTask ? renderProposedTaskCard(message) : null}
 
@@ -1395,6 +1914,66 @@ const styles = StyleSheet.create({
   },
   proposedTaskStatusTextMuted: {
     color: theme.colors.textSoft,
+  },
+  taskUpdateCard: {
+    marginTop: 12,
+    borderRadius: 18,
+    backgroundColor: '#F7FBF6',
+    borderWidth: 1,
+    borderColor: '#DCEADC',
+    paddingHorizontal: 11,
+    paddingVertical: 11,
+  },
+  taskUpdateReason: {
+    marginTop: 9,
+    color: theme.colors.textSoft,
+    fontSize: 11,
+    fontWeight: '800',
+    lineHeight: 16,
+  },
+  taskUpdateRows: {
+    marginTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: '#E6EEE3',
+  },
+  taskUpdateRow: {
+    borderBottomWidth: 1,
+    borderBottomColor: '#E6EEE3',
+    paddingVertical: 8,
+  },
+  taskUpdateLabel: {
+    color: theme.colors.primaryDark,
+    fontSize: 10,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+    marginBottom: 6,
+  },
+  taskUpdateValues: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+  },
+  taskUpdateValueBox: {
+    flex: 1,
+    minWidth: 0,
+    borderRadius: 12,
+    backgroundColor: theme.colors.white,
+    borderWidth: 1,
+    borderColor: '#E6EEE3',
+    paddingHorizontal: 8,
+    paddingVertical: 7,
+  },
+  taskUpdateValueLabel: {
+    color: theme.colors.textSoft,
+    fontSize: 9,
+    fontWeight: '900',
+    marginBottom: 3,
+  },
+  taskUpdateValueText: {
+    color: '#111827',
+    fontSize: 10,
+    fontWeight: '900',
+    lineHeight: 14,
   },
   miloTalkTaskCard: {
     marginTop: 12,

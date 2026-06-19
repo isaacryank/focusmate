@@ -43,11 +43,30 @@ export type MiloAiProposedTask = {
   meeting_link?: string | null;
 };
 
+export type MiloAiTaskUpdateChanges = {
+  title?: string;
+  description?: string | null;
+  type?: Task['plannerType'];
+  priority?: Task['priority'];
+  due_date?: string | null;
+  due_time?: string | null;
+  estimated_duration_minutes?: number | null;
+  location?: string | null;
+  meeting_link?: string | null;
+};
+
+export type MiloAiProposedTaskUpdate = {
+  taskId: string;
+  changes: MiloAiTaskUpdateChanges;
+  reason?: string | null;
+};
+
 export type MiloAiResponse = {
   text: string;
   relatedTaskId?: string | null;
   suggestedActions?: MiloAiSuggestedAction[];
   proposedTask?: MiloAiProposedTask | null;
+  proposedTaskUpdate?: MiloAiProposedTaskUpdate | null;
   usedAi: boolean;
 };
 
@@ -178,6 +197,104 @@ function sanitizeMiloAiProposedTask(
   };
 }
 
+function addTextUpdateChange(
+  changes: MiloAiTaskUpdateChanges,
+  key: keyof Pick<
+    MiloAiTaskUpdateChanges,
+    'title' | 'description' | 'due_date' | 'due_time' | 'location' | 'meeting_link'
+  >,
+  value: unknown,
+  maxLength: number
+) {
+  const text = trimUnknownText(value, maxLength);
+
+  if (text) {
+    changes[key] = text;
+  }
+}
+
+function sanitizeMiloAiProposedTaskUpdate(
+  proposedTaskUpdate: unknown
+): MiloAiProposedTaskUpdate | null {
+  if (
+    !proposedTaskUpdate ||
+    typeof proposedTaskUpdate !== 'object' ||
+    Array.isArray(proposedTaskUpdate)
+  ) {
+    return null;
+  }
+
+  const update = proposedTaskUpdate as Record<string, unknown>;
+  const taskId = trimUnknownText(update.taskId, 80);
+  const rawChanges = update.changes;
+
+  if (
+    !taskId ||
+    !rawChanges ||
+    typeof rawChanges !== 'object' ||
+    Array.isArray(rawChanges)
+  ) {
+    return null;
+  }
+
+  const updateChanges = rawChanges as Record<string, unknown>;
+  const changes: MiloAiTaskUpdateChanges = {};
+
+  addTextUpdateChange(changes, 'title', updateChanges.title, MAX_TITLE_LENGTH);
+  addTextUpdateChange(
+    changes,
+    'description',
+    updateChanges.description,
+    MAX_DESCRIPTION_LENGTH
+  );
+
+  if (
+    updateChanges.type === 'task' ||
+    updateChanges.type === 'meeting' ||
+    updateChanges.type === 'date'
+  ) {
+    changes.type = updateChanges.type;
+  }
+
+  if (
+    updateChanges.priority === 'low' ||
+    updateChanges.priority === 'medium' ||
+    updateChanges.priority === 'high'
+  ) {
+    changes.priority = updateChanges.priority;
+  }
+
+  addTextUpdateChange(changes, 'due_date', updateChanges.due_date, 20);
+  addTextUpdateChange(changes, 'due_time', updateChanges.due_time, 30);
+
+  if (
+    typeof updateChanges.estimated_duration_minutes === 'number' &&
+    Number.isFinite(updateChanges.estimated_duration_minutes) &&
+    updateChanges.estimated_duration_minutes > 0
+  ) {
+    changes.estimated_duration_minutes =
+      updateChanges.estimated_duration_minutes;
+  }
+
+  addTextUpdateChange(
+    changes,
+    'location',
+    updateChanges.location,
+    MAX_LOCATION_LENGTH
+  );
+  addTextUpdateChange(changes, 'meeting_link', updateChanges.meeting_link, 300);
+
+  if (Object.keys(changes).length === 0) {
+    return null;
+  }
+
+  return {
+    taskId,
+    changes,
+    reason: trimUnknownText(update.reason, MAX_DESCRIPTION_LENGTH) || null,
+  };
+}
+
 function getTaskSortKey(task: Task) {
   return [task.dueDate || '9999-99-99', task.dueTime || '99:99'].join(' ');
 }
@@ -286,6 +403,9 @@ export async function askMiloAi({
       ? data.suggestedActions
       : [],
     proposedTask: sanitizeMiloAiProposedTask(data.proposedTask),
+    proposedTaskUpdate: sanitizeMiloAiProposedTaskUpdate(
+      data.proposedTaskUpdate
+    ),
     usedAi: data.usedAi === true,
   };
 }
