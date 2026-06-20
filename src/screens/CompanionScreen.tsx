@@ -1718,6 +1718,16 @@ export default function CompanionScreen() {
     navigation.navigate('MiloChat');
   };
 
+  const handleOpenOldMessages = async () => {
+    try {
+      await Haptics.selectionAsync();
+    } catch {
+      // Navigation should still work when haptics are unavailable.
+    }
+
+    navigation.navigate('MiloChatHistory');
+  };
+
   const handleMiloTap = async () => {
     const currentIndex = tapMessageIndexRef.current % tapMessages.length;
     tapMessageIndexRef.current = (currentIndex + 1) % tapMessages.length;
@@ -2840,29 +2850,27 @@ export default function CompanionScreen() {
             </TouchableOpacity>
 
             <TouchableOpacity
-              activeOpacity={1}
-              disabled
+              activeOpacity={0.84}
               style={[
                 styles.oldMessagesButton,
-                styles.oldMessagesButtonDisabled,
                 stackTalkCard && styles.talkActionButtonCompact,
               ]}
+              onPress={handleOpenOldMessages}
               accessibilityRole="button"
-              accessibilityState={{ disabled: true }}
-              accessibilityLabel="Chat history coming soon"
+              accessibilityLabel="Open old Milo messages"
             >
               <Ionicons
                 name="time-outline"
                 size={18}
-                color={theme.colors.muted}
+                color={theme.colors.primaryDark}
               />
               <Text
                 numberOfLines={1}
                 adjustsFontSizeToFit
-                minimumFontScale={0.62}
-                style={[styles.oldMessagesText, styles.oldMessagesTextDisabled]}
+                minimumFontScale={0.72}
+                style={styles.oldMessagesText}
               >
-                Chat history coming soon
+                Old messages
               </Text>
             </TouchableOpacity>
           </View>

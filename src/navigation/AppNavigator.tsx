@@ -24,6 +24,7 @@ import TaskDetailsScreen from '../screens/TaskDetailsScreen';
 import EditTaskScreen from '../screens/EditTaskScreen';
 import MiloPlanScreen from '../screens/MiloPlanScreen';
 import MiloChatScreen from '../screens/MiloChatScreen';
+import MiloChatHistoryScreen from '../screens/MiloChatHistoryScreen';
 import FocusSessionScreen from '../screens/FocusSessionScreen';
 import TodayPlanScreen from '../screens/TodayPlanScreen';
 import ReminderCenterScreen from '../screens/ReminderCenterScreen';
@@ -301,6 +302,12 @@ export default function AppNavigator() {
               name="MiloChat"
               component={MiloChatScreen}
               options={{ headerShown: false }}
+            />
+
+            <RootStack.Screen
+              name="MiloChatHistory"
+              component={MiloChatHistoryScreen}
+              options={{ title: 'Old messages' }}
             />
 
             <RootStack.Screen

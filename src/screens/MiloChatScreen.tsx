@@ -7,6 +7,7 @@ import React, {
   useState,
 } from 'react';
 import {
+  Alert,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
@@ -18,7 +19,12 @@ import {
 } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import { Ionicons } from '@expo/vector-icons';
-import { useFocusEffect, useNavigation } from '@react-navigation/native';
+import {
+  RouteProp,
+  useFocusEffect,
+  useNavigation,
+  useRoute,
+} from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { theme } from '../theme';
@@ -53,7 +59,17 @@ import {
   normalizeMeetingUrl,
   openMeetingLink,
 } from '../lib/meetingLinkUtils';
+import {
+  archiveCurrentMiloChat,
+  clearCurrentMiloChat,
+  loadMiloChatSession,
+  saveCurrentMiloChat,
+  type MiloChatStorageMessage,
+  type MiloChatStoredProposalStatus,
+  type MiloChatStoredTaskSnapshot,
+} from '../lib/miloChatStorage';
 import type { FocusSession } from '../types/focus';
+import type { RootStackParamList } from '../types/navigation';
 import type { Task } from '../types/task';
 
 import MiloMoodImage from '../components/milo/MiloMoodImage';
@@ -101,6 +117,17 @@ const miloTalkSuggestions = [
   'Help me prepare',
   'Find resources',
 ];
+
+function createInitialMiloTalkMessages(): MiloTalkMessage[] {
+  return [
+    {
+      id: 'milo-initial-message',
+      role: 'milo',
+      text: MILO_TALK_INITIAL_TEXT,
+      createdAt: new Date().toISOString(),
+    },
+  ];
+}
 
 const talkActionIcons: Record<MiloBrainAction['type'], IconName> = {
   viewTask: 'document-text-outline',
@@ -183,6 +210,179 @@ function buildMiloTalkTaskSummary(task: Task) {
   return `${titleCase(typeLabel)} | ${titleCase(task.priority)} priority | ${
     dueLabel || 'No due time'
   }`;
+}
+
+function buildStoredTaskSnapshot(
+  task?: Task
+): MiloChatStoredTaskSnapshot | undefined {
+  if (!task) {
+    return undefined;
+  }
+
+  return {
+    id: task.id,
+    title: task.title,
+    description: task.description,
+    dueDate: task.dueDate,
+    dueTime: task.dueTime,
+    location: task.location,
+    plannerType: task.plannerType,
+    priority: task.priority,
+    estimatedDurationMinutes: task.estimatedDurationMinutes,
+    status: task.status,
+    createdAt: task.createdAt,
+  };
+}
+
+function restoreStoredTaskSnapshot(
+  snapshot?: MiloChatStoredTaskSnapshot
+): Task | undefined {
+  if (!snapshot) {
+    return undefined;
+  }
+
+  return {
+    ...snapshot,
+    subtasks: [],
+  };
+}
+
+function getStoredMessageRelatedTaskId(message: MiloTalkMessage) {
+  return (
+    message.relatedTask?.id ||
+    message.actions?.find((action) => action.taskId)?.taskId ||
+    message.proposedTaskUpdate?.taskId ||
+    message.proposedTaskCompletion?.taskId ||
+    message.proposedTaskDeletion?.taskId ||
+    message.smartNudge?.taskId ||
+    message.miloInsight?.nextBestTaskId ||
+    null
+  );
+}
+
+function serializeMiloTalkMessages(
+  messages: MiloTalkMessage[]
+): MiloChatStorageMessage[] {
+  return messages
+    .filter((message) => !message.isTyping && message.text.trim())
+    .map((message) => ({
+      id: message.id,
+      role: message.role,
+      text: message.text,
+      createdAt: message.createdAt,
+      relatedTaskId: getStoredMessageRelatedTaskId(message),
+      relatedTaskSummary: message.relatedTaskSummary,
+      actions: message.actions?.map((action) => ({
+        type: action.type,
+        label: action.label,
+        taskId: action.taskId,
+        location: action.location,
+      })),
+      proposedTask: message.proposedTask,
+      proposedTaskStatus: message.proposedTaskStatus,
+      proposedTaskSourceText: message.proposedTaskSourceText,
+      proposedTaskUpdate: message.proposedTaskUpdate,
+      proposedTaskUpdateStatus: message.proposedTaskUpdateStatus,
+      proposedTaskCompletion: message.proposedTaskCompletion,
+      proposedTaskCompletionStatus: message.proposedTaskCompletionStatus,
+      proposedTaskDeletion: message.proposedTaskDeletion,
+      proposedTaskDeletionStatus: message.proposedTaskDeletionStatus,
+      proposedTaskDeletionSnapshot: buildStoredTaskSnapshot(
+        message.proposedTaskDeletionSnapshot
+      ),
+      smartPlan: message.smartPlan,
+      smartNudge: message.smartNudge,
+      timelineInsight: message.timelineInsight,
+      miloInsight: message.miloInsight,
+    }));
+}
+
+function getMiloChatStorageSignature(messages: MiloChatStorageMessage[]) {
+  return JSON.stringify(messages);
+}
+
+function getProposedTaskStatus(
+  status?: MiloChatStoredProposalStatus
+): MiloProposedTaskStatus | undefined {
+  return status === 'pending' || status === 'created' || status === 'cancelled'
+    ? status
+    : undefined;
+}
+
+function getProposedTaskUpdateStatus(
+  status?: MiloChatStoredProposalStatus
+): MiloProposedTaskUpdateStatus | undefined {
+  return status === 'pending' || status === 'updated' || status === 'cancelled'
+    ? status
+    : undefined;
+}
+
+function getProposedTaskCompletionStatus(
+  status?: MiloChatStoredProposalStatus
+): MiloProposedTaskCompletionStatus | undefined {
+  return status === 'pending' ||
+    status === 'completed' ||
+    status === 'cancelled'
+    ? status
+    : undefined;
+}
+
+function getProposedTaskDeletionStatus(
+  status?: MiloChatStoredProposalStatus
+): MiloProposedTaskDeletionStatus | undefined {
+  return status === 'pending' || status === 'removed' || status === 'cancelled'
+    ? status
+    : undefined;
+}
+
+function hydrateMiloTalkMessages(
+  storedMessages: MiloChatStorageMessage[],
+  tasks: Task[]
+): MiloTalkMessage[] {
+  return storedMessages.map((message) => {
+    const relatedTask = message.relatedTaskId
+      ? tasks.find((task) => task.id === message.relatedTaskId)
+      : undefined;
+
+    return {
+      id: message.id,
+      role: message.role,
+      text: message.text,
+      createdAt: message.createdAt,
+      relatedTask,
+      relatedTaskSummary: relatedTask
+        ? buildMiloTalkTaskSummary(relatedTask)
+        : message.relatedTaskSummary,
+      actions: message.actions?.map((action) => ({
+        type: action.type,
+        label: action.label,
+        taskId: action.taskId,
+        location: action.location,
+      })),
+      proposedTask: message.proposedTask,
+      proposedTaskStatus: getProposedTaskStatus(message.proposedTaskStatus),
+      proposedTaskSourceText: message.proposedTaskSourceText,
+      proposedTaskUpdate: message.proposedTaskUpdate,
+      proposedTaskUpdateStatus: getProposedTaskUpdateStatus(
+        message.proposedTaskUpdateStatus
+      ),
+      proposedTaskCompletion: message.proposedTaskCompletion,
+      proposedTaskCompletionStatus: getProposedTaskCompletionStatus(
+        message.proposedTaskCompletionStatus
+      ),
+      proposedTaskDeletion: message.proposedTaskDeletion,
+      proposedTaskDeletionStatus: getProposedTaskDeletionStatus(
+        message.proposedTaskDeletionStatus
+      ),
+      proposedTaskDeletionSnapshot: restoreStoredTaskSnapshot(
+        message.proposedTaskDeletionSnapshot
+      ),
+      smartPlan: message.smartPlan,
+      smartNudge: message.smartNudge,
+      timelineInsight: message.timelineInsight,
+      miloInsight: message.miloInsight,
+    };
+  });
 }
 
 function userAskedForResources(message: string) {
@@ -1020,11 +1220,17 @@ function validateProposedTaskDeletionForSave({
 
 export default function MiloChatScreen() {
   const navigation = useNavigation<any>();
+  const route = useRoute<RouteProp<RootStackParamList, 'MiloChat'>>();
   const insets = useSafeAreaInsets();
   const { tasks, addTask, updateTask, toggleTask, deleteTask } = useTasks();
   const { focusSessions } = useFocus();
   const talkScrollRef = useRef<ScrollView | null>(null);
   const mountedRef = useRef(true);
+  const hasLoadedStoredChatRef = useRef(false);
+  const hasArchivedActiveChatRef = useRef(false);
+  const activeSessionIdRef = useRef<string | null>(null);
+  const loadedStoredSignatureRef = useRef<string | null>(null);
+  const latestMessagesRef = useRef<MiloTalkMessage[]>([]);
 
   const [onlineMeetingLinks, setOnlineMeetingLinks] = useState<
     OnlineMeetingLink[]
@@ -1032,14 +1238,9 @@ export default function MiloChatScreen() {
   const [miloTalkInput, setMiloTalkInput] = useState('');
   const [miloTalkBrainStatus, setMiloTalkBrainStatus] =
     useState<MiloTalkBrainStatus>('ready');
-  const [chatMessages, setChatMessages] = useState<MiloTalkMessage[]>(() => [
-    {
-      id: 'milo-initial-message',
-      role: 'milo',
-      text: MILO_TALK_INITIAL_TEXT,
-      createdAt: new Date().toISOString(),
-    },
-  ]);
+  const [chatMessages, setChatMessages] = useState<MiloTalkMessage[]>(() =>
+    createInitialMiloTalkMessages()
+  );
   const miloAiFocusStats = useMemo(
     () => buildTodayMiloAiFocusStats(focusSessions),
     [focusSessions]
@@ -1078,6 +1279,142 @@ export default function MiloChatScreen() {
     });
   };
 
+  const archiveActiveMiloChat = useCallback(async () => {
+    if (hasArchivedActiveChatRef.current) {
+      return;
+    }
+
+    const storedMessages = serializeMiloTalkMessages(latestMessagesRef.current);
+    const hasStoredUserMessage = storedMessages.some(
+      (message) => message.role === 'user'
+    );
+
+    if (!hasStoredUserMessage) {
+      await clearCurrentMiloChat();
+      return;
+    }
+
+    const storageSignature = getMiloChatStorageSignature(storedMessages);
+
+    if (
+      activeSessionIdRef.current &&
+      storageSignature === loadedStoredSignatureRef.current
+    ) {
+      await clearCurrentMiloChat();
+      return;
+    }
+
+    hasArchivedActiveChatRef.current = true;
+
+    const archivedSession = await archiveCurrentMiloChat(
+      storedMessages,
+      activeSessionIdRef.current
+    );
+
+    if (archivedSession) {
+      activeSessionIdRef.current = archivedSession.id;
+      loadedStoredSignatureRef.current = getMiloChatStorageSignature(
+        archivedSession.messages
+      );
+    }
+
+    await clearCurrentMiloChat();
+  }, []);
+
+  useEffect(() => {
+    let isCancelled = false;
+
+    const loadStoredChat = async () => {
+      hasLoadedStoredChatRef.current = false;
+      hasArchivedActiveChatRef.current = false;
+
+      try {
+        const sessionId = route.params?.sessionId;
+        let storedMessages: MiloChatStorageMessage[] = [];
+        let loadedSessionId: string | null = null;
+
+        if (sessionId) {
+          const selectedSession = await loadMiloChatSession(sessionId);
+          storedMessages = selectedSession?.messages || [];
+          loadedSessionId = selectedSession?.id || null;
+        } else {
+          await clearCurrentMiloChat();
+        }
+
+        if (isCancelled || !mountedRef.current) {
+          return;
+        }
+
+        const nextMessages = storedMessages.length
+          ? hydrateMiloTalkMessages(storedMessages, tasks)
+          : createInitialMiloTalkMessages();
+
+        setChatMessages(nextMessages);
+        setMiloTalkBrainStatus('ready');
+        setMiloTalkInput('');
+        activeSessionIdRef.current = loadedSessionId;
+        loadedStoredSignatureRef.current = storedMessages.length
+          ? getMiloChatStorageSignature(storedMessages)
+          : null;
+        latestMessagesRef.current = nextMessages;
+        hasLoadedStoredChatRef.current = true;
+        scrollTalkToBottom();
+      } catch (error) {
+        console.log('Failed to restore Milo chat:', error);
+
+        if (!isCancelled && mountedRef.current) {
+          setChatMessages(createInitialMiloTalkMessages());
+          activeSessionIdRef.current = null;
+          loadedStoredSignatureRef.current = null;
+          hasLoadedStoredChatRef.current = true;
+        }
+      }
+    };
+
+    void loadStoredChat();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [route.params?.sessionId]);
+
+  useEffect(() => {
+    latestMessagesRef.current = chatMessages;
+
+    if (!hasLoadedStoredChatRef.current) {
+      return;
+    }
+
+    const saveStoredChat = async () => {
+      try {
+        const storedMessages = serializeMiloTalkMessages(chatMessages);
+        const hasStoredUserMessage = storedMessages.some(
+          (message) => message.role === 'user'
+        );
+
+        if (hasStoredUserMessage) {
+          await saveCurrentMiloChat(storedMessages);
+        } else {
+          await clearCurrentMiloChat();
+        }
+      } catch (error) {
+        console.log('Failed to save Milo chat:', error);
+      }
+    };
+
+    void saveStoredChat();
+  }, [chatMessages]);
+
+  useFocusEffect(
+    useCallback(() => {
+      hasArchivedActiveChatRef.current = false;
+
+      return () => {
+        void archiveActiveMiloChat();
+      };
+    }, [archiveActiveMiloChat])
+  );
+
   const handleSend = async (message = miloTalkInput) => {
     const prompt = message.trim();
 
@@ -1092,6 +1429,8 @@ export default function MiloChatScreen() {
     }
 
     if (!mountedRef.current) return;
+
+    hasArchivedActiveChatRef.current = false;
 
     const userCreatedAt = new Date();
     const userMessage: MiloTalkMessage = {
@@ -1247,6 +1586,40 @@ export default function MiloChatScreen() {
     (message) => message.role === 'user'
   );
   const showMiloTalkSuggestions = !hasUserMessages;
+
+  const handleStartNewChat = async () => {
+    try {
+      await Haptics.selectionAsync();
+    } catch {
+      // Starting a new local chat should still work without haptics.
+    }
+
+    try {
+      if (hasUserMessages) {
+        await archiveCurrentMiloChat(
+          serializeMiloTalkMessages(chatMessages),
+          activeSessionIdRef.current
+        );
+      }
+
+      const nextMessages = createInitialMiloTalkMessages();
+      await clearCurrentMiloChat();
+      activeSessionIdRef.current = null;
+      loadedStoredSignatureRef.current = null;
+      latestMessagesRef.current = nextMessages;
+      hasArchivedActiveChatRef.current = false;
+      setChatMessages(nextMessages);
+      setMiloTalkInput('');
+      setMiloTalkBrainStatus('ready');
+      scrollTalkToBottom();
+    } catch (error) {
+      console.log('Failed to start a new Milo chat:', error);
+      Alert.alert(
+        'Could not start a new chat',
+        'Milo could not save this chat just now. Please try again.'
+      );
+    }
+  };
 
   const handleOpenResourceFinder = (task?: Task) => {
     navigation.navigate('MainTabs', {
@@ -2635,7 +3008,20 @@ export default function MiloChatScreen() {
           </Text>
         </View>
 
-        <View style={styles.headerButtonSpacer} />
+        <TouchableOpacity
+          activeOpacity={0.82}
+          style={styles.headerNewChatButton}
+          onPress={() => void handleStartNewChat()}
+          accessibilityRole="button"
+          accessibilityLabel="Start a new Milo chat"
+        >
+          <Ionicons
+            name="add-circle-outline"
+            size={17}
+            color={theme.colors.primaryDark}
+          />
+          <Text style={styles.headerNewChatText}>New</Text>
+        </TouchableOpacity>
       </View>
 
       <ScrollView
@@ -2745,6 +3131,24 @@ const styles = StyleSheet.create({
   headerButtonSpacer: {
     width: 42,
     height: 42,
+  },
+  headerNewChatButton: {
+    minWidth: 58,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: theme.colors.primarySoft,
+    borderWidth: 1,
+    borderColor: '#D6EBDD',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 9,
+    gap: 4,
+  },
+  headerNewChatText: {
+    color: theme.colors.primaryDark,
+    fontSize: 11,
+    fontWeight: '900',
   },
   headerCopy: {
     flex: 1,

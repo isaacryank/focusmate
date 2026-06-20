@@ -16,7 +16,8 @@ export type RootStackParamList = {
     MiloPlan: {
       taskId: string;
     };
-    MiloChat: undefined;
+    MiloChat: { sessionId?: string } | undefined;
+    MiloChatHistory: undefined;
     FocusSession: { taskId?: string } | undefined;
     TodayPlan: undefined;
     ReminderCenter: undefined;
