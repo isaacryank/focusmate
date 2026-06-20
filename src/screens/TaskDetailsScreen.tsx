@@ -12,7 +12,6 @@ import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 
 import { RootStackParamList } from '../types/navigation';
-import { MiloSmartPlanStep, Subtask } from '../types/task';
 import { theme } from '../theme';
 import { useTasks } from '../lib/TaskContext';
 import { getMiloReaction } from '../lib/miloReaction';
@@ -30,11 +29,16 @@ import {
   normalizeMeetingUrl,
   openMeetingLink,
 } from '../lib/meetingLinkUtils';
+import { calculateMiloUrgency } from '../lib/miloSmartPlan';
+import { loadMiloAiSettings } from '../lib/miloAiSettings';
+import { generateMiloTaskSmartPlan } from '../lib/miloTaskPlanClient';
 import {
-  calculateMiloUrgency,
-  generateMiloSmartNudges,
-  generateMiloSmartPlan,
-} from '../lib/miloSmartPlan';
+  createLocalTaskPlan,
+  loadMiloTaskPlan,
+  saveMiloTaskPlan,
+  type MiloTaskPlan,
+  type MiloTaskPlanStep,
+} from '../lib/miloTaskPlanStorage';
 
 import ScreenContainer from '../components/ui/ScreenContainer';
 import EmptyState from '../components/ui/EmptyState';
@@ -46,8 +50,10 @@ type Props = NativeStackScreenProps<RootStackParamList, 'TaskDetails'>;
 type DisplayPlanItem = {
   id: string;
   title: string;
+  detail?: string | null;
   completed: boolean;
-  source: 'subtask' | 'smart';
+  status: MiloTaskPlanStep['status'];
+  source: 'smart';
 };
 
 type DetailTab = 'plan' | 'nudges' | 'timeline';
@@ -93,6 +99,43 @@ function toneColor(value: string) {
   if (normalized === 'high') return theme.colors.danger;
   if (normalized === 'medium') return '#F59E0B';
   return theme.colors.primaryDark;
+}
+
+function getPlanStatusLabel(status: MiloTaskPlanStep['status']) {
+  if (status === 'done') return 'Done';
+  if (status === 'in_progress') return 'In progress';
+  return 'To do';
+}
+
+function formatPlanStepMeta(item: DisplayPlanItem) {
+  const statusLabel = getPlanStatusLabel(item.status);
+
+  return item.detail ? `${statusLabel} - ${item.detail}` : statusLabel;
+}
+
+function normalizePlanStepStatuses(
+  steps: MiloTaskPlanStep[]
+): MiloTaskPlanStep[] {
+  let hasActiveStep = false;
+
+  return steps.map((step) => {
+    if (step.status === 'done') {
+      return step;
+    }
+
+    if (!hasActiveStep) {
+      hasActiveStep = true;
+      return {
+        ...step,
+        status: 'in_progress',
+      };
+    }
+
+    return {
+      ...step,
+      status: 'todo',
+    };
+  });
 }
 
 function Header({
@@ -308,7 +351,7 @@ function CompactButton({
 }
 
 export default function TaskDetailsScreen({ navigation, route }: Props) {
-  const { tasks, toggleTask, deleteTask, updateTask } = useTasks();
+  const { tasks, toggleTask, deleteTask } = useTasks();
   const [activeTab, setActiveTab] = useState<DetailTab>('plan');
   const [showAllPlanSteps, setShowAllPlanSteps] = useState(false);
   const [notice, setNotice] = useState<{
@@ -322,6 +365,9 @@ export default function TaskDetailsScreen({ navigation, route }: Props) {
   const [meetingLinkInput, setMeetingLinkInput] = useState('');
   const [meetingLinkError, setMeetingLinkError] = useState('');
   const [isSavingMeetingLink, setIsSavingMeetingLink] = useState(false);
+  const [generatedTaskPlan, setGeneratedTaskPlan] =
+    useState<MiloTaskPlan | null>(null);
+  const [isGeneratingTaskPlan, setIsGeneratingTaskPlan] = useState(false);
 
   const task = tasks.find((item) => item.id === route.params.taskId);
 
@@ -354,6 +400,37 @@ export default function TaskDetailsScreen({ navigation, route }: Props) {
     };
   }, [task?.id]);
 
+  useEffect(() => {
+    let isMounted = true;
+
+    setShowAllPlanSteps(false);
+
+    if (!task?.id) {
+      setGeneratedTaskPlan(null);
+      return () => {
+        isMounted = false;
+      };
+    }
+
+    loadMiloTaskPlan(task.id)
+      .then((savedPlan) => {
+        if (isMounted) {
+          setGeneratedTaskPlan(savedPlan);
+        }
+      })
+      .catch((error) => {
+        console.warn('Failed to load Milo task plan:', error);
+
+        if (isMounted) {
+          setGeneratedTaskPlan(null);
+        }
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [task?.id]);
+
   const detectedMeetingProvider = useMemo(() => {
     if (!meetingLinkInput.trim()) {
       return null;
@@ -370,12 +447,16 @@ export default function TaskDetailsScreen({ navigation, route }: Props) {
     return getMiloReaction([task]);
   }, [task]);
 
-  const suggestedSmartPlan = useMemo(() => {
-    if (!task) return [];
-    return task.miloSmartPlan && task.miloSmartPlan.length > 0
-      ? task.miloSmartPlan
-      : generateMiloSmartPlan(task);
-  }, [task]);
+  const hasOnlineMeetingLink = Boolean(onlineMeetingLink);
+  const displayTaskPlan = useMemo(() => {
+    if (!task) {
+      return null;
+    }
+
+    return generatedTaskPlan?.taskId === task.id
+      ? generatedTaskPlan
+      : createLocalTaskPlan(task, { hasMeetingLink: hasOnlineMeetingLink });
+  }, [generatedTaskPlan, hasOnlineMeetingLink, task]);
 
   if (!task || !miloData) {
     return (
@@ -391,27 +472,24 @@ export default function TaskDetailsScreen({ navigation, route }: Props) {
     );
   }
 
-  const subtasks = task.subtasks || [];
-  const hasSubtasks = subtasks.length > 0;
-  const planItems: DisplayPlanItem[] = hasSubtasks
-    ? subtasks.map((item) => ({
-        id: item.id,
-        title: item.title,
-        completed: item.completed,
-        source: 'subtask',
-      }))
-    : suggestedSmartPlan.map((item) => ({
-        id: item.id,
-        title: item.title,
-        completed: false,
-        source: 'smart',
-      }));
+  const planItems: DisplayPlanItem[] =
+    displayTaskPlan?.plan.steps.map((item) => ({
+      id: item.id,
+      title: item.label,
+      detail: item.detail,
+      completed: item.status === 'done',
+      status: item.status,
+      source: 'smart',
+    })) || [];
 
   const completedPlanItems = planItems.filter((item) => item.completed).length;
   const progress =
     planItems.length > 0 ? Math.round((completedPlanItems / planItems.length) * 100) : 0;
   const miloUrgency = task.miloUrgency || calculateMiloUrgency(task);
-  const smartNudges = task.miloSmartNudges || generateMiloSmartNudges(task);
+  const smartNudges = displayTaskPlan?.nudges || [];
+  const miloInsight = displayTaskPlan?.insight;
+  const planSourceLabel =
+    displayTaskPlan?.source === 'ai' ? 'AI generated' : 'Local plan';
   const joinUrl = onlineMeetingLink?.url;
   const onlineMeetingLabel =
     onlineMeetingLink?.label ||
@@ -421,11 +499,9 @@ export default function TaskDetailsScreen({ navigation, route }: Props) {
   const heroMessage =
     task.status === 'completed'
       ? 'You did it. Milo is proud'
-      : smartNudges.length > 1
-      ? 'Your smart plan is ready. Milo can nudge you too.'
-      : task.miloSmartPlan?.length
-      ? 'Milo made a plan and a few nudges for you.'
-      : 'I made a little plan for you';
+      : displayTaskPlan?.source === 'ai'
+      ? 'Your AI smart plan is ready. Milo can nudge you too.'
+      : 'I made a little local plan for you';
 
   const focusActionLabel =
     task.plannerType === 'meeting'
@@ -443,18 +519,13 @@ export default function TaskDetailsScreen({ navigation, route }: Props) {
       ? 'Mark Done'
       : 'Mark Ready';
 
-  const timelineItems = [
-    ...smartNudges.slice(0, 3).map((nudge) => ({
-      id: `nudge-${nudge.id}`,
-      title: nudge.label,
-      detail: nudge.timing,
-    })),
-    ...planItems.slice(0, 3).map((item) => ({
-      id: `plan-${item.id}`,
-      title: item.title,
-      detail: item.completed ? 'Done' : 'Upcoming',
-    })),
-  ].slice(0, 5);
+  const timelineItems =
+    displayTaskPlan?.timeline.map((item) => ({
+      id: item.id,
+      title: item.label,
+      detail: item.detail || 'When ready',
+      statusLabel: item.statusLabel || 'Upcoming',
+    })) || [];
 
   const handleDelete = () => {
     Alert.alert(
@@ -506,87 +577,106 @@ export default function TaskDetailsScreen({ navigation, route }: Props) {
     });
   };
 
-  const createSubtasksFromPlan = (
-    plan: MiloSmartPlanStep[],
-    toggledId?: string
-  ): Subtask[] =>
-    plan.map((step, index) => ({
-      id: `${Date.now()}-${index}`,
-      title: step.title,
-      completed: step.id === toggledId,
-      createdAt: new Date().toISOString(),
-    }));
-
   const handleTogglePlanItem = async (item: DisplayPlanItem) => {
-    if (item.source === 'smart') {
-      await updateTask(task.id, {
-        subtasks: createSubtasksFromPlan(suggestedSmartPlan, item.id),
-        miloSmartPlan: suggestedSmartPlan,
-      });
+    if (!displayTaskPlan) {
       return;
     }
 
-    const nextSubtasks = subtasks.map((subtask) =>
-      subtask.id === item.id
-        ? {
-            ...subtask,
-            completed: !subtask.completed,
-          }
-        : subtask
+    const nextSteps = normalizePlanStepStatuses(
+      displayTaskPlan.plan.steps.map((step) =>
+        step.id === item.id
+          ? {
+              ...step,
+              status: step.status === 'done' ? 'todo' : 'done',
+            }
+          : step
+      )
     );
-
-    await updateTask(task.id, {
-      subtasks: nextSubtasks,
+    const savedPlan = await saveMiloTaskPlan(task.id, {
+      ...displayTaskPlan,
+      generatedAt: new Date().toISOString(),
+      plan: {
+        ...displayTaskPlan.plan,
+        steps: nextSteps,
+      },
     });
+
+    setGeneratedTaskPlan(savedPlan);
   };
 
   const handleRegeneratePlan = async () => {
-    const nextPlan = generateMiloSmartPlan(task);
-    const nextSubtasks: Subtask[] = nextPlan.map((step, index) => {
-      const existing = subtasks.find(
-        (item) => item.title.trim().toLowerCase() === step.title.trim().toLowerCase()
-      );
+    if (isGeneratingTaskPlan) {
+      return;
+    }
 
-      return (
-        existing || {
-          id: `${Date.now()}-${index}`,
-          title: step.title,
-          completed: false,
-          createdAt: new Date().toISOString(),
-        }
-      );
-    });
+    setIsGeneratingTaskPlan(true);
 
-    await updateTask(task.id, {
-      subtasks: nextSubtasks,
-      miloSmartPlan: nextPlan,
-      miloSmartNudges: generateMiloSmartNudges(task),
-      miloUrgency: calculateMiloUrgency(task),
-    });
+    try {
+      const aiSettings = await loadMiloAiSettings();
+      const nextPlan = await generateMiloTaskSmartPlan({
+        task,
+        aiSettings,
+        relatedTasks: tasks.filter((item) => item.id !== task.id),
+        hasMeetingLink: hasOnlineMeetingLink,
+      });
+      const savedPlan = await saveMiloTaskPlan(task.id, nextPlan);
 
-    setNotice({
-      type: 'success',
-      title: 'Milo refreshed the plan',
-      message: 'Milo found a few tiny steps to make this easier.',
-    });
+      setGeneratedTaskPlan(savedPlan);
+      setShowAllPlanSteps(false);
+      setNotice({
+        type: 'success',
+        title:
+          savedPlan.source === 'ai'
+            ? 'Milo refreshed with AI'
+            : 'Milo refreshed locally',
+        message:
+          aiSettings.aiMode === 'online' && savedPlan.source === 'local'
+            ? 'AI was not available, so Milo used the local safety plan.'
+            : 'Milo found a few tiny steps to make this easier.',
+      });
+    } catch (error) {
+      console.warn('Failed to regenerate Milo task plan:', error);
+
+      const localPlan = createLocalTaskPlan(task, {
+        hasMeetingLink: hasOnlineMeetingLink,
+      });
+      const savedPlan = await saveMiloTaskPlan(task.id, localPlan);
+
+      setGeneratedTaskPlan(savedPlan);
+      setNotice({
+        type: 'info',
+        title: 'Milo used a local plan',
+        message: 'The safe local plan is ready on this device.',
+      });
+    } finally {
+      setIsGeneratingTaskPlan(false);
+    }
   };
 
   const handleAddChecklistItem = async () => {
-    const baseSubtasks = hasSubtasks
-      ? subtasks
-      : createSubtasksFromPlan(suggestedSmartPlan);
+    if (!displayTaskPlan) {
+      return;
+    }
 
-    const nextItem: Subtask = {
-      id: `${Date.now()}`,
-      title: `New small step ${baseSubtasks.length + 1}`,
-      completed: false,
-      createdAt: new Date().toISOString(),
-    };
-
-    await updateTask(task.id, {
-      subtasks: [...baseSubtasks, nextItem],
-      miloSmartPlan: suggestedSmartPlan,
+    const savedPlan = await saveMiloTaskPlan(task.id, {
+      ...displayTaskPlan,
+      generatedAt: new Date().toISOString(),
+      plan: {
+        ...displayTaskPlan.plan,
+        steps: normalizePlanStepStatuses([
+          ...displayTaskPlan.plan.steps,
+          {
+            id: `${task.id}-manual-step-${Date.now()}`,
+            label: `New small step ${displayTaskPlan.plan.steps.length + 1}`,
+            detail: 'Add your own tiny next move.',
+            status: 'todo',
+          },
+        ]),
+      },
     });
+
+    setGeneratedTaskPlan(savedPlan);
+    setShowAllPlanSteps(true);
   };
 
   const closeMeetingModal = () => {
@@ -929,7 +1019,12 @@ export default function TaskDetailsScreen({ navigation, route }: Props) {
       {activeTab === 'plan' ? (
         <View style={styles.planCard}>
           <View style={styles.cardHeader}>
-            <Text style={styles.cardTitle}>Milo Smart Plan</Text>
+            <View style={styles.cardTitleBlock}>
+              <Text style={styles.cardTitle}>
+                {displayTaskPlan?.plan.title || 'Milo Smart Plan'}
+              </Text>
+              <Text style={styles.planSourceText}>{planSourceLabel}</Text>
+            </View>
             <View style={styles.countBadge}>
               <Text style={styles.countBadgeText}>{planItems.length} steps</Text>
             </View>
@@ -946,12 +1041,10 @@ export default function TaskDetailsScreen({ navigation, route }: Props) {
           </View>
 
           <View style={styles.checklistList}>
-            {displayPlanItems.map((item, index) => (
+            {displayPlanItems.map((item) => (
               <View key={`${item.source}-${item.id}`} style={styles.planStepWrap}>
                 <ChecklistItem item={item} onToggle={() => handleTogglePlanItem(item)} />
-                <Text style={styles.planStepStatus}>
-                  {item.completed ? 'Done' : index === completedPlanItems ? 'In progress' : 'To do'}
-                </Text>
+                <Text style={styles.planStepStatus}>{formatPlanStepMeta(item)}</Text>
               </View>
             ))}
           </View>
@@ -980,6 +1073,7 @@ export default function TaskDetailsScreen({ navigation, route }: Props) {
               activeOpacity={0.85}
               style={styles.planActionButton}
               onPress={handleAddChecklistItem}
+              disabled={isGeneratingTaskPlan}
             >
               <Ionicons name="add" size={16} color={theme.colors.primaryDark} />
               <Text style={styles.planActionText}>Add step</Text>
@@ -987,11 +1081,21 @@ export default function TaskDetailsScreen({ navigation, route }: Props) {
 
             <TouchableOpacity
               activeOpacity={0.85}
-              style={styles.planActionButton}
+              style={[
+                styles.planActionButton,
+                isGeneratingTaskPlan && styles.planActionButtonDisabled,
+              ]}
               onPress={handleRegeneratePlan}
+              disabled={isGeneratingTaskPlan}
             >
-              <Ionicons name="sparkles-outline" size={16} color={theme.colors.primaryDark} />
-              <Text style={styles.planActionText}>Regenerate</Text>
+              <Ionicons
+                name={isGeneratingTaskPlan ? 'hourglass-outline' : 'sparkles-outline'}
+                size={16}
+                color={theme.colors.primaryDark}
+              />
+              <Text style={styles.planActionText}>
+                {isGeneratingTaskPlan ? 'Generating...' : 'Regenerate'}
+              </Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -1012,8 +1116,10 @@ export default function TaskDetailsScreen({ navigation, route }: Props) {
                     color={theme.colors.primaryDark}
                   />
                 </View>
-                <Text style={styles.nudgeLabel}>{nudge.label}</Text>
-                <Text numberOfLines={1} style={styles.nudgeTiming}>{nudge.timing}</Text>
+                <Text style={styles.nudgeLabel}>{nudge.title}</Text>
+                <Text numberOfLines={2} style={styles.nudgeTiming}>
+                  {nudge.timingLabel || nudge.message}
+                </Text>
               </View>
             ))}
           </View>
@@ -1042,7 +1148,7 @@ export default function TaskDetailsScreen({ navigation, route }: Props) {
                       {item.detail}
                     </Text>
                     <TimelineStatusChip
-                      label={item.detail === 'Done' ? 'Done' : index === 0 ? 'Next' : 'Upcoming'}
+                      label={item.statusLabel || (index === 0 ? 'Next' : 'Upcoming')}
                     />
                   </View>
                 </View>
@@ -1053,10 +1159,12 @@ export default function TaskDetailsScreen({ navigation, route }: Props) {
       ) : null}
 
       <View style={styles.insightCard}>
-        <Text style={styles.insightTitle}>Milo Insight</Text>
-        <Text style={styles.insightText}>Small steps, big results.</Text>
+        <Text style={styles.insightTitle}>{miloInsight?.title || 'Milo Insight'}</Text>
+        <Text style={styles.insightText}>
+          {miloInsight?.message || 'Small steps, big results.'}
+        </Text>
         <View style={styles.insightChips}>
-          {['Break task down', 'Prep early', 'Check-in tomorrow'].map((chip) => (
+          {(miloInsight?.chips || ['Break task down', 'Prep early', 'Check-in tomorrow']).map((chip) => (
             <View key={chip} style={styles.insightChip}>
               <Text style={styles.insightChipText}>{chip}</Text>
             </View>
@@ -1618,10 +1726,20 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     marginBottom: 9,
   },
+  cardTitleBlock: {
+    flex: 1,
+    paddingRight: 10,
+  },
   cardTitle: {
     color: theme.colors.text,
     fontSize: 14,
     fontWeight: '900',
+  },
+  planSourceText: {
+    color: theme.colors.primaryDark,
+    fontSize: 10,
+    fontWeight: '900',
+    marginTop: 3,
   },
   countBadge: {
     backgroundColor: theme.colors.primarySoft,
@@ -1705,6 +1823,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginRight: 8,
     paddingHorizontal: 8,
+  },
+  planActionButtonDisabled: {
+    opacity: 0.72,
   },
   planActionText: {
     color: theme.colors.primaryDark,

@@ -130,6 +130,37 @@ type MiloInsight = {
   suggestedAction?: MiloChatAction | null;
 };
 
+type MiloTaskSmartPlanStep = {
+  label: string;
+  detail?: string | null;
+};
+
+type MiloTaskSmartPlanNudge = {
+  title: string;
+  message: string;
+  timingLabel?: string | null;
+};
+
+type MiloTaskSmartPlanTimelineItem = {
+  label: string;
+  detail?: string | null;
+  statusLabel?: string | null;
+};
+
+type MiloTaskSmartPlanInsight = {
+  title: string;
+  message: string;
+  chips?: string[];
+};
+
+type MiloTaskSmartPlan = {
+  title: string;
+  steps: MiloTaskSmartPlanStep[];
+  nudges: MiloTaskSmartPlanNudge[];
+  timeline: MiloTaskSmartPlanTimelineItem[];
+  insight: MiloTaskSmartPlanInsight;
+};
+
 type MiloChatResponse = {
   text: string;
   relatedTaskId?: string | null;
@@ -142,6 +173,7 @@ type MiloChatResponse = {
   smartNudge?: MiloSmartNudge | null;
   timelineInsight?: MiloTimelineInsight | null;
   miloInsight?: MiloInsight | null;
+  taskSmartPlan?: MiloTaskSmartPlan | null;
   debugReason?: MiloChatFallbackReason;
   usedAi: boolean;
 };
@@ -212,6 +244,7 @@ function fallbackResponse(reason: MiloChatFallbackReason) {
     smartNudge: null,
     timelineInsight: null,
     miloInsight: null,
+    taskSmartPlan: null,
     debugReason: reason,
     usedAi: false,
   } satisfies MiloChatResponse);
@@ -683,6 +716,122 @@ function sanitizeMiloInsight(
     stats: sanitizeInsightStats(insight.stats),
     reflection: trimText(insight.reflection, 360) || null,
     suggestedAction: sanitizeSuggestedAction(insight.suggestedAction),
+  };
+}
+
+function sanitizeTaskSmartPlan(
+  rawPlan: unknown
+): MiloTaskSmartPlan | null {
+  if (!rawPlan || typeof rawPlan !== 'object' || Array.isArray(rawPlan)) {
+    return null;
+  }
+
+  const plan = rawPlan as Record<string, unknown>;
+  const title = trimText(plan.title, 100);
+  const rawSteps = Array.isArray(plan.steps) ? plan.steps : [];
+  const steps = rawSteps
+    .map((rawStep): MiloTaskSmartPlanStep | null => {
+      if (!rawStep || typeof rawStep !== 'object' || Array.isArray(rawStep)) {
+        return null;
+      }
+
+      const step = rawStep as Record<string, unknown>;
+      const label = trimText(step.label, 140);
+
+      if (!label) {
+        return null;
+      }
+
+      return {
+        label,
+        detail: trimText(step.detail, 220) || null,
+      };
+    })
+    .filter((step): step is MiloTaskSmartPlanStep => Boolean(step))
+    .slice(0, 6);
+
+  const rawNudges = Array.isArray(plan.nudges) ? plan.nudges : [];
+  const nudges = rawNudges
+    .map((rawNudge): MiloTaskSmartPlanNudge | null => {
+      if (!rawNudge || typeof rawNudge !== 'object' || Array.isArray(rawNudge)) {
+        return null;
+      }
+
+      const nudge = rawNudge as Record<string, unknown>;
+      const nudgeTitle = trimText(nudge.title, 80);
+      const message = trimText(nudge.message, 220);
+
+      if (!nudgeTitle || !message) {
+        return null;
+      }
+
+      return {
+        title: nudgeTitle,
+        message,
+        timingLabel: trimText(nudge.timingLabel, 80) || null,
+      };
+    })
+    .filter((nudge): nudge is MiloTaskSmartPlanNudge => Boolean(nudge))
+    .slice(0, 4);
+
+  const rawTimeline = Array.isArray(plan.timeline) ? plan.timeline : [];
+  const timeline = rawTimeline
+    .map((rawTimelineItem): MiloTaskSmartPlanTimelineItem | null => {
+      if (
+        !rawTimelineItem ||
+        typeof rawTimelineItem !== 'object' ||
+        Array.isArray(rawTimelineItem)
+      ) {
+        return null;
+      }
+
+      const timelineItem = rawTimelineItem as Record<string, unknown>;
+      const label = trimText(timelineItem.label, 120);
+
+      if (!label) {
+        return null;
+      }
+
+      return {
+        label,
+        detail: trimText(timelineItem.detail, 180) || null,
+        statusLabel: trimText(timelineItem.statusLabel, 40) || null,
+      };
+    })
+    .filter(
+      (timelineItem): timelineItem is MiloTaskSmartPlanTimelineItem =>
+        Boolean(timelineItem)
+    )
+    .slice(0, 6);
+
+  const rawInsight = plan.insight;
+  const insightRecord =
+    rawInsight && typeof rawInsight === 'object' && !Array.isArray(rawInsight)
+      ? (rawInsight as Record<string, unknown>)
+      : {};
+  const insightTitle = trimText(insightRecord.title, 100);
+  const insightMessage = trimText(insightRecord.message, 260);
+  const chips = Array.isArray(insightRecord.chips)
+    ? insightRecord.chips
+        .map((chip) => trimText(chip, 40))
+        .filter((chip): chip is string => Boolean(chip))
+        .slice(0, 4)
+    : [];
+
+  if (!title || steps.length === 0 || !insightTitle || !insightMessage) {
+    return null;
+  }
+
+  return {
+    title,
+    steps,
+    nudges,
+    timeline,
+    insight: {
+      title: insightTitle,
+      message: insightMessage,
+      chips,
+    },
   };
 }
 
@@ -1790,6 +1939,210 @@ function buildUserInput({
   });
 }
 
+function parseMiloTaskSmartPlanResponse(outputText: string): {
+  taskSmartPlan?: unknown;
+} {
+  try {
+    const parsed = JSON.parse(outputText) as Record<string, unknown>;
+    return {
+      taskSmartPlan: parsed.taskSmartPlan,
+    };
+  } catch {
+    return {};
+  }
+}
+
+function buildTaskDetailPlanSystemPrompt() {
+  const currentDate = getCurrentDateKey();
+
+  return [
+    'You are Milo, the cute caring green dinosaur companion in FocusMate.',
+    'Generate one compact task detail smart plan for the target task only.',
+    'Return structured JSON only. Do not include Markdown, headings, code blocks, or extra prose.',
+    'Do not create, update, complete, delete, rename, or change any task data.',
+    'Use only the supplied task context. Do not invent external facts, exact locations, links, or people.',
+    'Use the task title, type, due date, due time, priority, description, location, duration, completion status, and meeting link availability.',
+    'Keep every item short, practical, and specific to the task.',
+    'For meeting tasks, include notes/questions and link, audio, or location preparation when the context supports it.',
+    'For date/event tasks, include location or maps, items needed, buffer time, and a final reminder when useful.',
+    'For normal tasks, include breaking down, easiest first step, one focus sprint, progress review, and finishing.',
+    'If due time is missing, avoid pretending there is an exact time.',
+    'Use status labels such as Next, Prep, Later, Final, Done, or Upcoming.',
+    `Today is ${currentDate}.`,
+  ].join('\n');
+}
+
+function buildTaskDetailPlanInput({
+  relatedTasks,
+  targetTask,
+}: {
+  relatedTasks: MiloChatTaskContext[];
+  targetTask: MiloChatTaskContext;
+}) {
+  return JSON.stringify({
+    intent: 'task_detail_plan',
+    currentDate: getCurrentDateKey(),
+    targetTask,
+    relatedTasks,
+  });
+}
+
+async function callOpenAiForTaskSmartPlan({
+  relatedTasks,
+  targetTask,
+}: {
+  relatedTasks: MiloChatTaskContext[];
+  targetTask: MiloChatTaskContext;
+}) {
+  const openAiApiKey = Deno.env.get('OPENAI_API_KEY');
+
+  if (!openAiApiKey) {
+    throw new MiloChatError(
+      'missing_api_key',
+      'OPENAI_API_KEY Supabase secret is missing.'
+    );
+  }
+
+  const model = Deno.env.get('MILO_AI_MODEL') || DEFAULT_MODEL;
+
+  const response = await fetch(OPENAI_RESPONSES_URL, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${openAiApiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model,
+      instructions: buildTaskDetailPlanSystemPrompt(),
+      input: buildTaskDetailPlanInput({
+        relatedTasks,
+        targetTask,
+      }),
+      max_output_tokens: 700,
+      store: false,
+      text: {
+        format: {
+          type: 'json_schema',
+          name: 'milo_task_detail_plan_response',
+          strict: true,
+          schema: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              taskSmartPlan: {
+                type: 'object',
+                additionalProperties: false,
+                properties: {
+                  title: {
+                    type: 'string',
+                  },
+                  steps: {
+                    type: 'array',
+                    items: {
+                      type: 'object',
+                      additionalProperties: false,
+                      properties: {
+                        label: {
+                          type: 'string',
+                        },
+                        detail: {
+                          type: ['string', 'null'],
+                        },
+                      },
+                      required: ['label', 'detail'],
+                    },
+                  },
+                  nudges: {
+                    type: 'array',
+                    items: {
+                      type: 'object',
+                      additionalProperties: false,
+                      properties: {
+                        title: {
+                          type: 'string',
+                        },
+                        message: {
+                          type: 'string',
+                        },
+                        timingLabel: {
+                          type: ['string', 'null'],
+                        },
+                      },
+                      required: ['title', 'message', 'timingLabel'],
+                    },
+                  },
+                  timeline: {
+                    type: 'array',
+                    items: {
+                      type: 'object',
+                      additionalProperties: false,
+                      properties: {
+                        label: {
+                          type: 'string',
+                        },
+                        detail: {
+                          type: ['string', 'null'],
+                        },
+                        statusLabel: {
+                          type: ['string', 'null'],
+                        },
+                      },
+                      required: ['label', 'detail', 'statusLabel'],
+                    },
+                  },
+                  insight: {
+                    type: 'object',
+                    additionalProperties: false,
+                    properties: {
+                      title: {
+                        type: 'string',
+                      },
+                      message: {
+                        type: 'string',
+                      },
+                      chips: {
+                        type: 'array',
+                        items: {
+                          type: 'string',
+                        },
+                      },
+                    },
+                    required: ['title', 'message', 'chips'],
+                  },
+                },
+                required: ['title', 'steps', 'nudges', 'timeline', 'insight'],
+              },
+            },
+            required: ['taskSmartPlan'],
+          },
+        },
+      },
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => '');
+    console.warn('milo-chat task detail OpenAI request failed', {
+      model,
+      status: response.status,
+      bodyLength: errorText.length,
+    });
+    throw new MiloChatError(
+      'openai_http_error',
+      `OpenAI request failed with status ${response.status}.`
+    );
+  }
+
+  try {
+    return await response.json();
+  } catch {
+    throw new MiloChatError(
+      'openai_parse_error',
+      'OpenAI response JSON parse failed.'
+    );
+  }
+}
+
 async function callOpenAi({
   focusStats,
   message,
@@ -2262,6 +2615,78 @@ Deno.serve(async (request) => {
         .slice(-MAX_RECENT_MESSAGES)
     : [];
   const focusStats = sanitizeFocusStats(body.focusStats);
+  const isTaskDetailPlanIntent =
+    body.intent === 'task_detail_plan' || body.taskDetailPlan === true;
+
+  if (isTaskDetailPlanIntent) {
+    const requestedTaskId = trimText(body.taskId, 80);
+    const targetTask =
+      (requestedTaskId
+        ? tasks.find(
+            (task) =>
+              task.id === requestedTaskId || task.local_id === requestedTaskId
+          )
+        : undefined) || tasks[0];
+
+    if (!targetTask) {
+      return jsonResponse({ error: 'Task context is required' }, 400);
+    }
+
+    try {
+      const openAiResponse = await callOpenAiForTaskSmartPlan({
+        targetTask,
+        relatedTasks: tasks
+          .filter((task) => task.id !== targetTask.id)
+          .slice(0, 8),
+      });
+      const outputText = extractOutputText(openAiResponse);
+
+      if (!outputText) {
+        throw new MiloChatError(
+          'invalid_response_shape',
+          'OpenAI returned no output text.'
+        );
+      }
+
+      const parsedResponse = parseMiloTaskSmartPlanResponse(outputText);
+      const taskSmartPlan = sanitizeTaskSmartPlan(
+        parsedResponse.taskSmartPlan
+      );
+
+      if (!taskSmartPlan) {
+        throw new MiloChatError(
+          'invalid_response_shape',
+          'OpenAI returned an invalid task smart plan.'
+        );
+      }
+
+      return jsonResponse({
+        text: 'Awww okay, Milo made a focused plan for this task.',
+        relatedTaskId: targetTask.id,
+        suggestedActions: [],
+        proposedTask: null,
+        proposedTaskUpdate: null,
+        proposedTaskCompletion: null,
+        proposedTaskDeletion: null,
+        smartPlan: null,
+        smartNudge: null,
+        timelineInsight: null,
+        miloInsight: null,
+        taskSmartPlan,
+        usedAi: true,
+      } satisfies MiloChatResponse);
+    } catch (error) {
+      const reason = getFallbackReason(error);
+
+      console.warn('milo-chat task detail plan failed', {
+        reason,
+        message: getSafeErrorMessage(error),
+      });
+
+      return fallbackResponse(reason);
+    }
+  }
+
   const deletionFollowUpIntent = getDeletionFollowUpInfo({
     message,
     recentMessages,
