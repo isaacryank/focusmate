@@ -1,7 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import React, { useCallback, useMemo, useState } from 'react';
 import {
-  Alert,
   Image,
   KeyboardAvoidingView,
   Linking,
@@ -48,7 +47,8 @@ type IoniconName = React.ComponentProps<typeof Ionicons>['name'];
 
 type SettingsModal =
   | 'account'
-  | 'gender'
+  | 'editProfile'
+  | 'emailInfo'
   | 'verify'
   | 'privacy'
   | 'digitalWellbeing'
@@ -67,13 +67,14 @@ type SettingsModal =
   | 'devices'
   | null;
 
-type EditableProfileField = 'username' | 'birthday';
-
 type AppearancePreference = 'system' | 'light' | 'dark';
 type LanguagePreference = 'english' | 'ms';
 type TextSizePreference = 'comfortable' | 'large';
 
+type DialogTone = 'info' | 'confirm' | 'danger';
+
 type LocalProfile = {
+  displayName: string;
   username: string;
   gender: string;
   birthday: string;
@@ -87,6 +88,17 @@ type LocalPreferences = {
   clearContrast: boolean;
 };
 
+type SettingsDialog = {
+  title: string;
+  message: string;
+  icon: IoniconName;
+  tone: DialogTone;
+  primaryLabel: string;
+  secondaryLabel?: string;
+  onPrimaryPress?: () => void | Promise<void>;
+  onSecondaryPress?: () => void;
+};
+
 const miloAvatarImage = require('../../assets/mascot/milo_avatar.png');
 
 const APP_VERSION = '1.0.0';
@@ -94,6 +106,7 @@ const LOCAL_PROFILE_STORAGE_KEY = '@focusmate/settings/local-profile';
 const LOCAL_PREFERENCES_STORAGE_KEY = '@focusmate/settings/preferences';
 
 const DEFAULT_LOCAL_PROFILE: LocalProfile = {
+  displayName: '',
   username: '',
   gender: '',
   birthday: '',
@@ -123,6 +136,7 @@ function sanitizeLocalProfile(value: unknown): LocalProfile {
   }
 
   return {
+    displayName: getCleanText(value.displayName),
     username: getCleanText(value.username),
     gender: getCleanText(value.gender),
     birthday: getCleanText(value.birthday),
@@ -469,6 +483,69 @@ function InfoPanel({
   );
 }
 
+function SettingsDialogModal({
+  dialog,
+  onClose,
+}: {
+  dialog: SettingsDialog | null;
+  onClose: () => void;
+}) {
+  if (!dialog) return null;
+
+  const isDanger = dialog.tone === 'danger';
+  const iconColor = isDanger ? theme.colors.danger : mainGreen;
+  const iconBackground = isDanger ? theme.colors.dangerSoft : theme.colors.primarySoft;
+
+  const handlePrimaryPress = () => {
+    const action = dialog.onPrimaryPress;
+    onClose();
+    void action?.();
+  };
+
+  const handleSecondaryPress = () => {
+    const action = dialog.onSecondaryPress;
+    onClose();
+    action?.();
+  };
+
+  return (
+    <Modal
+      visible
+      animationType="fade"
+      transparent
+      onRequestClose={onClose}
+    >
+      <View style={styles.dialogRoot}>
+        <Pressable style={styles.dialogBackdrop} onPress={onClose} />
+
+        <View style={styles.dialogCard}>
+          <View style={[styles.dialogIconBubble, { backgroundColor: iconBackground }]}>
+            <Ionicons name={dialog.icon} size={24} color={iconColor} />
+          </View>
+
+          <Text style={styles.dialogTitle}>{dialog.title}</Text>
+          <Text style={styles.dialogMessage}>{dialog.message}</Text>
+
+          <View style={styles.dialogActions}>
+            {dialog.secondaryLabel ? (
+              <AppButton
+                title={dialog.secondaryLabel}
+                variant="ghost"
+                onPress={handleSecondaryPress}
+              />
+            ) : null}
+            <AppButton
+              title={dialog.primaryLabel}
+              variant={isDanger ? 'danger' : 'primary'}
+              onPress={handlePrimaryPress}
+            />
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
 function StatPill({ label, value }: { label: string; value: string }) {
   return (
     <View style={styles.statPill}>
@@ -485,9 +562,11 @@ export default function SettingsScreen() {
   const { focusSessions, totalFocusMinutes, clearFocusSessions } = useFocus();
 
   const [activeModal, setActiveModal] = useState<SettingsModal>(null);
-  const [editField, setEditField] = useState<EditableProfileField | null>(null);
-  const [editValue, setEditValue] = useState('');
+  const [dialog, setDialog] = useState<SettingsDialog | null>(null);
   const [localProfile, setLocalProfile] = useState<LocalProfile>(
+    DEFAULT_LOCAL_PROFILE
+  );
+  const [profileDraft, setProfileDraft] = useState<LocalProfile>(
     DEFAULT_LOCAL_PROFILE
   );
   const [localPreferences, setLocalPreferences] = useState<LocalPreferences>(
@@ -531,9 +610,12 @@ export default function SettingsScreen() {
     }, [])
   );
 
-  const displayName = userName.trim() || 'Student';
+  const authDisplayName = userName.trim() || 'Student';
+  const displayName = localProfile.displayName || authDisplayName;
   const accountEmail = user?.email?.trim() || '';
-  const accountSubtitle = accountEmail || 'Profile, security and privacy';
+  const accountSubtitle = localProfile.username
+    ? `@${localProfile.username}`
+    : accountEmail || 'Profile, security and privacy';
   const aiModeLabel =
     miloAiSettings.aiMode === 'online' ? 'AI Online' : 'Local Only';
 
@@ -582,44 +664,43 @@ export default function SettingsScreen() {
     setActiveModal(modal);
   };
 
-  const openEditor = (field: EditableProfileField) => {
-    setEditField(field);
-    setEditValue(field === 'username' ? localProfile.username : localProfile.birthday);
+  const showDialog = (nextDialog: SettingsDialog) => {
+    setDialog(nextDialog);
   };
 
-  const handleSaveEditor = async () => {
-    if (!editField) return;
+  const handleOpenEditProfile = () => {
+    setProfileDraft({
+      ...localProfile,
+      displayName: displayName,
+    });
+    setActiveModal('editProfile');
+  };
 
-    const cleanedValue = editValue.trim();
+  const updateProfileDraft = (partial: Partial<LocalProfile>) => {
+    setProfileDraft((current) => ({
+      ...current,
+      ...partial,
+    }));
+  };
 
-    if (
-      editField === 'birthday' &&
-      cleanedValue &&
-      !/^\d{4}-\d{2}-\d{2}$/.test(cleanedValue)
-    ) {
-      Alert.alert(
-        'Use YYYY-MM-DD',
-        'Please save birthday as YYYY-MM-DD for now.'
-      );
+  const handleSaveProfileDraft = async () => {
+    const nextProfile: LocalProfile = {
+      displayName: profileDraft.displayName.trim() || authDisplayName,
+      username: profileDraft.username.trim(),
+      gender: profileDraft.gender.trim(),
+      birthday: profileDraft.birthday.trim(),
+    };
+
+    if (nextProfile.birthday && !/^\d{4}-\d{2}-\d{2}$/.test(nextProfile.birthday)) {
+      showDialog({
+        title: 'Check birthday format',
+        message: 'Please save birthday as YYYY-MM-DD for now.',
+        icon: 'calendar',
+        tone: 'info',
+        primaryLabel: 'Got it',
+      });
       return;
     }
-
-    const nextProfile = {
-      ...localProfile,
-      [editField]: cleanedValue,
-    };
-
-    setLocalProfile(nextProfile);
-    await saveLocalProfile(nextProfile);
-    setEditField(null);
-    setEditValue('');
-  };
-
-  const handleSelectGender = async (gender: string) => {
-    const nextProfile = {
-      ...localProfile,
-      gender,
-    };
 
     setLocalProfile(nextProfile);
     await saveLocalProfile(nextProfile);
@@ -658,59 +739,64 @@ export default function SettingsScreen() {
   };
 
   const handleResetMiloAiSettings = () => {
-    Alert.alert(
-      'Reset Milo AI settings?',
-      'This returns Milo Brain to AI Online mode, skips AI for small talk, hides debug reasons, and keeps the call count refreshed for today.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Reset',
-          onPress: async () => {
-            const nextSettings = await resetMiloAiSettings();
-            setMiloAiSettings(nextSettings);
-          },
-        },
-      ]
-    );
+    showDialog({
+      title: 'Reset Milo AI settings?',
+      message:
+        'This returns Milo Brain to AI Online mode, skips AI for small talk, hides debug reasons, and refreshes the call count for today.',
+      icon: 'refresh',
+      tone: 'confirm',
+      primaryLabel: 'Reset',
+      secondaryLabel: 'Cancel',
+      onPrimaryPress: async () => {
+        const nextSettings = await resetMiloAiSettings();
+        setMiloAiSettings(nextSettings);
+      },
+    });
   };
 
   const handlePasswordReset = () => {
     if (!accountEmail) {
-      Alert.alert(
-        'Email account needed',
-        'Password reset is available after signing in with a Supabase email account.'
-      );
+      showDialog({
+        title: 'Email account needed',
+        message:
+          'Password reset is available after signing in with a Supabase email account.',
+        icon: 'mail',
+        tone: 'info',
+        primaryLabel: 'Got it',
+      });
       return;
     }
 
-    Alert.alert(
-      'Send password reset?',
-      `Milo will ask Supabase to send a password reset email to ${accountEmail}.`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Send',
-          onPress: async () => {
-            const { error } = await supabase.auth.resetPasswordForEmail(
-              accountEmail
-            );
+    showDialog({
+      title: 'Send password reset?',
+      message: `Milo will ask Supabase to send a password reset email to ${accountEmail}.`,
+      icon: 'key',
+      tone: 'confirm',
+      primaryLabel: 'Send',
+      secondaryLabel: 'Cancel',
+      onPrimaryPress: async () => {
+        const { error } = await supabase.auth.resetPasswordForEmail(accountEmail);
 
-            if (error) {
-              Alert.alert(
-                'Could not send reset email',
-                error.message || 'Please try again in a moment.'
-              );
-              return;
-            }
+        if (error) {
+          showDialog({
+            title: 'Could not send reset email',
+            message: error.message || 'Please try again in a moment.',
+            icon: 'alert-circle',
+            tone: 'info',
+            primaryLabel: 'Got it',
+          });
+          return;
+        }
 
-            Alert.alert(
-              'Password reset requested',
-              'Check your email for the secure Supabase reset link.'
-            );
-          },
-        },
-      ]
-    );
+        showDialog({
+          title: 'Password reset requested',
+          message: `A password reset link was requested for ${accountEmail}. Follow the email link to continue securely.`,
+          icon: 'key',
+          tone: 'info',
+          primaryLabel: 'Done',
+        });
+      },
+    });
   };
 
   const handleOpenFeedbackEmail = async () => {
@@ -721,84 +807,101 @@ export default function SettingsScreen() {
       const canOpen = await Linking.canOpenURL(url);
 
       if (!canOpen) {
-        Alert.alert(
-          'Email app not found',
-          'You can still collect feedback in your FYP notes for now.'
-        );
+        showDialog({
+          title: 'Email app not found',
+          message: 'You can still collect feedback in your FYP notes for now.',
+          icon: 'mail',
+          tone: 'info',
+          primaryLabel: 'Got it',
+        });
         return;
       }
 
       await Linking.openURL(url);
     } catch (error) {
-      Alert.alert(
-        'Could not open email',
-        'The feedback placeholder is ready, but the email app did not open.'
-      );
+      showDialog({
+        title: 'Could not open email',
+        message:
+          'The feedback placeholder is ready, but the email app did not open.',
+        icon: 'mail',
+        tone: 'info',
+        primaryLabel: 'Got it',
+      });
     }
   };
 
   const handleSignOut = () => {
-    Alert.alert('Sign out?', 'You can sign in again when you return.', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Sign out',
-        style: 'destructive',
-        onPress: async () => {
-          try {
-            await signOut();
-          } catch (error) {
-            Alert.alert(
-              'Could not sign out',
-              error instanceof Error ? error.message : 'Please try again.'
-            );
-          }
-        },
+    showDialog({
+      title: 'Sign out?',
+      message: 'You can sign in again when you return.',
+      icon: 'log-out-outline',
+      tone: 'danger',
+      primaryLabel: 'Sign out',
+      secondaryLabel: 'Cancel',
+      onPrimaryPress: async () => {
+        try {
+          await signOut();
+        } catch (error) {
+          showDialog({
+            title: 'Could not sign out',
+            message: error instanceof Error ? error.message : 'Please try again.',
+            icon: 'alert-circle',
+            tone: 'info',
+            primaryLabel: 'Got it',
+          });
+        }
       },
-    ]);
+    });
   };
 
   const handleStartFresh = () => {
-    Alert.alert(
-      'Reset local FocusMate data?',
-      'This clears local planner cache, focus history, Milo chat history, Milo AI preferences, and settings preferences on this device. Your Supabase account and remote user data are not deleted.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Reset local data',
-          style: 'destructive',
-          onPress: async () => {
-            setIsResetting(true);
+    showDialog({
+      title: 'Reset local FocusMate data?',
+      message:
+        'This clears local planner cache, focus history, Milo chat history, Milo AI preferences, and settings preferences on this device. Your Supabase account and remote user data are not deleted.',
+      icon: 'refresh-circle',
+      tone: 'danger',
+      primaryLabel: 'Reset local data',
+      secondaryLabel: 'Cancel',
+      onPrimaryPress: async () => {
+        setIsResetting(true);
 
-            try {
-              await clearAllTasks();
-              await clearFocusSessions();
-              await clearFocusSessionHistory();
-              await clearCurrentMiloChat();
-              await clearMiloChatSessions();
-              const nextAiSettings = await resetMiloAiSettings();
-              await AsyncStorage.removeItem(LOCAL_PROFILE_STORAGE_KEY);
-              await AsyncStorage.removeItem(LOCAL_PREFERENCES_STORAGE_KEY);
+        try {
+          await clearAllTasks();
+          await clearFocusSessions();
+          await clearFocusSessionHistory();
+          await clearCurrentMiloChat();
+          await clearMiloChatSessions();
+          const nextAiSettings = await resetMiloAiSettings();
+          await AsyncStorage.removeItem(LOCAL_PROFILE_STORAGE_KEY);
+          await AsyncStorage.removeItem(LOCAL_PREFERENCES_STORAGE_KEY);
 
-              setLocalProfile(DEFAULT_LOCAL_PROFILE);
-              setLocalPreferences(DEFAULT_LOCAL_PREFERENCES);
-              setMiloAiSettings(nextAiSettings);
-              setFocusHistory([]);
-              Alert.alert(
-                'Local reset complete',
-                'FocusMate cleared local demo data and kept your account safe.'
-              );
-            } catch (error) {
-              Alert.alert(
-                'Reset incomplete',
-                'FocusMate could not clear everything locally. Please try again.'
-              );
-            } finally {
-              setIsResetting(false);
-            }
-          },
-        },
-      ]
-    );
+          setLocalProfile(DEFAULT_LOCAL_PROFILE);
+          setProfileDraft(DEFAULT_LOCAL_PROFILE);
+          setLocalPreferences(DEFAULT_LOCAL_PREFERENCES);
+          setMiloAiSettings(nextAiSettings);
+          setFocusHistory([]);
+          showDialog({
+            title: 'Local reset complete',
+            message: 'FocusMate cleared local demo data and kept your account safe.',
+            icon: 'checkmark-circle',
+            tone: 'info',
+            primaryLabel: 'Done',
+          });
+        } catch (error) {
+          showDialog({
+            title: 'Reset incomplete',
+            message:
+              'FocusMate could not clear everything locally. Please try again.',
+            icon: 'alert-circle',
+            tone: 'info',
+            primaryLabel: 'Got it',
+          });
+        } finally {
+          setIsResetting(false);
+        }
+      },
+    });
   };
 
   return (
@@ -851,14 +954,6 @@ export default function SettingsScreen() {
       </SectionCard>
 
       <SectionCard title="Milo AI">
-        <SettingsRow
-          title="Milo AI settings"
-          value={aiModeLabel}
-          icon="sparkles"
-          iconColor={mainGreen}
-          iconBackground={theme.colors.primarySoft}
-          onPress={() => setIsMiloAiSettingsVisible(true)}
-        />
         <SettingsRow
           title="AI Online / Local Only"
           value={aiModeLabel}
@@ -1010,41 +1105,13 @@ export default function SettingsScreen() {
       >
         <SectionCard title="Account">
           <SettingsRow
-            title="Name"
+            title="Edit profile details"
+            subtitle="Name, username, gender, and birthday."
             value={displayName}
-            icon="person"
+            icon="create"
             iconColor={mainGreen}
             iconBackground={theme.colors.primarySoft}
-            onPress={() =>
-              Alert.alert(
-                'Display name',
-                'This uses your current FocusMate profile name. Full profile editing can sync through Supabase later.'
-              )
-            }
-          />
-          <SettingsRow
-            title="Username"
-            value={localProfile.username || 'Add'}
-            icon="at"
-            iconColor="#2F80ED"
-            iconBackground="#EAF3FF"
-            onPress={() => openEditor('username')}
-          />
-          <SettingsRow
-            title="Gender"
-            value={localProfile.gender || 'Add'}
-            icon="person-circle"
-            iconColor="#8B5CF6"
-            iconBackground="#F2ECFF"
-            onPress={() => setActiveModal('gender')}
-          />
-          <SettingsRow
-            title="Birthday"
-            value={localProfile.birthday || 'Add'}
-            icon="calendar"
-            iconColor="#FF8A00"
-            iconBackground="#FFF1DF"
-            onPress={() => openEditor('birthday')}
+            onPress={handleOpenEditProfile}
           />
           <SettingsRow
             title="Email"
@@ -1052,14 +1119,7 @@ export default function SettingsScreen() {
             icon="mail"
             iconColor="#10A6A6"
             iconBackground="#E7FAFA"
-            onPress={() =>
-              Alert.alert(
-                'Email',
-                accountEmail
-                  ? `${accountEmail}\n\nEmail is read-only from your Supabase auth account.`
-                  : 'No Supabase email is linked to this local demo account.'
-              )
-            }
+            onPress={() => setActiveModal('emailInfo')}
           />
         </SectionCard>
 
@@ -1087,6 +1147,87 @@ export default function SettingsScreen() {
             onPress={() => setActiveModal('privacy')}
           />
         </SectionCard>
+      </ModalSheet>
+
+      <ModalSheet
+        visible={activeModal === 'editProfile'}
+        title="Edit profile details"
+        subtitle="Saved locally for this prototype phase."
+        onClose={() => setActiveModal(null)}
+      >
+        <Text style={styles.fieldLabel}>Name</Text>
+        <TextInput
+          style={styles.textInput}
+          value={profileDraft.displayName}
+          onChangeText={(value) => updateProfileDraft({ displayName: value })}
+          placeholder="Isaac Ryan"
+          placeholderTextColor={theme.colors.muted}
+          autoCapitalize="words"
+        />
+
+        <Text style={styles.fieldLabel}>Username</Text>
+        <TextInput
+          style={styles.textInput}
+          value={profileDraft.username}
+          onChangeText={(value) => updateProfileDraft({ username: value })}
+          placeholder="isaac_ryan"
+          placeholderTextColor={theme.colors.muted}
+          autoCapitalize="none"
+        />
+
+        <Text style={styles.fieldLabel}>Gender</Text>
+        <View style={styles.optionStack}>
+          <OptionButton
+            label="Prefer not to say"
+            selected={profileDraft.gender === 'Prefer not to say'}
+            onPress={() => updateProfileDraft({ gender: 'Prefer not to say' })}
+          />
+          <OptionButton
+            label="Male"
+            selected={profileDraft.gender === 'Male'}
+            onPress={() => updateProfileDraft({ gender: 'Male' })}
+          />
+          <OptionButton
+            label="Female"
+            selected={profileDraft.gender === 'Female'}
+            onPress={() => updateProfileDraft({ gender: 'Female' })}
+          />
+          <OptionButton
+            label="Other"
+            selected={profileDraft.gender === 'Other'}
+            onPress={() => updateProfileDraft({ gender: 'Other' })}
+          />
+        </View>
+
+        <Text style={styles.fieldLabel}>Birthday</Text>
+        <TextInput
+          style={styles.textInput}
+          value={profileDraft.birthday}
+          onChangeText={(value) => updateProfileDraft({ birthday: value })}
+          placeholder="YYYY-MM-DD"
+          placeholderTextColor={theme.colors.muted}
+          autoCapitalize="none"
+        />
+
+        <Text style={styles.fieldLabel}>Email</Text>
+        <View style={styles.readOnlyField}>
+          <Text numberOfLines={1} style={styles.readOnlyFieldText}>
+            {accountEmail || 'No Supabase email linked'}
+          </Text>
+          <Text style={styles.readOnlyFieldHint}>Read-only from auth</Text>
+        </View>
+
+        <View style={styles.profileEditActions}>
+          <AppButton
+            title="Cancel"
+            variant="ghost"
+            onPress={() => setActiveModal(null)}
+          />
+          <AppButton
+            title="Save changes"
+            onPress={() => void handleSaveProfileDraft()}
+          />
+        </View>
       </ModalSheet>
 
       <ModalSheet
@@ -1182,56 +1323,36 @@ export default function SettingsScreen() {
       </ModalSheet>
 
       <ModalSheet
-        visible={activeModal === 'gender'}
-        title="Gender"
-        subtitle="Stored locally for this prototype phase."
+        visible={activeModal === 'emailInfo'}
+        title="Email"
+        subtitle="Read-only account email."
         onClose={() => setActiveModal(null)}
       >
-        <View style={styles.optionStack}>
-          <OptionButton
-            label="Female"
-            selected={localProfile.gender === 'Female'}
-            onPress={() => void handleSelectGender('Female')}
-          />
-          <OptionButton
-            label="Male"
-            selected={localProfile.gender === 'Male'}
-            onPress={() => void handleSelectGender('Male')}
-          />
-          <OptionButton
-            label="Prefer not to say"
-            selected={localProfile.gender === 'Prefer not to say'}
-            onPress={() => void handleSelectGender('Prefer not to say')}
-          />
-        </View>
-      </ModalSheet>
-
-      <ModalSheet
-        visible={editField !== null}
-        title={editField === 'birthday' ? 'Birthday' : 'Username'}
-        subtitle="Stored locally for this prototype phase."
-        onClose={() => {
-          setEditField(null);
-          setEditValue('');
-        }}
-      >
-        <TextInput
-          style={styles.textInput}
-          value={editValue}
-          onChangeText={setEditValue}
-          placeholder={editField === 'birthday' ? 'YYYY-MM-DD' : 'isaac_ryan'}
-          placeholderTextColor={theme.colors.muted}
-          autoCapitalize="none"
+        <InfoPanel
+          icon="mail"
+          title={accountEmail || 'No email linked'}
+          message={
+            accountEmail
+              ? 'This email comes from the current Supabase auth user and is linked to this FocusMate account.'
+              : 'This looks like a local demo session, so no Supabase auth email is linked right now.'
+          }
         />
-        <AppButton title="Save" onPress={() => void handleSaveEditor()} />
+        <BulletLine>
+          Email is read-only here to keep account changes safe for the prototype.
+        </BulletLine>
       </ModalSheet>
 
       <ModalSheet
         visible={activeModal === 'verify'}
         title="Security check"
-        subtitle="A simple checklist for this prototype."
+        subtitle="A clear checklist without fake verification."
         onClose={() => setActiveModal(null)}
       >
+        <InfoPanel
+          icon="shield-checkmark"
+          title="FocusMate security posture"
+          message="This screen summarizes what is active now and what remains protected by confirmation flows."
+        />
         <BulletLine>
           Supabase session is used when an email account is signed in.
         </BulletLine>
@@ -1240,10 +1361,12 @@ export default function SettingsScreen() {
           in the app.
         </BulletLine>
         <BulletLine>
-          Local demo accounts keep only lightweight local preferences on device.
+          Milo task create, update, complete, and delete actions require user
+          confirmation before changing planner data.
         </BulletLine>
         <BulletLine>
-          Never add OpenAI, WhatsApp, or Supabase service keys to the mobile app.
+          AI Online calls use the Supabase Edge Function, keeping service keys
+          out of the mobile app.
         </BulletLine>
       </ModalSheet>
 
@@ -1254,20 +1377,23 @@ export default function SettingsScreen() {
         onClose={() => setActiveModal(null)}
       >
         <InfoText>
-          FocusMate keeps planner data, preferences, focus history, and Milo chat
-          history locally where supported. Supabase account data is read through
-          the signed-in auth user.
+          FocusMate stores task data for the signed-in user through Supabase when
+          an account session is available. Some prototype preferences, including
+          username, gender, birthday, local display name, language, and theme
+          choice, are stored locally on this device.
         </InfoText>
         <BulletLine>
-          Milo AI settings are stored locally and reused by Talk with Milo.
+          Milo AI Online uses the Supabase Edge Function securely.
         </BulletLine>
         <BulletLine>
-          AI Online calls go through the Supabase Edge Function, so the OpenAI key
-          is not stored in the app.
+          The OpenAI key is not stored inside the mobile app.
         </BulletLine>
         <BulletLine>
-          Local fallback keeps core guidance working when online AI is off or not
-          available.
+          Local Milo Brain can still work when AI Online is off or unavailable.
+        </BulletLine>
+        <BulletLine>
+          Task create, update, and delete actions from Milo require user
+          confirmation before they are applied.
         </BulletLine>
       </ModalSheet>
 
@@ -1601,6 +1727,11 @@ export default function SettingsScreen() {
           focus device integrations.
         </InfoText>
       </ModalSheet>
+
+      <SettingsDialogModal
+        dialog={dialog}
+        onClose={() => setDialog(null)}
+      />
     </ScreenContainer>
   );
 }
@@ -1791,6 +1922,54 @@ const styles = StyleSheet.create({
   },
   modalContent: {
     paddingBottom: 24,
+  },
+  dialogRoot: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 24,
+  },
+  dialogBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(34, 40, 49, 0.38)',
+  },
+  dialogCard: {
+    width: '100%',
+    maxWidth: 360,
+    borderRadius: 24,
+    backgroundColor: theme.colors.white,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    padding: 20,
+    alignItems: 'center',
+    ...theme.shadow,
+  },
+  dialogIconBubble: {
+    width: 54,
+    height: 54,
+    borderRadius: 27,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 12,
+  },
+  dialogTitle: {
+    color: theme.colors.text,
+    fontSize: 18,
+    fontWeight: '900',
+    textAlign: 'center',
+  },
+  dialogMessage: {
+    marginTop: 8,
+    color: theme.colors.textSoft,
+    fontSize: 13,
+    fontWeight: '700',
+    lineHeight: 20,
+    textAlign: 'center',
+  },
+  dialogActions: {
+    width: '100%',
+    gap: 10,
+    marginTop: 18,
   },
   modalSectionLabel: {
     marginLeft: 4,
@@ -1984,6 +2163,38 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '800',
     marginBottom: 14,
+  },
+  fieldLabel: {
+    marginLeft: 4,
+    marginBottom: 7,
+    color: theme.colors.text,
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  readOnlyField: {
+    minHeight: 56,
+    borderRadius: 16,
+    backgroundColor: theme.colors.white,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    paddingHorizontal: 14,
+    justifyContent: 'center',
+    marginBottom: 14,
+  },
+  readOnlyFieldText: {
+    color: theme.colors.text,
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  readOnlyFieldHint: {
+    marginTop: 3,
+    color: theme.colors.muted,
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  profileEditActions: {
+    gap: 10,
+    marginTop: 4,
   },
   statGrid: {
     flexDirection: 'row',
