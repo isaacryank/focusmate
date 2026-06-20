@@ -35,6 +35,9 @@ import {
   type MiloAiProposedTask,
   type MiloAiProposedTaskUpdate,
   type MiloAiSuggestedAction,
+  type MiloAiSmartNudge,
+  type MiloAiSmartPlan,
+  type MiloAiTimelineInsight,
 } from '../lib/miloAiClient';
 import {
   loadOnlineMeetingLinks,
@@ -77,6 +80,9 @@ type MiloTalkMessage = {
   proposedTaskDeletion?: MiloAiProposedTaskDeletion;
   proposedTaskDeletionStatus?: MiloProposedTaskDeletionStatus;
   proposedTaskDeletionSnapshot?: Task;
+  smartPlan?: MiloAiSmartPlan;
+  smartNudge?: MiloAiSmartNudge;
+  timelineInsight?: MiloAiTimelineInsight;
 };
 
 const MILO_TALK_INITIAL_TEXT =
@@ -249,6 +255,38 @@ function buildValidatedMiloAiActions({
   });
 
   return validatedActions;
+}
+
+function buildValidatedPlanningAction({
+  onlineMeetingLinks,
+  suggestedAction,
+  taskId,
+  tasks,
+}: {
+  onlineMeetingLinks: OnlineMeetingLink[];
+  suggestedAction?: MiloAiSuggestedAction | null;
+  taskId?: string | null;
+  tasks: Task[];
+}) {
+  if (!suggestedAction) {
+    return {
+      action: undefined,
+      task: undefined,
+    };
+  }
+
+  const task = taskId ? tasks.find((item) => item.id === taskId) : undefined;
+  const actions = buildValidatedMiloAiActions({
+    message: 'planning guidance',
+    onlineMeetingLinks,
+    relatedTask: task,
+    suggestedActions: [suggestedAction],
+  });
+
+  return {
+    action: actions[0],
+    task,
+  };
 }
 
 function replaceTypingMessage(
@@ -993,8 +1031,20 @@ export default function MiloChatScreen() {
             proposedTaskCompletion ||
             proposedTaskDeletion
         );
+        const smartPlan = hasProposal
+          ? undefined
+          : aiReply.smartPlan || undefined;
+        const smartNudge = hasProposal
+          ? undefined
+          : aiReply.smartNudge || undefined;
+        const timelineInsight = hasProposal
+          ? undefined
+          : aiReply.timelineInsight || undefined;
+        const hasAiCard = Boolean(
+          hasProposal || smartPlan || smartNudge || timelineInsight
+        );
         const relatedTask =
-          hasProposal
+          hasAiCard
             ? undefined
             : findRelatedTaskByAiId(tasks, aiReply.relatedTaskId);
 
@@ -1011,7 +1061,7 @@ export default function MiloChatScreen() {
             onlineMeetingLinks,
             relatedTask,
             suggestedActions:
-              hasProposal ? [] : aiReply.suggestedActions,
+              hasAiCard ? [] : aiReply.suggestedActions,
           }),
           proposedTask,
           proposedTaskStatus: proposedTask ? 'pending' : undefined,
@@ -1029,6 +1079,9 @@ export default function MiloChatScreen() {
           proposedTaskDeletionSnapshot: proposedTaskDeletion
             ? tasks.find((task) => task.id === proposedTaskDeletion.taskId)
             : undefined,
+          smartPlan,
+          smartNudge,
+          timelineInsight,
           createdAt: new Date().toISOString(),
         };
         nextStatus = 'online';
@@ -2011,6 +2064,217 @@ export default function MiloChatScreen() {
     );
   };
 
+  const renderPlanningActionButton = ({
+    actionKey,
+    suggestedAction,
+    taskId,
+  }: {
+    actionKey: string;
+    suggestedAction?: MiloAiSuggestedAction | null;
+    taskId?: string | null;
+  }) => {
+    const { action, task } = buildValidatedPlanningAction({
+      onlineMeetingLinks,
+      suggestedAction,
+      taskId,
+      tasks,
+    });
+
+    if (!action) {
+      return null;
+    }
+
+    return (
+      <View key={actionKey} style={styles.smartCardActionGrid}>
+        {renderTalkActionButton(action, 0, task)}
+      </View>
+    );
+  };
+
+  const renderSmartPlanCard = (message: MiloTalkMessage) => {
+    const smartPlan = message.smartPlan;
+
+    if (!smartPlan) {
+      return null;
+    }
+
+    return (
+      <View style={styles.smartCard}>
+        <View style={styles.smartCardHeader}>
+          <View style={styles.smartCardIcon}>
+            <Ionicons
+              name="sparkles-outline"
+              size={17}
+              color={theme.colors.primaryDark}
+            />
+          </View>
+          <View style={styles.smartCardHeaderCopy}>
+            <Text style={styles.smartCardEyebrow}>Smart plan</Text>
+            <Text numberOfLines={2} style={styles.smartCardTitle}>
+              {smartPlan.title}
+            </Text>
+          </View>
+        </View>
+
+        <Text style={styles.smartCardMessage}>{smartPlan.summary}</Text>
+
+        {smartPlan.steps.length ? (
+          <View style={styles.smartPlanStepList}>
+            {smartPlan.steps.map((step, index) => {
+              const task = step.taskId
+                ? tasks.find((item) => item.id === step.taskId)
+                : undefined;
+
+              return (
+                <View
+                  key={`${step.label}-${index}`}
+                  style={styles.smartPlanStep}
+                >
+                  <View style={styles.smartPlanStepNumber}>
+                    <Text style={styles.smartPlanStepNumberText}>
+                      {index + 1}
+                    </Text>
+                  </View>
+                  <View style={styles.smartPlanStepBody}>
+                    <Text style={styles.smartPlanStepLabel}>{step.label}</Text>
+                    {task ? (
+                      <Text numberOfLines={1} style={styles.smartCardTask}>
+                        {task.title}
+                      </Text>
+                    ) : null}
+                    {step.reason ? (
+                      <Text style={styles.smartCardReason}>{step.reason}</Text>
+                    ) : null}
+                    {renderPlanningActionButton({
+                      actionKey: `smart-plan-${index}`,
+                      suggestedAction: step.suggestedAction,
+                      taskId: step.taskId,
+                    })}
+                  </View>
+                </View>
+              );
+            })}
+          </View>
+        ) : null}
+      </View>
+    );
+  };
+
+  const renderSmartNudgeCard = (message: MiloTalkMessage) => {
+    const smartNudge = message.smartNudge;
+
+    if (!smartNudge) {
+      return null;
+    }
+
+    const task = smartNudge.taskId
+      ? tasks.find((item) => item.id === smartNudge.taskId)
+      : undefined;
+
+    return (
+      <View style={styles.smartCard}>
+        <View style={styles.smartCardHeader}>
+          <View style={styles.smartCardIcon}>
+            <Ionicons
+              name="leaf-outline"
+              size={17}
+              color={theme.colors.primaryDark}
+            />
+          </View>
+          <View style={styles.smartCardHeaderCopy}>
+            <Text style={styles.smartCardEyebrow}>Smart nudge</Text>
+            <Text numberOfLines={2} style={styles.smartCardTitle}>
+              {smartNudge.title}
+            </Text>
+          </View>
+        </View>
+
+        <Text style={styles.smartCardMessage}>{smartNudge.message}</Text>
+
+        {task ? (
+          <Text numberOfLines={1} style={styles.smartCardTask}>
+            {task.title}
+          </Text>
+        ) : null}
+
+        {renderPlanningActionButton({
+          actionKey: 'smart-nudge-action',
+          suggestedAction: smartNudge.suggestedAction,
+          taskId: smartNudge.taskId,
+        })}
+      </View>
+    );
+  };
+
+  const renderTimelineInsightCard = (message: MiloTalkMessage) => {
+    const timelineInsight = message.timelineInsight;
+
+    if (!timelineInsight) {
+      return null;
+    }
+
+    const relatedTasks = (timelineInsight.taskIds || [])
+      .map((taskId) => tasks.find((item) => item.id === taskId))
+      .filter((task): task is Task => Boolean(task));
+
+    return (
+      <View style={styles.smartCard}>
+        <View style={styles.smartCardHeader}>
+          <View style={styles.smartCardIcon}>
+            <Ionicons
+              name="time-outline"
+              size={17}
+              color={theme.colors.primaryDark}
+            />
+          </View>
+          <View style={styles.smartCardHeaderCopy}>
+            <Text style={styles.smartCardEyebrow}>Timeline insight</Text>
+            <Text numberOfLines={2} style={styles.smartCardTitle}>
+              {timelineInsight.title}
+            </Text>
+          </View>
+        </View>
+
+        <Text style={styles.smartCardMessage}>{timelineInsight.message}</Text>
+
+        {timelineInsight.warnings?.length ? (
+          <View style={styles.timelineWarningList}>
+            {timelineInsight.warnings.map((warning, index) => (
+              <View
+                key={`${warning}-${index}`}
+                style={styles.timelineWarningRow}
+              >
+                <Ionicons
+                  name="alert-circle-outline"
+                  size={14}
+                  color={theme.colors.primaryDark}
+                />
+                <Text style={styles.timelineWarningText}>{warning}</Text>
+              </View>
+            ))}
+          </View>
+        ) : null}
+
+        {relatedTasks.length ? (
+          <View style={styles.timelineTaskList}>
+            {relatedTasks.map((task) => (
+              <View key={task.id} style={styles.timelineTaskPill}>
+                <Ionicons
+                  name={proposedTaskIcons[task.plannerType]}
+                  size={13}
+                  color={theme.colors.primaryDark}
+                />
+                <Text numberOfLines={1} style={styles.timelineTaskText}>
+                  {task.title}
+                </Text>
+              </View>
+            ))}
+          </View>
+        ) : null}
+      </View>
+    );
+  };
+
   const renderTalkMessage = (message: MiloTalkMessage) => {
     if (message.role === 'user') {
       return (
@@ -2054,6 +2318,14 @@ export default function MiloChatScreen() {
 
             {message.proposedTaskDeletion
               ? renderProposedTaskDeletionCard(message)
+              : null}
+
+            {message.smartPlan ? renderSmartPlanCard(message) : null}
+
+            {message.smartNudge ? renderSmartNudgeCard(message) : null}
+
+            {message.timelineInsight
+              ? renderTimelineInsightCard(message)
               : null}
 
             {message.relatedTask ? (
@@ -2534,6 +2806,144 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '800',
     lineHeight: 16,
+  },
+  smartCard: {
+    marginTop: 12,
+    borderRadius: 18,
+    backgroundColor: '#F7FBF6',
+    borderWidth: 1,
+    borderColor: '#DCEADC',
+    paddingHorizontal: 11,
+    paddingVertical: 11,
+  },
+  smartCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  smartCardIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 14,
+    backgroundColor: theme.colors.primarySoft,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 10,
+  },
+  smartCardHeaderCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  smartCardEyebrow: {
+    color: theme.colors.primaryDark,
+    fontSize: 10,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+  },
+  smartCardTitle: {
+    marginTop: 3,
+    color: '#111827',
+    fontSize: 13,
+    fontWeight: '900',
+    lineHeight: 18,
+  },
+  smartCardMessage: {
+    marginTop: 10,
+    color: '#111827',
+    fontSize: 12,
+    fontWeight: '800',
+    lineHeight: 17,
+  },
+  smartPlanStepList: {
+    marginTop: 10,
+    gap: 9,
+  },
+  smartPlanStep: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+  },
+  smartPlanStepNumber: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: theme.colors.primarySoft,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 9,
+    flexShrink: 0,
+  },
+  smartPlanStepNumberText: {
+    color: theme.colors.primaryDark,
+    fontSize: 10,
+    fontWeight: '900',
+  },
+  smartPlanStepBody: {
+    flex: 1,
+    minWidth: 0,
+  },
+  smartPlanStepLabel: {
+    color: '#111827',
+    fontSize: 12,
+    fontWeight: '900',
+    lineHeight: 17,
+  },
+  smartCardTask: {
+    marginTop: 4,
+    color: theme.colors.primaryDark,
+    fontSize: 10,
+    fontWeight: '900',
+  },
+  smartCardReason: {
+    marginTop: 4,
+    color: theme.colors.textSoft,
+    fontSize: 11,
+    fontWeight: '800',
+    lineHeight: 15,
+  },
+  smartCardActionGrid: {
+    marginTop: 8,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  timelineWarningList: {
+    marginTop: 10,
+    gap: 7,
+  },
+  timelineWarningRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 6,
+  },
+  timelineWarningText: {
+    flex: 1,
+    color: theme.colors.textSoft,
+    fontSize: 11,
+    fontWeight: '800',
+    lineHeight: 15,
+  },
+  timelineTaskList: {
+    marginTop: 10,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 7,
+  },
+  timelineTaskPill: {
+    maxWidth: '100%',
+    borderRadius: 999,
+    backgroundColor: theme.colors.white,
+    borderWidth: 1,
+    borderColor: '#DBE7DB',
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 9,
+    paddingVertical: 6,
+    gap: 5,
+  },
+  timelineTaskText: {
+    maxWidth: 190,
+    color: theme.colors.primaryDark,
+    fontSize: 10,
+    fontWeight: '900',
   },
   miloTalkTaskCard: {
     marginTop: 12,

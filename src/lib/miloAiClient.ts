@@ -71,6 +71,41 @@ export type MiloAiProposedTaskDeletion = {
   reason?: string | null;
 };
 
+export type MiloAiSmartPlanStep = {
+  label: string;
+  taskId?: string | null;
+  reason?: string | null;
+  suggestedAction?: MiloAiSuggestedAction | null;
+};
+
+export type MiloAiSmartPlan = {
+  title: string;
+  summary: string;
+  steps: MiloAiSmartPlanStep[];
+};
+
+export type MiloAiSmartNudge = {
+  title: string;
+  message: string;
+  taskId?: string | null;
+  suggestedAction?: MiloAiSuggestedAction | null;
+};
+
+export type MiloAiTimelineInsight = {
+  title: string;
+  message: string;
+  warnings?: string[];
+  taskIds?: string[];
+};
+
+export type MiloAiDebugReason =
+  | 'missing_api_key'
+  | 'openai_http_error'
+  | 'openai_parse_error'
+  | 'invalid_response_shape'
+  | 'unhandled_exception'
+  | 'fallback_builder_failed';
+
 export type MiloAiResponse = {
   text: string;
   relatedTaskId?: string | null;
@@ -79,11 +114,21 @@ export type MiloAiResponse = {
   proposedTaskUpdate?: MiloAiProposedTaskUpdate | null;
   proposedTaskCompletion?: MiloAiProposedTaskCompletion | null;
   proposedTaskDeletion?: MiloAiProposedTaskDeletion | null;
+  smartPlan?: MiloAiSmartPlan | null;
+  smartNudge?: MiloAiSmartNudge | null;
+  timelineInsight?: MiloAiTimelineInsight | null;
+  debugReason?: MiloAiDebugReason;
   usedAi: boolean;
 };
 
 type RecentMessageSource = MiloAiRecentMessage & {
   isTyping?: boolean;
+  relatedTask?: Task;
+  proposedTask?: MiloAiProposedTask;
+  proposedTaskDeletionSnapshot?: Task;
+  smartPlan?: MiloAiSmartPlan;
+  smartNudge?: MiloAiSmartNudge;
+  timelineInsight?: MiloAiTimelineInsight;
 };
 
 type AskMiloAiInput = {
@@ -97,8 +142,18 @@ const MAX_AI_TASKS = 24;
 const MAX_RECENT_MESSAGES = 8;
 const MAX_TITLE_LENGTH = 120;
 const MAX_DESCRIPTION_LENGTH = 260;
+const MAX_PLANNING_MESSAGE_LENGTH = 360;
 const MAX_LOCATION_LENGTH = 160;
 const MAX_MESSAGE_LENGTH = 1200;
+
+const allowedDebugReasons = new Set<MiloAiDebugReason>([
+  'missing_api_key',
+  'openai_http_error',
+  'openai_parse_error',
+  'invalid_response_shape',
+  'unhandled_exception',
+  'fallback_builder_failed',
+]);
 
 function trimToLength(value: string | undefined, maxLength: number) {
   const trimmed = value?.trim();
@@ -163,6 +218,24 @@ function cleanMiloAiText(value: string) {
 
 function trimUnknownText(value: unknown, maxLength: number) {
   return typeof value === 'string' ? trimToLength(value, maxLength) : undefined;
+}
+
+function sanitizeMiloAiSuggestedAction(
+  action: unknown
+): MiloAiSuggestedAction | null {
+  return action === 'view_task' ||
+    action === 'start_focus' ||
+    action === 'find_resources' ||
+    action === 'open_maps' ||
+    action === 'join_meeting'
+    ? action
+    : null;
+}
+
+function sanitizeMiloAiDebugReason(reason: unknown): MiloAiDebugReason | undefined {
+  return allowedDebugReasons.has(reason as MiloAiDebugReason)
+    ? (reason as MiloAiDebugReason)
+    : undefined;
 }
 
 function sanitizeMiloAiProposedTask(
@@ -355,6 +428,123 @@ function sanitizeMiloAiProposedTaskDeletion(
   };
 }
 
+function sanitizeMiloAiTaskId(taskId: unknown) {
+  return trimUnknownText(taskId, 80) || null;
+}
+
+function sanitizeMiloAiSmartPlan(
+  smartPlan: unknown
+): MiloAiSmartPlan | null {
+  if (!smartPlan || typeof smartPlan !== 'object' || Array.isArray(smartPlan)) {
+    return null;
+  }
+
+  const plan = smartPlan as Record<string, unknown>;
+  const title = trimUnknownText(plan.title, MAX_TITLE_LENGTH);
+  const summary = trimUnknownText(plan.summary, MAX_PLANNING_MESSAGE_LENGTH);
+  const rawSteps = Array.isArray(plan.steps) ? plan.steps : [];
+
+  if (!title || !summary) {
+    return null;
+  }
+
+  const steps = rawSteps
+    .map((rawStep): MiloAiSmartPlanStep | null => {
+      if (!rawStep || typeof rawStep !== 'object' || Array.isArray(rawStep)) {
+        return null;
+      }
+
+      const step = rawStep as Record<string, unknown>;
+      const label = trimUnknownText(step.label, 180);
+
+      if (!label) {
+        return null;
+      }
+
+      return {
+        label,
+        taskId: sanitizeMiloAiTaskId(step.taskId),
+        reason: trimUnknownText(step.reason, MAX_DESCRIPTION_LENGTH) || null,
+        suggestedAction: sanitizeMiloAiSuggestedAction(step.suggestedAction),
+      };
+    })
+    .filter((step): step is MiloAiSmartPlanStep => Boolean(step))
+    .slice(0, 6);
+
+  return {
+    title,
+    summary,
+    steps,
+  };
+}
+
+function sanitizeMiloAiSmartNudge(
+  smartNudge: unknown
+): MiloAiSmartNudge | null {
+  if (
+    !smartNudge ||
+    typeof smartNudge !== 'object' ||
+    Array.isArray(smartNudge)
+  ) {
+    return null;
+  }
+
+  const nudge = smartNudge as Record<string, unknown>;
+  const title = trimUnknownText(nudge.title, MAX_TITLE_LENGTH);
+  const message = trimUnknownText(nudge.message, MAX_PLANNING_MESSAGE_LENGTH);
+
+  if (!title || !message) {
+    return null;
+  }
+
+  return {
+    title,
+    message,
+    taskId: sanitizeMiloAiTaskId(nudge.taskId),
+    suggestedAction: sanitizeMiloAiSuggestedAction(nudge.suggestedAction),
+  };
+}
+
+function sanitizeMiloAiTimelineInsight(
+  timelineInsight: unknown
+): MiloAiTimelineInsight | null {
+  if (
+    !timelineInsight ||
+    typeof timelineInsight !== 'object' ||
+    Array.isArray(timelineInsight)
+  ) {
+    return null;
+  }
+
+  const insight = timelineInsight as Record<string, unknown>;
+  const title = trimUnknownText(insight.title, MAX_TITLE_LENGTH);
+  const message = trimUnknownText(insight.message, MAX_PLANNING_MESSAGE_LENGTH);
+
+  if (!title || !message) {
+    return null;
+  }
+
+  const warnings = Array.isArray(insight.warnings)
+    ? insight.warnings
+        .map((warning) => trimUnknownText(warning, 180))
+        .filter((warning): warning is string => Boolean(warning))
+        .slice(0, 5)
+    : [];
+  const taskIds = Array.isArray(insight.taskIds)
+    ? insight.taskIds
+        .map(sanitizeMiloAiTaskId)
+        .filter((taskId): taskId is string => Boolean(taskId))
+        .slice(0, 8)
+    : [];
+
+  return {
+    title,
+    message,
+    warnings,
+    taskIds,
+  };
+}
+
 function getTaskSortKey(task: Task) {
   return [task.dueDate || '9999-99-99', task.dueTime || '99:99'].join(' ');
 }
@@ -417,10 +607,34 @@ export function buildMiloAiRecentMessages(
   return messages
     .filter((message) => !message.isTyping && message.text.trim())
     .slice(-MAX_RECENT_MESSAGES)
-    .map((message) => ({
-      role: message.role,
-      text: trimToLength(message.text, MAX_MESSAGE_LENGTH) || '',
-    }));
+    .map((message) => {
+      const context = [
+        message.relatedTask?.title
+          ? `Related task: ${message.relatedTask.title}`
+          : undefined,
+        message.proposedTask?.title
+          ? `Proposed task: ${message.proposedTask.title}`
+          : undefined,
+        message.proposedTaskDeletionSnapshot?.title
+          ? `Proposed removal: ${message.proposedTaskDeletionSnapshot.title}`
+          : undefined,
+        message.smartPlan?.title
+          ? `Smart plan card: ${message.smartPlan.title}`
+          : undefined,
+        message.smartNudge?.title
+          ? `Smart nudge card: ${message.smartNudge.title}`
+          : undefined,
+        message.timelineInsight?.title
+          ? `Timeline insight card: ${message.timelineInsight.title}`
+          : undefined,
+      ].filter(Boolean);
+      const text = [message.text, ...context].join('\n');
+
+      return {
+        role: message.role,
+        text: trimToLength(text, MAX_MESSAGE_LENGTH) || '',
+      };
+    });
 }
 
 export async function askMiloAi({
@@ -447,7 +661,25 @@ export async function askMiloAi({
     }
   );
 
+  const responseKeys =
+    data && typeof data === 'object'
+      ? Object.keys(data as Record<string, unknown>)
+      : [];
+  const debugReason = sanitizeMiloAiDebugReason(data?.debugReason);
+
+  if (data?.usedAi === false) {
+    console.warn('Milo AI fallback debug', {
+      debugReason,
+      usedAi: data.usedAi,
+      responseKeys,
+    });
+  } else {
+    console.warn('Milo AI usedAi', data?.usedAi);
+    console.warn('Milo AI response keys', responseKeys);
+  }
+
   if (error) {
+    console.warn('Milo AI invoke error', error);
     throw error;
   }
 
@@ -461,6 +693,8 @@ export async function askMiloAi({
       typeof data.relatedTaskId === 'string' ? data.relatedTaskId : null,
     suggestedActions: Array.isArray(data.suggestedActions)
       ? data.suggestedActions
+          .map(sanitizeMiloAiSuggestedAction)
+          .filter((action): action is MiloAiSuggestedAction => Boolean(action))
       : [],
     proposedTask: sanitizeMiloAiProposedTask(data.proposedTask),
     proposedTaskUpdate: sanitizeMiloAiProposedTaskUpdate(
@@ -472,6 +706,10 @@ export async function askMiloAi({
     proposedTaskDeletion: sanitizeMiloAiProposedTaskDeletion(
       data.proposedTaskDeletion
     ),
-    usedAi: data.usedAi === true,
+    smartPlan: sanitizeMiloAiSmartPlan(data.smartPlan),
+    smartNudge: sanitizeMiloAiSmartNudge(data.smartNudge),
+    timelineInsight: sanitizeMiloAiTimelineInsight(data.timelineInsight),
+    debugReason,
+    usedAi: data.usedAi !== false,
   };
 }
