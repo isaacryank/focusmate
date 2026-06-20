@@ -16,6 +16,9 @@ export type RootStackParamList = {
     MiloPlan: {
       taskId: string;
     };
+    MiloSmartPlan: {
+      taskId: string;
+    };
     MiloChat: { sessionId?: string } | undefined;
     MiloChatHistory: undefined;
     FocusSession: { taskId?: string } | undefined;

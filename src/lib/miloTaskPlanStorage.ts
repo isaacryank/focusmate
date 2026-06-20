@@ -185,6 +185,10 @@ function sanitizeTaskPlan(value: unknown, taskId?: string): MiloTaskPlan | null 
         .filter((chip): chip is string => Boolean(chip))
         .slice(0, 4)
     : [];
+  const resolvedTimeline =
+    timeline.length > 0
+      ? timeline
+      : createTimelineFromPlanSteps(resolvedTaskId, steps);
 
   return {
     taskId: resolvedTaskId,
@@ -196,7 +200,7 @@ function sanitizeTaskPlan(value: unknown, taskId?: string): MiloTaskPlan | null 
       steps,
     },
     nudges,
-    timeline,
+    timeline: resolvedTimeline,
     insight: {
       title: trimText(insight.title, 100) || 'Milo Insight',
       message:
@@ -332,20 +336,91 @@ function getFallbackSteps(task: Task, options?: LocalTaskPlanOptions) {
   ];
 }
 
-function getFallbackTimeline(task: Task, steps: string[]) {
-  const dueLabel = [task.dueDate, task.dueTime].filter(Boolean).join(' ');
-
-  return steps.slice(0, 5).map((step, index) => ({
-    id: `${task.id}-local-timeline-${index + 1}`,
-    label: step,
+function createTimelineFromPlanSteps(
+  taskId: string,
+  steps: MiloTaskPlanStep[],
+  dueLabel?: string
+): MiloTaskPlanTimelineItem[] {
+  return steps.slice(0, 6).map((step, index) => ({
+    id: step.id,
+    label: step.label,
     detail:
-      index === 0
+      step.detail ||
+      (index === 0
         ? 'Start here'
         : dueLabel
         ? `Before ${dueLabel}`
-        : 'When ready',
-    statusLabel: index === 0 ? 'Next' : 'Upcoming',
+        : 'When ready'),
+    statusLabel: index === 0 ? 'Next' : index === steps.length - 1 ? 'Final' : 'Upcoming',
   }));
+}
+
+function getFallbackTimeline(task: Task, steps: MiloTaskPlanStep[]) {
+  const dueLabel = [task.dueDate, task.dueTime].filter(Boolean).join(' ');
+
+  return createTimelineFromPlanSteps(task.id, steps, dueLabel);
+}
+
+function getSmartNudgeTiming(
+  task: Task,
+  nudge: { id: string; timing: string }
+) {
+  if (nudge.id === 'prep') {
+    return task.plannerType === 'meeting' ? 'Before meeting' : 'Before start';
+  }
+
+  if (nudge.id === 'start' || nudge.id === 'start-early') {
+    return 'When free';
+  }
+
+  if (nudge.id === 'morning') {
+    return 'Early today';
+  }
+
+  if (nudge.id === 'check-in' || nudge.id === 'one-day') {
+    return 'Check-in moment';
+  }
+
+  if (nudge.id === 'final') {
+    if (task.plannerType === 'date') {
+      return 'Before leaving';
+    }
+
+    if (task.plannerType === 'meeting') {
+      return 'Final check';
+    }
+
+    return 'Before finishing';
+  }
+
+  return nudge.timing;
+}
+
+function getSmartNudgeMessage(
+  task: Task,
+  nudge: { id: string; message: string }
+) {
+  if (nudge.id === 'prep') {
+    return 'Milo will nudge you to prepare early while there is still room.';
+  }
+
+  if (nudge.id === 'start' || nudge.id === 'start-early') {
+    return 'Milo can gently help you begin when you have a clear moment.';
+  }
+
+  if (nudge.id === 'final') {
+    if (task.plannerType === 'date') {
+      return 'Milo gives you a warm final check before departure.';
+    }
+
+    if (task.plannerType === 'meeting') {
+      return 'Milo reminds you to check notes, link, or place before it starts.';
+    }
+
+    return 'Milo gives you a small final push when the task is close.';
+  }
+
+  return nudge.message;
 }
 
 function getFallbackInsight(task: Task) {
@@ -384,6 +459,15 @@ export function createLocalTaskPlan(
   const fallbackSteps = getFallbackSteps(task, options);
   const stepLabels = fallbackSteps;
   const nudges = generateMiloSmartNudges(task);
+  const steps = stepLabels.slice(0, 6).map((label, index) => ({
+    id: `${task.id}-local-step-${index + 1}`,
+    label,
+    detail:
+      index === 0
+        ? 'Start with this tiny move.'
+        : 'Keep it small and practical.',
+    status: index === 0 ? 'in_progress' : 'todo',
+  })) satisfies MiloTaskPlanStep[];
 
   return {
     taskId: task.id,
@@ -396,23 +480,15 @@ export function createLocalTaskPlan(
           : task.plannerType === 'date'
           ? 'Milo Date Prep Plan'
           : 'Milo Smart Plan',
-      steps: stepLabels.slice(0, 6).map((label, index) => ({
-        id: `${task.id}-local-step-${index + 1}`,
-        label,
-        detail:
-          index === 0
-            ? 'Start with this tiny move.'
-            : 'Keep it small and practical.',
-        status: index === 0 ? 'in_progress' : 'todo',
-      })),
+      steps,
     },
     nudges: nudges.slice(0, 4).map((nudge, index) => ({
       id: `${task.id}-local-nudge-${index + 1}`,
       title: nudge.label,
-      message: nudge.message,
-      timingLabel: nudge.timing,
+      message: getSmartNudgeMessage(task, nudge),
+      timingLabel: getSmartNudgeTiming(task, nudge),
     })),
-    timeline: getFallbackTimeline(task, stepLabels),
+    timeline: getFallbackTimeline(task, steps),
     insight: getFallbackInsight(task),
   };
 }

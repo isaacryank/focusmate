@@ -155,7 +155,8 @@ function normalizeAiNudges(
 
 function normalizeAiTimeline(
   timeline: unknown,
-  fallbackPlan: MiloTaskPlan
+  fallbackPlan: MiloTaskPlan,
+  planSteps: MiloTaskPlanStep[]
 ): MiloTaskPlanTimelineItem[] {
   const aiTimeline = Array.isArray(timeline)
     ? timeline
@@ -172,9 +173,14 @@ function normalizeAiTimeline(
           }
 
           return {
-            id: `${fallbackPlan.taskId}-ai-timeline-${index + 1}`,
+            id:
+              planSteps[index]?.id ||
+              `${fallbackPlan.taskId}-ai-timeline-${index + 1}`,
             label,
-            detail: trimText(rawItem.detail, 180) || null,
+            detail:
+              trimText(rawItem.detail, 180) ||
+              planSteps[index]?.detail ||
+              null,
             statusLabel: trimText(rawItem.statusLabel, 40) || null,
           };
         })
@@ -184,7 +190,14 @@ function normalizeAiTimeline(
         .slice(0, 6)
     : [];
 
-  return aiTimeline.length > 0 ? aiTimeline : fallbackPlan.timeline;
+  return aiTimeline.length > 0
+    ? aiTimeline
+    : planSteps.slice(0, 6).map((step, index) => ({
+        id: step.id,
+        label: step.label,
+        detail: step.detail || (index === 0 ? 'Start here' : 'When ready'),
+        statusLabel: index === 0 ? 'Next' : 'Upcoming',
+      }));
 }
 
 function normalizeAiInsight(
@@ -237,7 +250,7 @@ function normalizeAiTaskPlan({
       steps,
     },
     nudges: normalizeAiNudges(rawPlan.nudges, fallbackPlan),
-    timeline: normalizeAiTimeline(rawPlan.timeline, fallbackPlan),
+    timeline: normalizeAiTimeline(rawPlan.timeline, fallbackPlan, steps),
     insight: normalizeAiInsight(rawPlan.insight, fallbackPlan),
   };
 }

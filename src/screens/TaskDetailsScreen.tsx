@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   Modal,
@@ -9,6 +9,7 @@ import {
   View,
 } from 'react-native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
+import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 
 import { RootStackParamList } from '../types/navigation';
@@ -38,6 +39,7 @@ import {
   saveMiloTaskPlan,
   type MiloTaskPlan,
   type MiloTaskPlanStep,
+  type MiloTaskPlanTimelineItem,
 } from '../lib/miloTaskPlanStorage';
 
 import ScreenContainer from '../components/ui/ScreenContainer';
@@ -107,10 +109,119 @@ function getPlanStatusLabel(status: MiloTaskPlanStep['status']) {
   return 'To do';
 }
 
-function formatPlanStepMeta(item: DisplayPlanItem) {
-  const statusLabel = getPlanStatusLabel(item.status);
+function trimShortCue(value: string) {
+  const firstSentence = value.split(/[.!?]/)[0]?.trim() || value.trim();
 
-  return item.detail ? `${statusLabel} - ${item.detail}` : statusLabel;
+  return firstSentence.length > 54
+    ? `${firstSentence.slice(0, 53)}...`
+    : firstSentence;
+}
+
+function getNudgeCue(nudge: { timingLabel?: string | null; message: string }) {
+  return trimShortCue(nudge.timingLabel || nudge.message);
+}
+
+function getCompletedNudgeCue(index: number) {
+  const cues = ['All set', 'Ready', 'Good to go'];
+  return cues[index % cues.length];
+}
+
+function getCompletedNudgeMessage() {
+  return 'All plan steps are done. Milo thinks you are prepared.';
+}
+
+function normalizeMatchText(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+function findDirectMatchingPlanItem({
+  id,
+  planItems,
+  title,
+}: {
+  id?: string;
+  planItems: DisplayPlanItem[];
+  title: string;
+}) {
+  if (id) {
+    const idMatch = planItems.find((item) => item.id === id);
+
+    if (idMatch) {
+      return idMatch;
+    }
+  }
+
+  const normalizedTitle = normalizeMatchText(title);
+
+  if (!normalizedTitle) {
+    return undefined;
+  }
+
+  return planItems.find((item) => {
+    const normalizedItemTitle = normalizeMatchText(item.title);
+    return (
+      normalizedItemTitle === normalizedTitle ||
+      normalizedItemTitle.includes(normalizedTitle) ||
+      normalizedTitle.includes(normalizedItemTitle)
+    );
+  });
+}
+
+function findMatchingPlanItem({
+  id,
+  index,
+  planItems,
+  title,
+}: {
+  id?: string;
+  index: number;
+  planItems: DisplayPlanItem[];
+  title: string;
+}) {
+  return (
+    findDirectMatchingPlanItem({ id, planItems, title }) || planItems[index]
+  );
+}
+
+function normalizeTimelineStatusLabel(value?: string | null) {
+  const normalized = value?.trim().toLowerCase();
+
+  if (normalized === 'done') return 'Done';
+  if (normalized === 'next') return 'Next';
+  if (normalized === 'final') return 'Final';
+  return 'Upcoming';
+}
+
+function deriveTimelineFromPlanSteps(
+  planItems: DisplayPlanItem[]
+): MiloTaskPlanTimelineItem[] {
+  return planItems.slice(0, 6).map((item, index) => ({
+    id: item.id,
+    label: item.title,
+    detail:
+      item.detail ||
+      (index === 0 ? 'Start with this step' : 'Keep the flow gentle'),
+    statusLabel: index === 0 ? 'Next' : 'Upcoming',
+  }));
+}
+
+function isGeneratedTimelineUseful(
+  timeline: MiloTaskPlanTimelineItem[],
+  planItems: DisplayPlanItem[]
+) {
+  if (timeline.length === 0 || planItems.length === 0) {
+    return false;
+  }
+
+  return timeline.some((item) =>
+    Boolean(
+      findDirectMatchingPlanItem({
+        id: item.id,
+        planItems,
+        title: item.label,
+      })
+    )
+  );
 }
 
 function normalizePlanStepStatuses(
@@ -228,6 +339,7 @@ function TimelineStatusChip({ label }: { label: string }) {
   const normalized = label.toLowerCase();
   const isDone = normalized === 'done';
   const isNext = normalized === 'next';
+  const isFinal = normalized === 'final';
 
   return (
     <View
@@ -235,6 +347,7 @@ function TimelineStatusChip({ label }: { label: string }) {
         styles.timelineChip,
         isDone && styles.timelineChipDone,
         isNext && styles.timelineChipNext,
+        isFinal && styles.timelineChipFinal,
       ]}
     >
       <Text
@@ -242,6 +355,7 @@ function TimelineStatusChip({ label }: { label: string }) {
           styles.timelineChipText,
           isDone && styles.timelineChipTextDone,
           isNext && styles.timelineChipTextNext,
+          isFinal && styles.timelineChipTextFinal,
         ]}
       >
         {label}
@@ -298,16 +412,24 @@ function ChecklistItem({
         ) : null}
       </View>
 
-      <Text
-        style={[
-          styles.checklistText,
-          item.completed && styles.checklistTextDone,
-        ]}
-      >
-        {item.title}
-      </Text>
+      <View style={styles.checklistCopy}>
+        <Text
+          numberOfLines={2}
+          style={[
+            styles.checklistText,
+            item.completed && styles.checklistTextDone,
+          ]}
+        >
+          {item.title}
+        </Text>
+        {item.detail ? (
+          <Text numberOfLines={2} style={styles.checklistDetail}>
+            {item.detail}
+          </Text>
+        ) : null}
+      </View>
 
-      <Ionicons name="ellipsis-vertical" size={16} color={theme.colors.muted} />
+      <Text style={styles.stepStatusText}>{getPlanStatusLabel(item.status)}</Text>
     </TouchableOpacity>
   );
 }
@@ -371,36 +493,7 @@ export default function TaskDetailsScreen({ navigation, route }: Props) {
 
   const task = tasks.find((item) => item.id === route.params.taskId);
 
-  useEffect(() => {
-    let isMounted = true;
-
-    if (!task?.id) {
-      setOnlineMeetingLink(null);
-      return () => {
-        isMounted = false;
-      };
-    }
-
-    getOnlineMeetingLinkForTask(task.id)
-      .then((savedMeetingLink) => {
-        if (isMounted) {
-          setOnlineMeetingLink(savedMeetingLink);
-        }
-      })
-      .catch((error) => {
-        console.warn('Failed to load online meeting link:', error);
-
-        if (isMounted) {
-          setOnlineMeetingLink(null);
-        }
-      });
-
-    return () => {
-      isMounted = false;
-    };
-  }, [task?.id]);
-
-  useEffect(() => {
+  const loadSavedTaskPlan = useCallback(() => {
     let isMounted = true;
 
     setShowAllPlanSteps(false);
@@ -431,6 +524,38 @@ export default function TaskDetailsScreen({ navigation, route }: Props) {
     };
   }, [task?.id]);
 
+  useEffect(() => {
+    let isMounted = true;
+
+    if (!task?.id) {
+      setOnlineMeetingLink(null);
+      return () => {
+        isMounted = false;
+      };
+    }
+
+    getOnlineMeetingLinkForTask(task.id)
+      .then((savedMeetingLink) => {
+        if (isMounted) {
+          setOnlineMeetingLink(savedMeetingLink);
+        }
+      })
+      .catch((error) => {
+        console.warn('Failed to load online meeting link:', error);
+
+        if (isMounted) {
+          setOnlineMeetingLink(null);
+        }
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [task?.id]);
+
+  useEffect(loadSavedTaskPlan, [loadSavedTaskPlan]);
+  useFocusEffect(loadSavedTaskPlan);
+
   const detectedMeetingProvider = useMemo(() => {
     if (!meetingLinkInput.trim()) {
       return null;
@@ -453,10 +578,8 @@ export default function TaskDetailsScreen({ navigation, route }: Props) {
       return null;
     }
 
-    return generatedTaskPlan?.taskId === task.id
-      ? generatedTaskPlan
-      : createLocalTaskPlan(task, { hasMeetingLink: hasOnlineMeetingLink });
-  }, [generatedTaskPlan, hasOnlineMeetingLink, task]);
+    return generatedTaskPlan?.taskId === task.id ? generatedTaskPlan : null;
+  }, [generatedTaskPlan, task]);
 
   if (!task || !miloData) {
     return (
@@ -485,9 +608,17 @@ export default function TaskDetailsScreen({ navigation, route }: Props) {
   const completedPlanItems = planItems.filter((item) => item.completed).length;
   const progress =
     planItems.length > 0 ? Math.round((completedPlanItems / planItems.length) * 100) : 0;
+  const isPlanFullyCompleted =
+    planItems.length > 0 && completedPlanItems === planItems.length;
   const miloUrgency = task.miloUrgency || calculateMiloUrgency(task);
   const smartNudges = displayTaskPlan?.nudges || [];
   const miloInsight = displayTaskPlan?.insight;
+  const insightMessage = isPlanFullyCompleted
+    ? "All steps are done. You're good to go."
+    : miloInsight?.message || 'Small steps, big results.';
+  const insightChips = isPlanFullyCompleted
+    ? ['All set', 'Ready', 'Good to go']
+    : miloInsight?.chips || ['Break task down', 'Prep early', 'Check-in tomorrow'];
   const planSourceLabel =
     displayTaskPlan?.source === 'ai' ? 'AI generated' : 'Local plan';
   const joinUrl = onlineMeetingLink?.url;
@@ -499,9 +630,9 @@ export default function TaskDetailsScreen({ navigation, route }: Props) {
   const heroMessage =
     task.status === 'completed'
       ? 'You did it. Milo is proud'
-      : displayTaskPlan?.source === 'ai'
-      ? 'Your AI smart plan is ready. Milo can nudge you too.'
-      : 'I made a little local plan for you';
+      : displayTaskPlan
+      ? 'Your smart plan is ready when you want to prep.'
+      : 'Task details are ready. Milo can help you prep when needed.';
 
   const focusActionLabel =
     task.plannerType === 'meeting'
@@ -519,13 +650,53 @@ export default function TaskDetailsScreen({ navigation, route }: Props) {
       ? 'Mark Done'
       : 'Mark Ready';
 
-  const timelineItems =
-    displayTaskPlan?.timeline.map((item) => ({
+  const generatedTimelineItems = displayTaskPlan?.timeline || [];
+  const shouldUseGeneratedTimeline = isGeneratedTimelineUseful(
+    generatedTimelineItems,
+    planItems
+  );
+  const sourceTimelineItems =
+    shouldUseGeneratedTimeline || planItems.length === 0
+      ? generatedTimelineItems
+      : deriveTimelineFromPlanSteps(planItems);
+  const baseTimelineItems =
+    sourceTimelineItems.map((item) => ({
       id: item.id,
       title: item.label,
       detail: item.detail || 'When ready',
       statusLabel: item.statusLabel || 'Upcoming',
-    })) || [];
+    }));
+  const nextTimelineItemIndex = baseTimelineItems.findIndex((item, index) => {
+    const matchingPlanItem = findMatchingPlanItem({
+      id: item.id,
+      index,
+      planItems,
+      title: item.title,
+    });
+    return !matchingPlanItem?.completed;
+  });
+  const timelineItems = baseTimelineItems.map((item, index) => {
+    const matchingPlanItem = findMatchingPlanItem({
+      id: item.id,
+      index,
+      planItems,
+      title: item.title,
+    });
+    const normalizedStatus = normalizeTimelineStatusLabel(item.statusLabel);
+
+    return {
+      ...item,
+      statusLabel: isPlanFullyCompleted
+        ? 'Done'
+        : matchingPlanItem?.completed
+        ? 'Done'
+        : index === nextTimelineItemIndex
+        ? 'Next'
+        : normalizedStatus === 'Final'
+        ? 'Final'
+        : 'Upcoming',
+    };
+  });
 
   const handleDelete = () => {
     Alert.alert(
@@ -806,7 +977,7 @@ export default function TaskDetailsScreen({ navigation, route }: Props) {
       return;
     }
 
-    navigation.navigate('MiloPlan', { taskId: task.id });
+    navigation.navigate('MiloSmartPlan', { taskId: task.id });
   };
 
   const handleOpenMaps = () => {
@@ -832,6 +1003,10 @@ export default function TaskDetailsScreen({ navigation, route }: Props) {
 
   const handleMiddleAction = () => {
     handleToggleTask();
+  };
+
+  const handleOpenSmartPlan = () => {
+    navigation.navigate('MiloSmartPlan', { taskId: task.id });
   };
 
   const displayPlanItems = showAllPlanSteps ? planItems : planItems.slice(0, 3);
@@ -1010,166 +1185,57 @@ export default function TaskDetailsScreen({ navigation, route }: Props) {
         </View>
       ) : null}
 
-      <View style={styles.tabControl}>
-        <TabButton label="Plan" active={activeTab === 'plan'} onPress={() => setActiveTab('plan')} />
-        <TabButton label="Nudges" active={activeTab === 'nudges'} onPress={() => setActiveTab('nudges')} />
-        <TabButton label="Timeline" active={activeTab === 'timeline'} onPress={() => setActiveTab('timeline')} />
-      </View>
-
-      {activeTab === 'plan' ? (
-        <View style={styles.planCard}>
-          <View style={styles.cardHeader}>
-            <View style={styles.cardTitleBlock}>
-              <Text style={styles.cardTitle}>
-                {displayTaskPlan?.plan.title || 'Milo Smart Plan'}
-              </Text>
-              <Text style={styles.planSourceText}>{planSourceLabel}</Text>
-            </View>
-            <View style={styles.countBadge}>
-              <Text style={styles.countBadgeText}>{planItems.length} steps</Text>
-            </View>
-          </View>
-
-          <View style={styles.progressCard}>
-            <View style={styles.progressHeader}>
-              <Text style={styles.progressTitle}>Progress</Text>
-              <Text style={styles.progressPercent}>{progress}%</Text>
-            </View>
-            <View style={styles.progressTrack}>
-              <View style={[styles.progressFill, { width: `${progress}%` }]} />
-            </View>
-          </View>
-
-          <View style={styles.checklistList}>
-            {displayPlanItems.map((item) => (
-              <View key={`${item.source}-${item.id}`} style={styles.planStepWrap}>
-                <ChecklistItem item={item} onToggle={() => handleTogglePlanItem(item)} />
-                <Text style={styles.planStepStatus}>{formatPlanStepMeta(item)}</Text>
-              </View>
-            ))}
-          </View>
-
-          {hiddenPlanCount > 0 ? (
-            <TouchableOpacity
-              activeOpacity={0.82}
-              style={styles.viewAllStepsButton}
-              onPress={() => setShowAllPlanSteps((current) => !current)}
-              accessibilityRole="button"
-              accessibilityLabel={showAllPlanSteps ? 'Show fewer plan steps' : `View all ${planItems.length} steps`}
-            >
-              <Text style={styles.viewAllStepsText}>
-                {showAllPlanSteps ? 'Show fewer steps' : `View all ${planItems.length} steps`}
-              </Text>
-              <Ionicons
-                name={showAllPlanSteps ? 'chevron-up' : 'chevron-forward'}
-                size={14}
-                color={theme.colors.primaryDark}
-              />
-            </TouchableOpacity>
-          ) : null}
-
-          <View style={styles.planActions}>
-            <TouchableOpacity
-              activeOpacity={0.85}
-              style={styles.planActionButton}
-              onPress={handleAddChecklistItem}
-              disabled={isGeneratingTaskPlan}
-            >
-              <Ionicons name="add" size={16} color={theme.colors.primaryDark} />
-              <Text style={styles.planActionText}>Add step</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              activeOpacity={0.85}
-              style={[
-                styles.planActionButton,
-                isGeneratingTaskPlan && styles.planActionButtonDisabled,
-              ]}
-              onPress={handleRegeneratePlan}
-              disabled={isGeneratingTaskPlan}
-            >
-              <Ionicons
-                name={isGeneratingTaskPlan ? 'hourglass-outline' : 'sparkles-outline'}
-                size={16}
-                color={theme.colors.primaryDark}
-              />
-              <Text style={styles.planActionText}>
-                {isGeneratingTaskPlan ? 'Generating...' : 'Regenerate'}
-              </Text>
-            </TouchableOpacity>
-          </View>
+      <View style={styles.smartPlanPreviewCard}>
+        <View style={styles.smartPlanPreviewIcon}>
+          <Ionicons
+            name={displayTaskPlan ? 'sparkles' : 'sparkles-outline'}
+            size={18}
+            color={theme.colors.primaryDark}
+          />
         </View>
-      ) : null}
 
-      {activeTab === 'nudges' ? (
-        <View style={styles.nudgeCard}>
-          <View style={styles.cardHeader}>
-            <Text style={styles.cardTitle}>Milo Smart Nudges</Text>
-          </View>
-          <View style={styles.nudgeRow}>
-            {smartNudges.slice(0, 3).map((nudge, index) => (
-              <View key={nudge.id} style={styles.nudgeChip}>
-                <View style={styles.nudgeIconWrap}>
-                  <Ionicons
-                    name={index === 0 ? 'sunny-outline' : index === 1 ? 'time-outline' : 'alarm-outline'}
-                    size={15}
-                    color={theme.colors.primaryDark}
-                  />
-                </View>
-                <Text style={styles.nudgeLabel}>{nudge.title}</Text>
-                <Text numberOfLines={2} style={styles.nudgeTiming}>
-                  {nudge.timingLabel || nudge.message}
+        <View style={styles.smartPlanPreviewCopy}>
+          <Text style={styles.smartPlanPreviewTitle}>
+            {displayTaskPlan ? 'Milo Smart Plan Ready' : 'Milo Smart Plan'}
+          </Text>
+          <Text style={styles.smartPlanPreviewText}>
+            {displayTaskPlan
+              ? `${planItems.length} steps - ${smartNudges.length} nudges - timeline ready`
+              : 'Prepare this task with small steps, nudges, and a timeline.'}
+          </Text>
+
+          {displayTaskPlan ? (
+            <View style={styles.smartPlanMiniProgress}>
+              <View style={styles.smartPlanMiniProgressHeader}>
+                <Text style={styles.smartPlanMiniProgressText}>
+                  {progress}% prepared
                 </Text>
+                <Text style={styles.smartPlanMiniSourceText}>{planSourceLabel}</Text>
               </View>
-            ))}
-          </View>
-          {task.conflictAccepted ? (
-            <Text style={styles.extraFocusText}>Extra focus is on.</Text>
+              <View style={styles.smartPlanMiniTrack}>
+                <View
+                  style={[
+                    styles.smartPlanMiniFill,
+                    { width: `${progress}%` },
+                  ]}
+                />
+              </View>
+            </View>
           ) : null}
         </View>
-      ) : null}
 
-      {activeTab === 'timeline' ? (
-        <View style={styles.timelineCard}>
-          <Text style={styles.cardTitle}>Timeline</Text>
-          <View style={styles.timelineList}>
-            {timelineItems.map((item, index) => (
-              <View key={item.id} style={styles.timelineRow}>
-                <View style={styles.timelineRail}>
-                  <View style={[styles.timelineNode, index === 0 && styles.timelineNodeActive]}>
-                    <Text style={styles.timelineNodeText}>{index + 1}</Text>
-                  </View>
-                  {index < timelineItems.length - 1 ? <View style={styles.timelineVerticalLine} /> : null}
-                </View>
-                <View style={styles.timelineContent}>
-                  <Text numberOfLines={1} style={styles.timelineTitle}>{item.title}</Text>
-                  <View style={styles.timelineMetaRow}>
-                    <Text numberOfLines={1} style={styles.timelineDetail}>
-                      {item.detail}
-                    </Text>
-                    <TimelineStatusChip
-                      label={item.statusLabel || (index === 0 ? 'Next' : 'Upcoming')}
-                    />
-                  </View>
-                </View>
-              </View>
-            ))}
-          </View>
-        </View>
-      ) : null}
-
-      <View style={styles.insightCard}>
-        <Text style={styles.insightTitle}>{miloInsight?.title || 'Milo Insight'}</Text>
-        <Text style={styles.insightText}>
-          {miloInsight?.message || 'Small steps, big results.'}
-        </Text>
-        <View style={styles.insightChips}>
-          {(miloInsight?.chips || ['Break task down', 'Prep early', 'Check-in tomorrow']).map((chip) => (
-            <View key={chip} style={styles.insightChip}>
-              <Text style={styles.insightChipText}>{chip}</Text>
-            </View>
-          ))}
-        </View>
+        <TouchableOpacity
+          activeOpacity={0.86}
+          style={styles.smartPlanPreviewButton}
+          onPress={handleOpenSmartPlan}
+          accessibilityRole="button"
+          accessibilityLabel={displayTaskPlan ? 'Open Plan Prep' : 'Plan Prep'}
+        >
+          <Text style={styles.smartPlanPreviewButtonText}>
+            {displayTaskPlan ? 'Open Plan Prep' : 'Plan Prep'}
+          </Text>
+          <Ionicons name="chevron-forward" size={14} color="#FFFFFF" />
+        </TouchableOpacity>
       </View>
 
       <View style={styles.actionRow}>
@@ -1633,25 +1699,26 @@ const styles = StyleSheet.create({
   },
   tabControl: {
     flexDirection: 'row',
-    backgroundColor: '#F2F6F4',
-    borderRadius: 17,
-    padding: 3,
+    backgroundColor: '#F7FAF5',
+    borderRadius: 999,
+    padding: 4,
     borderWidth: 1,
-    borderColor: theme.colors.border,
-    marginBottom: 10,
+    borderColor: '#E2ECDD',
+    marginBottom: 11,
   },
   tabButton: {
     flex: 1,
-    minHeight: 34,
-    borderRadius: 14,
+    minHeight: 32,
+    borderRadius: 999,
     justifyContent: 'center',
     alignItems: 'center',
   },
   tabButtonActive: {
     backgroundColor: theme.colors.primary,
+    ...theme.shadowSoft,
   },
   tabText: {
-    color: theme.colors.textSoft,
+    color: theme.colors.muted,
     fontSize: 11,
     fontWeight: '900',
   },
@@ -1676,13 +1743,95 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     marginLeft: 8,
   },
+  smartPlanPreviewCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: theme.colors.surface,
+    borderRadius: 22,
+    padding: 12,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#E1E8DF',
+    ...theme.shadowSoft,
+  },
+  smartPlanPreviewIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: 18,
+    backgroundColor: theme.colors.primarySoft,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 10,
+  },
+  smartPlanPreviewCopy: {
+    flex: 1,
+    minWidth: 0,
+    paddingRight: 8,
+  },
+  smartPlanPreviewTitle: {
+    color: theme.colors.text,
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  smartPlanPreviewText: {
+    color: theme.colors.textSoft,
+    fontSize: 11,
+    fontWeight: '800',
+    lineHeight: 16,
+    marginTop: 4,
+  },
+  smartPlanMiniProgress: {
+    marginTop: 9,
+  },
+  smartPlanMiniProgressHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 5,
+  },
+  smartPlanMiniProgressText: {
+    color: theme.colors.primaryDark,
+    fontSize: 10,
+    fontWeight: '900',
+  },
+  smartPlanMiniSourceText: {
+    color: theme.colors.muted,
+    fontSize: 9,
+    fontWeight: '900',
+  },
+  smartPlanMiniTrack: {
+    height: 5,
+    borderRadius: 999,
+    backgroundColor: '#E8F3E5',
+    overflow: 'hidden',
+  },
+  smartPlanMiniFill: {
+    height: 5,
+    borderRadius: 999,
+    backgroundColor: theme.colors.primary,
+  },
+  smartPlanPreviewButton: {
+    minHeight: 38,
+    borderRadius: 18,
+    backgroundColor: theme.colors.primary,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+  },
+  smartPlanPreviewButtonText: {
+    color: '#FFFFFF',
+    fontSize: 11,
+    fontWeight: '900',
+    marginRight: 4,
+  },
   progressCard: {
-    backgroundColor: theme.colors.backgroundSoft,
-    borderRadius: 15,
-    padding: 9,
+    backgroundColor: '#F5FBF4',
+    borderRadius: 17,
+    padding: 11,
     marginBottom: 10,
     borderWidth: 1,
-    borderColor: theme.colors.border,
+    borderColor: '#DDEFD9',
   },
   progressHeader: {
     flexDirection: 'row',
@@ -1691,33 +1840,33 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   progressTitle: {
-    color: theme.colors.text,
+    color: theme.colors.textSoft,
     fontSize: 12,
     fontWeight: '900',
   },
   progressPercent: {
     color: theme.colors.primaryDark,
-    fontSize: 12,
+    fontSize: 15,
     fontWeight: '900',
   },
   progressTrack: {
-    height: 8,
+    height: 7,
     borderRadius: 999,
-    backgroundColor: theme.colors.background,
+    backgroundColor: '#E8F3E5',
     overflow: 'hidden',
   },
   progressFill: {
-    height: 8,
+    height: 7,
     borderRadius: 999,
     backgroundColor: theme.colors.primary,
   },
   planCard: {
     backgroundColor: theme.colors.surface,
-    borderRadius: 22,
-    padding: 13,
+    borderRadius: 24,
+    padding: 14,
     marginBottom: 11,
     borderWidth: 1,
-    borderColor: theme.colors.border,
+    borderColor: '#E1E8DF',
     ...theme.shadowSoft,
   },
   cardHeader: {
@@ -1736,16 +1885,18 @@ const styles = StyleSheet.create({
     fontWeight: '900',
   },
   planSourceText: {
-    color: theme.colors.primaryDark,
+    color: theme.colors.muted,
     fontSize: 10,
     fontWeight: '900',
     marginTop: 3,
   },
   countBadge: {
-    backgroundColor: theme.colors.primarySoft,
+    backgroundColor: '#EEF8EE',
     borderRadius: 14,
     paddingHorizontal: 9,
     paddingVertical: 5,
+    borderWidth: 1,
+    borderColor: '#D7EFD8',
   },
   countBadgeText: {
     color: theme.colors.primaryDark,
@@ -1753,33 +1904,28 @@ const styles = StyleSheet.create({
     fontWeight: '900',
   },
   checklistList: {
-    backgroundColor: theme.colors.backgroundSoft,
-    borderRadius: 16,
-    paddingHorizontal: 9,
+    backgroundColor: '#FBFDF9',
+    borderRadius: 18,
+    paddingHorizontal: 10,
+    borderWidth: 1,
+    borderColor: '#E7EFE4',
   },
   planStepWrap: {
     borderBottomWidth: 1,
-    borderBottomColor: theme.colors.border,
-  },
-  planStepStatus: {
-    color: theme.colors.muted,
-    fontSize: 10,
-    fontWeight: '900',
-    marginLeft: 35,
-    marginTop: -8,
-    marginBottom: 8,
+    borderBottomColor: '#EAF0E7',
   },
   checklistItem: {
-    minHeight: 45,
+    minHeight: 54,
     flexDirection: 'row',
     alignItems: 'center',
+    paddingVertical: 7,
   },
   checkCircle: {
-    width: 23,
-    height: 23,
-    borderRadius: 12,
+    width: 24,
+    height: 24,
+    borderRadius: 13,
     borderWidth: 2,
-    borderColor: '#CCD4DD',
+    borderColor: '#C9D8C7',
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 10,
@@ -1788,17 +1934,34 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.primary,
     borderColor: theme.colors.primary,
   },
-  checklistText: {
+  checklistCopy: {
     flex: 1,
+    minWidth: 0,
+    paddingRight: 8,
+  },
+  checklistText: {
     color: theme.colors.text,
     fontSize: 12,
-    fontWeight: '800',
+    fontWeight: '900',
     lineHeight: 17,
-    paddingVertical: 9,
   },
   checklistTextDone: {
     color: theme.colors.muted,
     textDecorationLine: 'line-through',
+  },
+  checklistDetail: {
+    color: theme.colors.textSoft,
+    fontSize: 10,
+    fontWeight: '800',
+    lineHeight: 14,
+    marginTop: 3,
+  },
+  stepStatusText: {
+    color: theme.colors.muted,
+    fontSize: 9,
+    fontWeight: '900',
+    textAlign: 'right',
+    maxWidth: 68,
   },
   emptyPlanText: {
     color: theme.colors.muted,
@@ -1811,18 +1974,27 @@ const styles = StyleSheet.create({
   },
   planActions: {
     flexDirection: 'row',
-    marginTop: 10,
+    marginTop: 11,
   },
   planActionButton: {
     flex: 1,
-    minHeight: 36,
-    borderRadius: 16,
-    backgroundColor: theme.colors.primarySoft,
+    minHeight: 38,
+    borderRadius: 18,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 8,
     paddingHorizontal: 8,
+  },
+  planActionSecondary: {
+    backgroundColor: '#FAFCF8',
+    borderWidth: 1,
+    borderColor: '#DDE9D9',
+  },
+  planActionPrimary: {
+    backgroundColor: theme.colors.primarySoft,
+    borderWidth: 1,
+    borderColor: '#CFEFDA',
   },
   planActionButtonDisabled: {
     opacity: 0.72,
@@ -1837,7 +2009,7 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
     flexDirection: 'row',
     alignItems: 'center',
-    paddingTop: 8,
+    paddingTop: 9,
     paddingHorizontal: 3,
   },
   viewAllStepsText: {
@@ -1847,32 +2019,34 @@ const styles = StyleSheet.create({
   },
   nudgeCard: {
     backgroundColor: theme.colors.surface,
-    borderRadius: 22,
-    padding: 13,
+    borderRadius: 24,
+    padding: 14,
     marginBottom: 11,
     borderWidth: 1,
-    borderColor: theme.colors.border,
+    borderColor: '#E1E8DF',
     ...theme.shadowSoft,
   },
   nudgeRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    marginRight: -7,
+    marginRight: -8,
+    marginBottom: -8,
   },
   nudgeChip: {
     flex: 1,
     minWidth: '30%',
-    backgroundColor: theme.colors.primarySoft,
-    borderRadius: 16,
-    padding: 9,
-    marginRight: 7,
+    backgroundColor: '#F5FBF4',
+    borderRadius: 18,
+    padding: 10,
+    marginRight: 8,
+    marginBottom: 8,
     borderWidth: 1,
-    borderColor: '#D7F1DE',
+    borderColor: '#DDEFD9',
   },
   nudgeIconWrap: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
     backgroundColor: theme.colors.surface,
     justifyContent: 'center',
     alignItems: 'center',
@@ -1883,10 +2057,24 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '900',
   },
+  nudgeHelperText: {
+    color: theme.colors.muted,
+    fontSize: 10,
+    fontWeight: '800',
+    marginTop: 3,
+  },
   nudgeTiming: {
     color: theme.colors.primaryDark,
     fontSize: 10,
     fontWeight: '800',
+    lineHeight: 14,
+    marginTop: 5,
+  },
+  nudgeMessage: {
+    color: theme.colors.textSoft,
+    fontSize: 9.5,
+    fontWeight: '800',
+    lineHeight: 13,
     marginTop: 4,
   },
   extraFocusText: {
@@ -1897,28 +2085,28 @@ const styles = StyleSheet.create({
   },
   timelineCard: {
     backgroundColor: theme.colors.surface,
-    borderRadius: 22,
-    padding: 13,
+    borderRadius: 24,
+    padding: 14,
     marginBottom: 11,
     borderWidth: 1,
-    borderColor: theme.colors.border,
+    borderColor: '#E1E8DF',
     ...theme.shadowSoft,
   },
   timelineList: {
-    marginTop: 8,
+    marginTop: 10,
   },
   timelineRow: {
     flexDirection: 'row',
-    minHeight: 48,
+    minHeight: 52,
   },
   timelineRail: {
-    width: 30,
+    width: 32,
     alignItems: 'center',
   },
   timelineNode: {
-    width: 23,
-    height: 23,
-    borderRadius: 12,
+    width: 24,
+    height: 24,
+    borderRadius: 13,
     backgroundColor: theme.colors.primarySoft,
     justifyContent: 'center',
     alignItems: 'center',
@@ -1929,24 +2117,37 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.primary,
     borderColor: theme.colors.primary,
   },
+  timelineNodeDone: {
+    backgroundColor: theme.colors.success,
+    borderColor: theme.colors.success,
+  },
   timelineNodeText: {
     color: theme.colors.primaryDark,
     fontSize: 10,
     fontWeight: '900',
   },
+  timelineNodeTextActive: {
+    color: '#FFFFFF',
+  },
   timelineVerticalLine: {
     flex: 1,
     width: 2,
-    backgroundColor: theme.colors.primarySoft,
+    backgroundColor: '#E1EEDD',
   },
   timelineContent: {
     flex: 1,
-    paddingLeft: 8,
-    paddingBottom: 12,
+    backgroundColor: '#FBFDF9',
+    borderWidth: 1,
+    borderColor: '#EAF0E7',
+    borderRadius: 16,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    marginLeft: 8,
+    marginBottom: 9,
   },
   timelineTitle: {
     color: theme.colors.text,
-    fontSize: 12,
+    fontSize: 12.5,
     fontWeight: '900',
   },
   timelineMetaRow: {
@@ -1977,6 +2178,10 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.primarySoft,
     borderColor: '#CFEFDA',
   },
+  timelineChipFinal: {
+    backgroundColor: '#FFF7E8',
+    borderColor: '#FDE3B0',
+  },
   timelineChipText: {
     color: theme.colors.muted,
     fontSize: 9,
@@ -1988,13 +2193,16 @@ const styles = StyleSheet.create({
   timelineChipTextNext: {
     color: theme.colors.primaryDark,
   },
+  timelineChipTextFinal: {
+    color: '#A16207',
+  },
   insightCard: {
-    backgroundColor: theme.colors.primarySoft,
-    borderRadius: 20,
-    padding: 12,
+    backgroundColor: '#F5FBF4',
+    borderRadius: 22,
+    padding: 13,
     marginBottom: 12,
     borderWidth: 1,
-    borderColor: '#CFEFDA',
+    borderColor: '#DDEFD9',
   },
   insightTitle: {
     color: theme.colors.text,
@@ -2005,6 +2213,7 @@ const styles = StyleSheet.create({
     color: theme.colors.textSoft,
     fontSize: 11,
     fontWeight: '800',
+    lineHeight: 16,
     marginTop: 4,
   },
   insightChips: {
@@ -2019,6 +2228,8 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     marginRight: 7,
     marginBottom: 6,
+    borderWidth: 1,
+    borderColor: '#E2ECDD',
   },
   insightChipText: {
     color: theme.colors.primaryDark,
