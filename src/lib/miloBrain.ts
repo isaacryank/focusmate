@@ -5,9 +5,18 @@ import type { Task } from '../types/task';
 export type MiloBrainIntent =
   | 'greeting'
   | 'thanks'
+  | 'ack'
+  | 'farewell'
   | 'now'
+  | 'focus'
   | 'urgent'
   | 'due_today'
+  | 'due_tomorrow'
+  | 'overdue'
+  | 'pending'
+  | 'completed'
+  | 'summary'
+  | 'meeting_status'
   | 'prepare_meeting'
   | 'assignment'
   | 'find_resources'
@@ -115,14 +124,39 @@ function isThanksMessage(value: string) {
     value === 'thanks' ||
     value === 'thank you' ||
     value === 'thank u' ||
+    value === 'tq' ||
     value === 'thanks milo' ||
-    value === 'thank you milo'
+    value === 'thank you milo' ||
+    value === 'tq milo'
+  );
+}
+
+function isAckMessage(value: string) {
+  return (
+    value === 'ok' ||
+    value === 'okay' ||
+    value === 'okay milo' ||
+    value === 'haha' ||
+    value === 'haha milo'
+  );
+}
+
+function isFarewellMessage(value: string) {
+  return (
+    value === 'bye' ||
+    value === 'bye milo' ||
+    value === 'good night' ||
+    value === 'goodnight' ||
+    value === 'good night milo'
   );
 }
 
 function isGreetingMessage(value: string) {
   const greetings = [
+    'hai',
     'hi',
+    'hii',
+    'helo',
     'hello',
     'hey',
     'good morning',
@@ -407,9 +441,27 @@ function createReply({
 function detectIntent(message: string): MiloBrainIntent {
   const normalizedMessage = normalizeMessage(message);
 
+  if (isThanksMessage(normalizedMessage)) {
+    return 'thanks';
+  }
+
+  if (isAckMessage(normalizedMessage)) {
+    return 'ack';
+  }
+
+  if (isFarewellMessage(normalizedMessage)) {
+    return 'farewell';
+  }
+
+  if (isGreetingMessage(normalizedMessage)) {
+    return 'greeting';
+  }
+
   if (
     normalizedMessage.includes('meeting link') ||
     normalizedMessage.includes('meet link') ||
+    normalizedMessage.includes('have a meeting link') ||
+    normalizedMessage.includes('have meeting link') ||
     normalizedMessage.includes('join meeting') ||
     normalizedMessage.includes('online meeting') ||
     hasAnyWord(normalizedMessage, ['zoom', 'teams', 'webex'])
@@ -418,7 +470,20 @@ function detectIntent(message: string): MiloBrainIntent {
   }
 
   if (
+    normalizedMessage.includes('do i have meeting') ||
+    normalizedMessage.includes('do i have a meeting') ||
+    normalizedMessage.includes('any meeting') ||
+    normalizedMessage.includes('meeting today') ||
+    normalizedMessage.includes('next meeting')
+  ) {
+    return 'meeting_status';
+  }
+
+  if (
     normalizedMessage.includes('open maps') ||
+    normalizedMessage.includes('need maps') ||
+    normalizedMessage.includes('next location') ||
+    normalizedMessage.includes('my next location') ||
     normalizedMessage.includes('google maps') ||
     normalizedMessage.includes('directions') ||
     normalizedMessage.includes('route') ||
@@ -441,9 +506,52 @@ function detectIntent(message: string): MiloBrainIntent {
     normalizedMessage.includes('due today') ||
     normalizedMessage.includes('today due') ||
     normalizedMessage.includes('today tasks') ||
-    normalizedMessage.includes('what is due')
+    normalizedMessage.includes('what is due today') ||
+    normalizedMessage === 'what is due'
   ) {
     return 'due_today';
+  }
+
+  if (
+    normalizedMessage.includes('due tomorrow') ||
+    normalizedMessage.includes('tomorrow due') ||
+    normalizedMessage.includes('tomorrow tasks')
+  ) {
+    return 'due_tomorrow';
+  }
+
+  if (
+    normalizedMessage.includes('what is overdue') ||
+    normalizedMessage.includes('overdue task') ||
+    normalizedMessage.includes('overdue tasks') ||
+    normalizedMessage === 'overdue'
+  ) {
+    return 'overdue';
+  }
+
+  if (
+    normalizedMessage.includes('what is pending') ||
+    normalizedMessage.includes('pending task') ||
+    normalizedMessage.includes('pending tasks')
+  ) {
+    return 'pending';
+  }
+
+  if (
+    normalizedMessage.includes('what is completed') ||
+    normalizedMessage.includes('completed task') ||
+    normalizedMessage.includes('completed tasks')
+  ) {
+    return 'completed';
+  }
+
+  if (
+    normalizedMessage.includes('how many tasks') ||
+    normalizedMessage.includes('task summary') ||
+    normalizedMessage.includes('summary today') ||
+    normalizedMessage === 'summary'
+  ) {
+    return 'summary';
   }
 
   if (
@@ -459,7 +567,9 @@ function detectIntent(message: string): MiloBrainIntent {
   if (
     normalizedMessage.includes('prepare for my meeting') ||
     normalizedMessage.includes('prepare meeting') ||
+    normalizedMessage.includes('help me prepare') ||
     normalizedMessage.includes('meeting prep') ||
+    normalizedMessage === 'prepare' ||
     (normalizedMessage.includes('prepare') && normalizedMessage.includes('meeting'))
   ) {
     return 'prepare_meeting';
@@ -484,16 +594,14 @@ function detectIntent(message: string): MiloBrainIntent {
     return 'now';
   }
 
-  if (normalizedMessage.includes('prepare')) {
-    return 'prepare_meeting';
-  }
-
-  if (isThanksMessage(normalizedMessage)) {
-    return 'thanks';
-  }
-
-  if (isGreetingMessage(normalizedMessage)) {
-    return 'greeting';
+  if (
+    normalizedMessage.includes('start focus') ||
+    normalizedMessage.includes('focus now') ||
+    normalizedMessage.includes('should i focus') ||
+    normalizedMessage.includes('what should i focus on') ||
+    normalizedMessage.includes('focus task')
+  ) {
+    return 'focus';
   }
 
   return 'general';
@@ -503,8 +611,16 @@ function getPendingTasks(tasks: Task[]) {
   return tasks.filter((task) => task.status !== 'completed');
 }
 
+function getCompletedTasks(tasks: Task[]) {
+  return tasks.filter((task) => task.status === 'completed');
+}
+
 function getTopRankedTask(tasks: Task[], now: Date) {
   return sortByBrainRank(tasks, now)[0];
+}
+
+function buildTaskCountText(count: number, singular: string, plural: string) {
+  return `${count} ${count === 1 ? singular : plural}`;
 }
 
 function buildEmptyPlannerReply(intent: MiloBrainIntent, now: Date) {
@@ -539,6 +655,24 @@ export function buildMiloBrainReply({
     });
   }
 
+  if (intent === 'ack') {
+    return createReply({
+      intent,
+      now,
+      text: 'Okay. Milo is right here when you want the next tiny step.',
+      actions: [],
+    });
+  }
+
+  if (intent === 'farewell') {
+    return createReply({
+      intent,
+      now,
+      text: 'Bye for now. Rest well, and Milo will keep your saved tasks ready.',
+      actions: [],
+    });
+  }
+
   if (intent === 'greeting') {
     return createReply({
       intent,
@@ -550,12 +684,103 @@ export function buildMiloBrainReply({
   }
 
   const pendingTasks = getPendingTasks(tasks);
+  const completedTasks = getCompletedTasks(tasks);
+  const todayKey = getLocalDateKey(now);
+  const tomorrowKey = getTomorrowDateKey(now);
+
+  if (intent === 'summary') {
+    const dueTodayCount = pendingTasks.filter(
+      (task) => task.dueDate === todayKey
+    ).length;
+    const overdueCount = pendingTasks.filter(
+      (task) => getTaskUrgency(task, now).level === 'overdue'
+    ).length;
+    const topTask = getTopRankedTask(pendingTasks, now);
+
+    if (!tasks.length) {
+      return createReply({
+        intent,
+        now,
+        text:
+          'Milo does not see any saved planner items yet. Add one tiny task, then I can summarize your day.',
+        actions: [],
+      });
+    }
+
+    return createReply({
+      intent,
+      now,
+      task: topTask,
+      text: `You have ${buildTaskCountText(
+        pendingTasks.length,
+        'pending task',
+        'pending tasks'
+      )}, ${buildTaskCountText(
+        dueTodayCount,
+        'due today',
+        'due today'
+      )}, ${buildTaskCountText(
+        overdueCount,
+        'overdue',
+        'overdue'
+      )}, and ${buildTaskCountText(
+        completedTasks.length,
+        'completed task',
+        'completed tasks'
+      )}. ${
+        topTask
+          ? `Milo would keep "${topTask.title}" near the top.`
+          : 'Everything pending looks clear.'
+      }`,
+      actions: buildActions(topTask, {
+        includeStartFocus: Boolean(topTask),
+        includeResources: topTask ? isAcademicTask(topTask) : false,
+        primaryAction: 'startFocus',
+      }),
+    });
+  }
+
+  if (intent === 'completed') {
+    const task = sortByBrainRank(completedTasks, now)[0];
+
+    if (!completedTasks.length) {
+      return createReply({
+        intent,
+        now,
+        text:
+          'Milo does not see completed tasks yet. One small finish will show up here soon.',
+        actions: [],
+      });
+    }
+
+    return createReply({
+      intent,
+      now,
+      task,
+      text:
+        completedTasks.length === 1
+          ? `"${task.title}" is completed. Nice little win.`
+          : `You have ${completedTasks.length} completed tasks. Latest one Milo can show is "${task.title}".`,
+      actions: buildActions(task, {
+        primaryAction: 'viewTask',
+      }),
+    });
+  }
 
   if (pendingTasks.length === 0) {
+    if (tasks.length) {
+      return createReply({
+        intent,
+        now,
+        text:
+          'All saved tasks look completed right now. Milo can still help with due dates, focus, resources, maps, and meetings when new items appear.',
+        actions: [],
+      });
+    }
+
     return buildEmptyPlannerReply(intent, now);
   }
 
-  const todayKey = getLocalDateKey(now);
   const topTask = getTopRankedTask(pendingTasks, now);
 
   if (intent === 'meeting_link') {
@@ -612,6 +837,46 @@ export function buildMiloBrainReply({
     });
   }
 
+  if (intent === 'meeting_status') {
+    const meetingTasks = sortByBrainRank(
+      pendingTasks.filter((task) => task.plannerType === 'meeting'),
+      now
+    );
+    const task = meetingTasks[0];
+    const meetingLink = getMeetingLinkForTask(task, meetingLinks);
+
+    if (!task) {
+      return createReply({
+        intent,
+        now,
+        text:
+          'Milo does not see a pending meeting right now. Your saved planner is clear for meetings.',
+        actions: buildActions(topTask, {
+          includeStartFocus: true,
+          primaryAction: 'startFocus',
+        }),
+      });
+    }
+
+    return createReply({
+      intent,
+      now,
+      task,
+      text: `"${task.title}" is your next saved meeting. ${
+        meetingLink
+          ? 'Milo has the meeting link ready.'
+          : 'Milo does not see a meeting link saved for it yet.'
+      }`,
+      actions: buildActions(task, {
+        includeMeeting: Boolean(meetingLink),
+        includeMaps: true,
+        includeStartFocus: true,
+        meetingLink,
+        primaryAction: meetingLink ? 'joinMeeting' : 'viewTask',
+      }),
+    });
+  }
+
   if (intent === 'open_maps') {
     const task = getTopRankedTask(
       pendingTasks.filter((item) => Boolean(item.location?.trim())),
@@ -641,6 +906,47 @@ export function buildMiloBrainReply({
         includeMaps: true,
         includeStartFocus: true,
         primaryAction: 'openMaps',
+      }),
+    });
+  }
+
+  if (intent === 'due_tomorrow') {
+    const dueTomorrowTasks = sortByBrainRank(
+      pendingTasks.filter((task) => task.dueDate === tomorrowKey),
+      now
+    );
+    const task = dueTomorrowTasks[0];
+
+    if (!task) {
+      return createReply({
+        intent,
+        now,
+        text:
+          'Nothing saved is due tomorrow. Milo would use this as a calm buffer for one early step.',
+        actions: buildActions(topTask, {
+          includeStartFocus: true,
+          includeResources: isAcademicTask(topTask),
+          primaryAction: 'startFocus',
+        }),
+        task: topTask,
+      });
+    }
+
+    return createReply({
+      intent,
+      now,
+      task,
+      text:
+        dueTomorrowTasks.length === 1
+          ? `"${task.title}" is due tomorrow. A tiny prep step today would make future-you happier.`
+          : `"${task.title}" is first of ${dueTomorrowTasks.length} items due tomorrow. Milo would prep this one first.`,
+      actions: buildActions(task, {
+        includeStartFocus: true,
+        includeResources: isAcademicTask(task),
+        includeMaps: true,
+        includeMeeting: task.plannerType === 'meeting',
+        meetingLink: getMeetingLinkForTask(task, meetingLinks),
+        primaryAction: 'startFocus',
       }),
     });
   }
@@ -686,6 +992,70 @@ export function buildMiloBrainReply({
     });
   }
 
+  if (intent === 'overdue') {
+    const overdueTasks = sortByBrainRank(
+      pendingTasks.filter(
+        (task) => getTaskUrgency(task, now).level === 'overdue'
+      ),
+      now
+    );
+    const task = overdueTasks[0];
+
+    if (!task) {
+      return createReply({
+        intent,
+        now,
+        text:
+          'Milo does not see overdue tasks. Good breathing room. Keep one small step moving.',
+        actions: buildActions(topTask, {
+          includeStartFocus: true,
+          includeResources: isAcademicTask(topTask),
+          primaryAction: 'startFocus',
+        }),
+        task: topTask,
+      });
+    }
+
+    return createReply({
+      intent,
+      now,
+      task,
+      text:
+        overdueTasks.length === 1
+          ? `"${task.title}" is overdue. No panic - one recovery step is enough to restart.`
+          : `"${task.title}" is first of ${overdueTasks.length} overdue tasks. Start with one recovery step.`,
+      actions: buildActions(task, {
+        includeStartFocus: true,
+        includeResources: isAcademicTask(task),
+        includeMaps: true,
+        includeMeeting: task.plannerType === 'meeting',
+        meetingLink: getMeetingLinkForTask(task, meetingLinks),
+        primaryAction: 'startFocus',
+      }),
+    });
+  }
+
+  if (intent === 'pending') {
+    return createReply({
+      intent,
+      now,
+      task: topTask,
+      text: `You have ${buildTaskCountText(
+        pendingTasks.length,
+        'pending task',
+        'pending tasks'
+      )}. Milo would start with "${topTask.title}" because it looks most useful right now.`,
+      actions: buildActions(topTask, {
+        includeStartFocus: true,
+        includeResources: isAcademicTask(topTask),
+        includeMaps: true,
+        includeMeeting: topTask.plannerType === 'meeting',
+        meetingLink: getMeetingLinkForTask(topTask, meetingLinks),
+        primaryAction: 'startFocus',
+      }),
+    });
+  }
+
   if (intent === 'urgent') {
     const urgentTasks = sortByBrainRank(
       pendingTasks.filter((task) => {
@@ -720,6 +1090,23 @@ export function buildMiloBrainReply({
         includeMaps: true,
         includeMeeting: task.plannerType === 'meeting',
         meetingLink: getMeetingLinkForTask(task, meetingLinks),
+        primaryAction: 'startFocus',
+      }),
+    });
+  }
+
+  if (intent === 'focus') {
+    return createReply({
+      intent,
+      now,
+      task: topTask,
+      text: `Focus on "${topTask.title}" first. Milo picked it from your saved tasks because it has the strongest timing and priority signal.`,
+      actions: buildActions(topTask, {
+        includeStartFocus: true,
+        includeResources: isAcademicTask(topTask),
+        includeMaps: true,
+        includeMeeting: topTask.plannerType === 'meeting',
+        meetingLink: getMeetingLinkForTask(topTask, meetingLinks),
         primaryAction: 'startFocus',
       }),
     });
@@ -778,7 +1165,11 @@ export function buildMiloBrainReply({
   return createReply({
     intent,
     now,
-    text: `I'm not fully sure yet, but I can help with your tasks. Try asking what is urgent, what is due today, or how to prepare. I can also help you start with "${topTask.title}".`,
-    actions: [],
+    task: topTask,
+    text: `Milo can help with saved tasks, due dates, focus, resources, maps, and meetings. Try asking what is urgent or what is due today. Your top saved task is "${topTask.title}".`,
+    actions: buildActions(topTask, {
+      includeStartFocus: true,
+      primaryAction: 'startFocus',
+    }),
   });
 }

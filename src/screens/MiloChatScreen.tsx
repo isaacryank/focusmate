@@ -9,9 +9,11 @@ import React, {
 import {
   Alert,
   KeyboardAvoidingView,
+  Modal,
   Platform,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   TouchableOpacity,
@@ -39,6 +41,7 @@ import {
   askMiloAi,
   buildMiloAiRecentMessages,
   type MiloAiFocusStats,
+  type MiloAiDebugReason,
   type MiloAiInsight,
   type MiloAiProposedTaskCompletion,
   type MiloAiProposedTaskDeletion,
@@ -68,6 +71,14 @@ import {
   type MiloChatStoredProposalStatus,
   type MiloChatStoredTaskSnapshot,
 } from '../lib/miloChatStorage';
+import {
+  DEFAULT_MILO_AI_SETTINGS,
+  incrementMiloAiCallsToday,
+  loadMiloAiSettings,
+  resetMiloAiSettings,
+  updateMiloAiSettings,
+  type MiloAiSettings,
+} from '../lib/miloAiSettings';
 import type { FocusSession } from '../types/focus';
 import type { RootStackParamList } from '../types/navigation';
 import type { Task } from '../types/task';
@@ -76,7 +87,12 @@ import MiloMoodImage from '../components/milo/MiloMoodImage';
 
 type IconName = React.ComponentProps<typeof Ionicons>['name'];
 type MiloTalkRole = 'user' | 'milo';
-type MiloTalkBrainStatus = 'ready' | 'online' | 'fallback';
+type MiloTalkBrainStatus =
+  | 'ready'
+  | 'online'
+  | 'fallback'
+  | 'localOnly'
+  | 'smallTalk';
 type MiloProposedTaskStatus = 'pending' | 'created' | 'cancelled';
 type MiloProposedTaskUpdateStatus = 'pending' | 'updated' | 'cancelled';
 type MiloProposedTaskCompletionStatus = 'pending' | 'completed' | 'cancelled';
@@ -118,6 +134,126 @@ const miloTalkSuggestions = [
   'Find resources',
 ];
 
+const miloTalkSuggestionIcons: Record<string, IconName> = {
+  'What should I do now?': 'sparkles-outline',
+  'What is urgent?': 'notifications-outline',
+  'Due today?': 'calendar-outline',
+  'Help me prepare': 'create-outline',
+  'Find resources': 'book-outline',
+};
+
+const simpleSmallTalkMessages = new Set([
+  'bye',
+  'good morning',
+  'good night',
+  'hai',
+  'haha',
+  'helo',
+  'hello',
+  'hey',
+  'hi',
+  'hii',
+  'ok',
+  'okay',
+  'thank u',
+  'thank you',
+  'thanks',
+  'tq',
+]);
+
+const onlineOnlyPromptKeywords = [
+  'add a date',
+  'add a meeting',
+  'add a task',
+  'add date',
+  'add meeting',
+  'add task',
+  'cancel task',
+  'change',
+  'create',
+  'delete',
+  'edit',
+  'give me my insight',
+  'insight',
+  'make a plan',
+  'mark as done',
+  'mark done',
+  'move',
+  'plan my day',
+  'plan today',
+  'remove',
+  'rename',
+  'reschedule',
+  'schedule',
+  'set date',
+  'smart nudge',
+  'smart plan',
+  'timeline',
+  'update',
+];
+
+const localSafePromptKeywords = [
+  'completed tasks',
+  'do i have a meeting',
+  'do i have a meeting link',
+  'do i have meeting',
+  'do i have meeting link',
+  'do i need maps',
+  'due today',
+  'due tomorrow',
+  'find resources',
+  'focus now',
+  'focus task',
+  'help me prepare',
+  'how many tasks',
+  'join meeting',
+  'meeting link',
+  'open maps',
+  'overdue',
+  'pending tasks',
+  'prepare meeting',
+  'resources for this task',
+  'start focus',
+  'summary today',
+  'task summary',
+  'urgent',
+  'what is completed',
+  'what is due today',
+  'what is overdue',
+  'what is pending',
+  'what is urgent',
+  'what should i do now',
+  'what should i focus on',
+  'where is my next location',
+];
+
+const localSafeExactPrompts = new Set([
+  'completed tasks',
+  'due today',
+  'due tomorrow',
+  'find resources',
+  'focus now',
+  'focus task',
+  'hello',
+  'help me prepare',
+  'join meeting',
+  'meeting link',
+  'open maps',
+  'overdue',
+  'pending tasks',
+  'start focus',
+  'summary',
+  'urgent',
+]);
+
+const localSafePromptExclusions = [
+  'create task',
+  'insight',
+  'plan',
+  'smart nudge',
+  'timeline',
+];
+
 function createInitialMiloTalkMessages(): MiloTalkMessage[] {
   return [
     {
@@ -127,6 +263,83 @@ function createInitialMiloTalkMessages(): MiloTalkMessage[] {
       createdAt: new Date().toISOString(),
     },
   ];
+}
+
+function normalizeMiloLocalPrompt(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\bmilo\b/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function isSimpleMiloSmallTalk(message: string) {
+  const normalizedMessage = normalizeMiloLocalPrompt(message);
+
+  if (!normalizedMessage) {
+    return false;
+  }
+
+  return simpleSmallTalkMessages.has(normalizedMessage);
+}
+
+function hasOnlineOnlyMiloIntent(message: string) {
+  const normalizedMessage = normalizeMiloLocalPrompt(message);
+
+  if (!normalizedMessage) {
+    return false;
+  }
+
+  if (
+    onlineOnlyPromptKeywords.some((keyword) =>
+      normalizedMessage.includes(keyword)
+    )
+  ) {
+    return !(
+      normalizedMessage.includes('what is completed') ||
+      normalizedMessage.includes('completed tasks')
+    );
+  }
+
+  return false;
+}
+
+function isLocalSafePrompt(message: string) {
+  const normalizedMessage = normalizeMiloLocalPrompt(message);
+
+  if (!normalizedMessage || hasOnlineOnlyMiloIntent(message)) {
+    return false;
+  }
+
+  if (
+    isSimpleMiloSmallTalk(message) ||
+    localSafeExactPrompts.has(normalizedMessage)
+  ) {
+    return true;
+  }
+
+  if (
+    localSafePromptExclusions.some((keyword) =>
+      normalizedMessage.includes(keyword)
+    )
+  ) {
+    return false;
+  }
+
+  return localSafePromptKeywords.some((keyword) =>
+    normalizedMessage.includes(keyword)
+  );
+}
+
+function shouldUseLocalOnlyForMessage(
+  message: string,
+  settings: MiloAiSettings
+) {
+  return (
+    settings.aiMode === 'local' ||
+    (settings.skipAiForSmallTalk && isLocalSafePrompt(message))
+  );
 }
 
 const talkActionIcons: Record<MiloBrainAction['type'], IconName> = {
@@ -617,13 +830,51 @@ function replaceTypingMessage(
   return nextMessages;
 }
 
-function getMiloTalkFooterText(status: MiloTalkBrainStatus) {
+const miloAiFallbackMessages: Record<MiloAiDebugReason, string> = {
+  openai_http_error:
+    'AI limit or billing issue • Milo is using local mode',
+  missing_api_key: 'AI setup issue • Milo switched to local guidance',
+  openai_parse_error: 'AI response issue • Milo switched to local guidance',
+  invalid_response_shape: 'AI response issue • Milo switched to local guidance',
+  unhandled_exception: 'AI unavailable • Milo switched to local guidance',
+  fallback_builder_failed: 'Milo local backup • Saved guidance is helping',
+};
+
+function withDebugReason(
+  text: string,
+  debugReason: MiloAiDebugReason | null,
+  showDebugReason: boolean
+) {
+  return showDebugReason && debugReason
+    ? `${text} Debug: ${debugReason}.`
+    : text;
+}
+
+function getMiloTalkFooterText(
+  status: MiloTalkBrainStatus,
+  settings: MiloAiSettings,
+  debugReason: MiloAiDebugReason | null
+) {
+  if (settings.aiMode === 'local' || status === 'localOnly') {
+    return 'Local only • Saved task guidance on this device';
+  }
+
   if (status === 'online') {
-    return 'AI online: secure Milo Brain response through Supabase.';
+    return 'AI online • Secure Milo Brain through Supabase';
+  }
+
+  if (status === 'smallTalk') {
+    return 'Local quick reply • Milo answered from saved task guidance';
   }
 
   if (status === 'fallback') {
-    return 'Local fallback: replies use saved task data on this device.';
+    return withDebugReason(
+      debugReason
+        ? miloAiFallbackMessages[debugReason]
+        : 'AI unavailable • Milo switched to local guidance',
+      debugReason,
+      settings.showDebugReason
+    );
   }
 
   return 'AI online is attempted securely. Local Milo Brain stays ready.';
@@ -1238,6 +1489,13 @@ export default function MiloChatScreen() {
   const [miloTalkInput, setMiloTalkInput] = useState('');
   const [miloTalkBrainStatus, setMiloTalkBrainStatus] =
     useState<MiloTalkBrainStatus>('ready');
+  const [miloTalkFallbackReason, setMiloTalkFallbackReason] =
+    useState<MiloAiDebugReason | null>(null);
+  const [miloAiSettings, setMiloAiSettings] = useState<MiloAiSettings>(
+    DEFAULT_MILO_AI_SETTINGS
+  );
+  const [isMiloAiSettingsVisible, setIsMiloAiSettingsVisible] =
+    useState(false);
   const [chatMessages, setChatMessages] = useState<MiloTalkMessage[]>(() =>
     createInitialMiloTalkMessages()
   );
@@ -1256,6 +1514,24 @@ export default function MiloChatScreen() {
   useEffect(() => {
     return () => {
       mountedRef.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let isCancelled = false;
+
+    const loadSettings = async () => {
+      const nextSettings = await loadMiloAiSettings();
+
+      if (!isCancelled && mountedRef.current) {
+        setMiloAiSettings(nextSettings);
+      }
+    };
+
+    void loadSettings();
+
+    return () => {
+      isCancelled = true;
     };
   }, []);
 
@@ -1351,6 +1627,7 @@ export default function MiloChatScreen() {
 
         setChatMessages(nextMessages);
         setMiloTalkBrainStatus('ready');
+        setMiloTalkFallbackReason(null);
         setMiloTalkInput('');
         activeSessionIdRef.current = loadedSessionId;
         loadedStoredSignatureRef.current = storedMessages.length
@@ -1364,6 +1641,8 @@ export default function MiloChatScreen() {
 
         if (!isCancelled && mountedRef.current) {
           setChatMessages(createInitialMiloTalkMessages());
+          setMiloTalkBrainStatus('ready');
+          setMiloTalkFallbackReason(null);
           activeSessionIdRef.current = null;
           loadedStoredSignatureRef.current = null;
           hasLoadedStoredChatRef.current = true;
@@ -1456,101 +1735,120 @@ export default function MiloChatScreen() {
     setMiloTalkInput('');
     scrollTalkToBottom();
 
+    const shouldUseLocalOnly = miloAiSettings.aiMode === 'local';
+    const shouldUseLocalQuickReply =
+      !shouldUseLocalOnly &&
+      shouldUseLocalOnlyForMessage(prompt, miloAiSettings);
     let nextStatus: MiloTalkBrainStatus = 'fallback';
+    let nextDebugReason: MiloAiDebugReason | null = null;
     let replyMessage: MiloTalkMessage | null = null;
 
-    try {
-      const aiReply = await askMiloAi({
-        message: prompt,
-        focusStats: miloAiFocusStats,
-        tasks,
-        meetingLinks: onlineMeetingLinks,
-        recentMessages,
-      });
+    if (!shouldUseLocalOnly && !shouldUseLocalQuickReply) {
+      try {
+        try {
+          const nextSettings = await incrementMiloAiCallsToday();
 
-      if (aiReply.usedAi && aiReply.text) {
-        const proposedTask = aiReply.proposedTask || undefined;
-        const proposedTaskUpdate = proposedTask
-          ? undefined
-          : aiReply.proposedTaskUpdate || undefined;
-        const proposedTaskCompletion = proposedTask || proposedTaskUpdate
-          ? undefined
-          : aiReply.proposedTaskCompletion || undefined;
-        const proposedTaskDeletion =
-          proposedTask || proposedTaskUpdate || proposedTaskCompletion
-            ? undefined
-            : aiReply.proposedTaskDeletion || undefined;
-        const hasProposal = Boolean(
-          proposedTask ||
-            proposedTaskUpdate ||
-            proposedTaskCompletion ||
-            proposedTaskDeletion
-        );
-        const smartPlan = hasProposal
-          ? undefined
-          : aiReply.smartPlan || undefined;
-        const smartNudge = hasProposal
-          ? undefined
-          : aiReply.smartNudge || undefined;
-        const timelineInsight = hasProposal
-          ? undefined
-          : aiReply.timelineInsight || undefined;
-        const miloInsight = hasProposal
-          ? undefined
-          : aiReply.miloInsight || undefined;
-        const hasAiCard = Boolean(
-          hasProposal ||
-            smartPlan ||
-            smartNudge ||
-            timelineInsight ||
-            miloInsight
-        );
-        const relatedTask =
-          hasAiCard
-            ? undefined
-            : findRelatedTaskByAiId(tasks, aiReply.relatedTaskId);
+          if (mountedRef.current) {
+            setMiloAiSettings(nextSettings);
+          }
+        } catch (error) {
+          console.log('Failed to update Milo AI usage count:', error);
+        }
 
-        replyMessage = {
-          id: createMiloTalkMessageId('milo'),
-          role: 'milo',
-          text: hasAiCard ? trimStructuredCardText(aiReply.text) : aiReply.text,
-          relatedTask,
-          relatedTaskSummary: relatedTask
-            ? buildMiloTalkTaskSummary(relatedTask)
-            : undefined,
-          actions: buildValidatedMiloAiActions({
-            message: prompt,
-            onlineMeetingLinks,
+        const aiReply = await askMiloAi({
+          message: prompt,
+          focusStats: miloAiFocusStats,
+          tasks,
+          meetingLinks: onlineMeetingLinks,
+          recentMessages,
+        });
+
+        if (aiReply.usedAi && aiReply.text) {
+          const proposedTask = aiReply.proposedTask || undefined;
+          const proposedTaskUpdate = proposedTask
+            ? undefined
+            : aiReply.proposedTaskUpdate || undefined;
+          const proposedTaskCompletion = proposedTask || proposedTaskUpdate
+            ? undefined
+            : aiReply.proposedTaskCompletion || undefined;
+          const proposedTaskDeletion =
+            proposedTask || proposedTaskUpdate || proposedTaskCompletion
+              ? undefined
+              : aiReply.proposedTaskDeletion || undefined;
+          const hasProposal = Boolean(
+            proposedTask ||
+              proposedTaskUpdate ||
+              proposedTaskCompletion ||
+              proposedTaskDeletion
+          );
+          const smartPlan = hasProposal
+            ? undefined
+            : aiReply.smartPlan || undefined;
+          const smartNudge = hasProposal
+            ? undefined
+            : aiReply.smartNudge || undefined;
+          const timelineInsight = hasProposal
+            ? undefined
+            : aiReply.timelineInsight || undefined;
+          const miloInsight = hasProposal
+            ? undefined
+            : aiReply.miloInsight || undefined;
+          const hasAiCard = Boolean(
+            hasProposal ||
+              smartPlan ||
+              smartNudge ||
+              timelineInsight ||
+              miloInsight
+          );
+          const relatedTask =
+            hasAiCard
+              ? undefined
+              : findRelatedTaskByAiId(tasks, aiReply.relatedTaskId);
+
+          replyMessage = {
+            id: createMiloTalkMessageId('milo'),
+            role: 'milo',
+            text: hasAiCard ? trimStructuredCardText(aiReply.text) : aiReply.text,
             relatedTask,
-            suggestedActions:
-              hasAiCard ? [] : aiReply.suggestedActions,
-          }),
-          proposedTask,
-          proposedTaskStatus: proposedTask ? 'pending' : undefined,
-          proposedTaskSourceText: proposedTask ? prompt : undefined,
-          proposedTaskUpdate,
-          proposedTaskUpdateStatus: proposedTaskUpdate ? 'pending' : undefined,
-          proposedTaskCompletion,
-          proposedTaskCompletionStatus: proposedTaskCompletion
-            ? 'pending'
-            : undefined,
-          proposedTaskDeletion,
-          proposedTaskDeletionStatus: proposedTaskDeletion
-            ? 'pending'
-            : undefined,
-          proposedTaskDeletionSnapshot: proposedTaskDeletion
-            ? tasks.find((task) => task.id === proposedTaskDeletion.taskId)
-            : undefined,
-          smartPlan,
-          smartNudge,
-          timelineInsight,
-          miloInsight,
-          createdAt: new Date().toISOString(),
-        };
-        nextStatus = 'online';
+            relatedTaskSummary: relatedTask
+              ? buildMiloTalkTaskSummary(relatedTask)
+              : undefined,
+            actions: buildValidatedMiloAiActions({
+              message: prompt,
+              onlineMeetingLinks,
+              relatedTask,
+              suggestedActions:
+                hasAiCard ? [] : aiReply.suggestedActions,
+            }),
+            proposedTask,
+            proposedTaskStatus: proposedTask ? 'pending' : undefined,
+            proposedTaskSourceText: proposedTask ? prompt : undefined,
+            proposedTaskUpdate,
+            proposedTaskUpdateStatus: proposedTaskUpdate ? 'pending' : undefined,
+            proposedTaskCompletion,
+            proposedTaskCompletionStatus: proposedTaskCompletion
+              ? 'pending'
+              : undefined,
+            proposedTaskDeletion,
+            proposedTaskDeletionStatus: proposedTaskDeletion
+              ? 'pending'
+              : undefined,
+            proposedTaskDeletionSnapshot: proposedTaskDeletion
+              ? tasks.find((task) => task.id === proposedTaskDeletion.taskId)
+              : undefined,
+            smartPlan,
+            smartNudge,
+            timelineInsight,
+            miloInsight,
+            createdAt: new Date().toISOString(),
+          };
+          nextStatus = 'online';
+        } else {
+          nextDebugReason = aiReply.debugReason || null;
+        }
+      } catch (error) {
+        console.warn('Failed to ask Milo AI:', error);
       }
-    } catch (error) {
-      console.warn('Failed to ask Milo AI:', error);
     }
 
     if (!replyMessage) {
@@ -1570,12 +1868,17 @@ export default function MiloChatScreen() {
         actions: localReply.actions,
         createdAt: new Date().toISOString(),
       };
-      nextStatus = 'fallback';
+      nextStatus = shouldUseLocalOnly
+        ? 'localOnly'
+        : shouldUseLocalQuickReply
+        ? 'smallTalk'
+        : 'fallback';
     }
 
     if (!mountedRef.current) return;
 
     setMiloTalkBrainStatus(nextStatus);
+    setMiloTalkFallbackReason(nextDebugReason);
     setChatMessages((currentMessages) =>
       replaceTypingMessage(currentMessages, typingMessage.id, replyMessage)
     );
@@ -1586,6 +1889,77 @@ export default function MiloChatScreen() {
     (message) => message.role === 'user'
   );
   const showMiloTalkSuggestions = !hasUserMessages;
+  const miloAiModeLabel = miloAiSettings.aiMode === 'online' ? '• AI' : '• Local';
+
+  const handleOpenMiloAiSettings = async () => {
+    try {
+      await Haptics.selectionAsync();
+    } catch {
+      // Settings should still open when haptics are unavailable.
+    }
+
+    setIsMiloAiSettingsVisible(true);
+  };
+
+  const handleUpdateMiloAiSettings = async (
+    partial: Partial<MiloAiSettings>
+  ) => {
+    try {
+      const nextSettings = await updateMiloAiSettings(partial);
+
+      if (!mountedRef.current) {
+        return;
+      }
+
+      setMiloAiSettings(nextSettings);
+      setMiloTalkFallbackReason(null);
+      setMiloTalkBrainStatus('ready');
+    } catch (error) {
+      console.log('Failed to update Milo AI settings:', error);
+      Alert.alert(
+        'Could not save AI settings',
+        'Milo could not update this setting just now. Please try again.'
+      );
+    }
+  };
+
+  const handleResetMiloAiSettings = () => {
+    Alert.alert(
+      'Reset AI settings?',
+      'Milo will return to AI Online with small-talk skipping on.',
+      [
+        {
+          text: 'Cancel',
+          style: 'cancel',
+        },
+        {
+          text: 'Reset',
+          style: 'destructive',
+          onPress: () => {
+            void (async () => {
+              try {
+                const nextSettings = await resetMiloAiSettings();
+
+                if (!mountedRef.current) {
+                  return;
+                }
+
+                setMiloAiSettings(nextSettings);
+                setMiloTalkFallbackReason(null);
+                setMiloTalkBrainStatus('ready');
+              } catch (error) {
+                console.log('Failed to reset Milo AI settings:', error);
+                Alert.alert(
+                  'Could not reset AI settings',
+                  'Milo could not reset these settings just now. Please try again.'
+                );
+              }
+            })();
+          },
+        },
+      ]
+    );
+  };
 
   const handleStartNewChat = async () => {
     try {
@@ -1611,6 +1985,7 @@ export default function MiloChatScreen() {
       setChatMessages(nextMessages);
       setMiloTalkInput('');
       setMiloTalkBrainStatus('ready');
+      setMiloTalkFallbackReason(null);
       scrollTalkToBottom();
     } catch (error) {
       console.log('Failed to start a new Milo chat:', error);
@@ -2989,39 +3364,70 @@ export default function MiloChatScreen() {
       style={styles.screen}
     >
       <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
-        <TouchableOpacity
-          activeOpacity={0.82}
-          style={styles.headerButton}
-          onPress={() => navigation.goBack()}
-          accessibilityRole="button"
-          accessibilityLabel="Go back"
-        >
-          <Ionicons name="chevron-back" size={22} color={theme.colors.text} />
-        </TouchableOpacity>
-
-        <View style={styles.headerCopy}>
-          <Text numberOfLines={1} style={styles.headerTitle}>
-            Talk with Milo
-          </Text>
-          <Text numberOfLines={1} style={styles.headerSubtitle}>
-            Your task-aware study buddy
-          </Text>
+        <View style={styles.headerSideArea}>
+          <TouchableOpacity
+            activeOpacity={0.82}
+            style={styles.headerButton}
+            onPress={() => navigation.goBack()}
+            accessibilityRole="button"
+            accessibilityLabel="Go back"
+          >
+            <Ionicons name="chevron-back" size={22} color={theme.colors.text} />
+          </TouchableOpacity>
         </View>
 
-        <TouchableOpacity
-          activeOpacity={0.82}
-          style={styles.headerNewChatButton}
-          onPress={() => void handleStartNewChat()}
-          accessibilityRole="button"
-          accessibilityLabel="Start a new Milo chat"
-        >
-          <Ionicons
-            name="add-circle-outline"
-            size={17}
-            color={theme.colors.primaryDark}
-          />
-          <Text style={styles.headerNewChatText}>New</Text>
-        </TouchableOpacity>
+        <View style={styles.headerCopy}>
+          <View style={styles.headerTitleRow}>
+            <Text numberOfLines={1} style={styles.headerTitle}>
+              Talk with Milo
+            </Text>
+            <Text
+              numberOfLines={1}
+              style={[
+                styles.headerInlineStatusText,
+                miloAiSettings.aiMode === 'local' &&
+                  styles.headerInlineStatusTextLocal,
+              ]}
+            >
+              {miloAiModeLabel}
+            </Text>
+          </View>
+        </View>
+
+        <View style={[styles.headerSideArea, styles.headerRightArea]}>
+          <TouchableOpacity
+            activeOpacity={0.82}
+            style={[
+              styles.headerAiSettingsButton,
+              miloAiSettings.aiMode === 'local' &&
+                styles.headerAiSettingsButtonLocal,
+            ]}
+            onPress={() => void handleOpenMiloAiSettings()}
+            accessibilityRole="button"
+            accessibilityLabel="AI Settings"
+          >
+            <Ionicons
+              name="options-outline"
+              size={17}
+              color={theme.colors.primaryDark}
+            />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            activeOpacity={0.82}
+            style={styles.headerNewChatButton}
+            onPress={() => void handleStartNewChat()}
+            accessibilityRole="button"
+            accessibilityLabel="Start a new Milo chat"
+          >
+            <Ionicons
+              name="add-circle-outline"
+              size={17}
+              color={theme.colors.primaryDark}
+            />
+            <Text style={styles.headerNewChatText}>New</Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
       <ScrollView
@@ -3060,6 +3466,11 @@ export default function MiloChatScreen() {
                 accessibilityRole="button"
                 accessibilityLabel={`Send suggestion: ${suggestion}`}
               >
+                <Ionicons
+                  name={miloTalkSuggestionIcons[suggestion]}
+                  size={14}
+                  color={theme.colors.primaryDark}
+                />
                 <Text numberOfLines={1} style={styles.miloTalkSuggestionText}>
                   {suggestion}
                 </Text>
@@ -3098,10 +3509,217 @@ export default function MiloChatScreen() {
           </TouchableOpacity>
         </View>
 
-        <Text style={styles.miloTalkPrototypeFooter}>
-          {getMiloTalkFooterText(miloTalkBrainStatus)}
+        <Text
+          style={[
+            styles.miloTalkPrototypeFooter,
+            (miloAiSettings.aiMode === 'local' ||
+              miloTalkBrainStatus === 'localOnly') &&
+              styles.miloTalkPrototypeFooterLocal,
+          ]}
+        >
+          {getMiloTalkFooterText(
+            miloTalkBrainStatus,
+            miloAiSettings,
+            miloTalkFallbackReason
+          )}
         </Text>
       </View>
+
+      <Modal
+        visible={isMiloAiSettingsVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setIsMiloAiSettingsVisible(false)}
+      >
+        <View style={styles.aiSettingsOverlay}>
+          <View
+            style={[
+              styles.aiSettingsSheet,
+              { paddingBottom: Math.max(insets.bottom, 16) + 18 },
+            ]}
+          >
+            <View style={styles.aiSettingsHandle} />
+
+            <View style={styles.aiSettingsHeader}>
+              <View>
+                <View style={styles.aiSettingsEyebrowRow}>
+                  <Ionicons
+                    name="leaf-outline"
+                    size={13}
+                    color={theme.colors.primaryDark}
+                  />
+                  <Text style={styles.aiSettingsEyebrow}>Milo Brain</Text>
+                </View>
+                <Text style={styles.aiSettingsTitle}>AI Settings</Text>
+                <Text style={styles.aiSettingsHelper}>
+                  Control how Milo uses AI and local guidance.
+                </Text>
+              </View>
+
+              <TouchableOpacity
+                activeOpacity={0.82}
+                style={styles.aiSettingsCloseButton}
+                onPress={() => setIsMiloAiSettingsVisible(false)}
+                accessibilityRole="button"
+                accessibilityLabel="Close AI settings"
+              >
+                <Ionicons name="close" size={18} color={theme.colors.text} />
+              </TouchableOpacity>
+            </View>
+
+            <Text style={styles.aiSettingsSectionLabel}>AI Mode</Text>
+            <View style={styles.aiModeCardGrid}>
+              {(['online', 'local'] as const).map((mode) => {
+                const isSelected = miloAiSettings.aiMode === mode;
+
+                return (
+                  <TouchableOpacity
+                    key={mode}
+                    activeOpacity={0.84}
+                    style={[
+                      styles.aiModeCard,
+                      isSelected && styles.aiModeCardActive,
+                    ]}
+                    onPress={() =>
+                      void handleUpdateMiloAiSettings({ aiMode: mode })
+                    }
+                    accessibilityRole="button"
+                    accessibilityLabel={
+                      mode === 'online' ? 'Use AI Online' : 'Use Local Only'
+                    }
+                  >
+                    <View
+                      style={[
+                        styles.aiModeIconBox,
+                        isSelected && styles.aiModeIconBoxActive,
+                      ]}
+                    >
+                      <Ionicons
+                        name={mode === 'online' ? 'cloud-outline' : 'leaf-outline'}
+                        size={25}
+                        color={theme.colors.primaryDark}
+                      />
+                    </View>
+                    <Text
+                      style={[
+                        styles.aiModeCardTitle,
+                        isSelected && styles.aiModeCardTitleActive,
+                      ]}
+                    >
+                      {mode === 'online' ? 'AI Online' : 'Local Only'}
+                    </Text>
+                    <Text style={styles.aiModeCardText}>
+                      {mode === 'online'
+                        ? 'Uses Supabase + OpenAI'
+                        : 'Uses saved task guidance'}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+
+            <Text style={styles.aiSettingsSectionLabel}>Smart Controls</Text>
+            <View style={styles.aiSettingsControlsCard}>
+              <View style={styles.aiSettingsRow}>
+                <View style={styles.aiSettingsIconBox}>
+                  <Ionicons
+                    name="chatbubble-ellipses-outline"
+                    size={18}
+                    color={theme.colors.primaryDark}
+                  />
+                </View>
+                <View style={styles.aiSettingsRowCopy}>
+                  <Text style={styles.aiSettingsRowTitle}>
+                    Skip AI for small talk
+                  </Text>
+                  <Text style={styles.aiSettingsRowText}>
+                    Quick hellos and thanks stay local.
+                  </Text>
+                </View>
+                <Switch
+                  value={miloAiSettings.skipAiForSmallTalk}
+                  onValueChange={(value) =>
+                    void handleUpdateMiloAiSettings({
+                      skipAiForSmallTalk: value,
+                    })
+                  }
+                  trackColor={{ false: '#D7E1D8', true: '#BFE9CE' }}
+                  thumbColor={
+                    miloAiSettings.skipAiForSmallTalk
+                      ? theme.colors.primaryDark
+                      : theme.colors.white
+                  }
+                />
+              </View>
+
+              <View style={styles.aiSettingsDivider} />
+
+              <View style={styles.aiSettingsRow}>
+                <View style={styles.aiSettingsIconBox}>
+                  <Ionicons
+                    name="bug-outline"
+                    size={18}
+                    color={theme.colors.primaryDark}
+                  />
+                </View>
+                <View style={styles.aiSettingsRowCopy}>
+                  <Text style={styles.aiSettingsRowTitle}>
+                    Show debug reason
+                  </Text>
+                  <Text style={styles.aiSettingsRowText}>
+                    Adds the fallback reason to the footer.
+                  </Text>
+                </View>
+                <Switch
+                  value={miloAiSettings.showDebugReason}
+                  onValueChange={(value) =>
+                    void handleUpdateMiloAiSettings({ showDebugReason: value })
+                  }
+                  trackColor={{ false: '#D7E1D8', true: '#BFE9CE' }}
+                  thumbColor={
+                    miloAiSettings.showDebugReason
+                      ? theme.colors.primaryDark
+                      : theme.colors.white
+                  }
+                />
+              </View>
+            </View>
+
+            <Text style={styles.aiSettingsSectionLabel}>Usage Today</Text>
+            <View style={styles.aiUsageCard}>
+              <View style={styles.aiUsageIconBox}>
+                <Ionicons
+                  name="trending-up-outline"
+                  size={21}
+                  color={theme.colors.primaryDark}
+                />
+              </View>
+              <View style={styles.aiUsageCopy}>
+                <Text style={styles.aiUsageLabel}>AI calls today</Text>
+                <Text style={styles.aiUsageCount}>
+                  {miloAiSettings.aiCallsToday}
+                </Text>
+                <Text style={styles.aiUsageText}>
+                  Tracked locally for cost awareness.
+                </Text>
+                <Text style={styles.aiUsageResetText}>
+                  Resets daily.
+                </Text>
+              </View>
+            </View>
+
+            <TouchableOpacity
+              activeOpacity={0.82}
+              style={styles.aiSettingsResetButton}
+              onPress={handleResetMiloAiSettings}
+              accessibilityRole="button"
+              accessibilityLabel="Reset AI settings"
+            >
+              <Text style={styles.aiSettingsResetText}>Reset AI settings</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </KeyboardAvoidingView>
   );
 }
@@ -3112,30 +3730,54 @@ const styles = StyleSheet.create({
     backgroundColor: '#FAFCF7',
   },
   header: {
-    minHeight: 76,
+    minHeight: 74,
     backgroundColor: '#FFFDF7',
     borderBottomWidth: 1,
     borderBottomColor: '#EEF1EA',
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingBottom: 10,
+    justifyContent: 'space-between',
+    paddingHorizontal: 10,
+    paddingBottom: 8,
+  },
+  headerSideArea: {
+    width: 104,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  headerRightArea: {
+    justifyContent: 'flex-end',
+    gap: 6,
   },
   headerButton: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: 'rgba(255, 255, 255, 0.72)',
+    borderWidth: 1,
+    borderColor: '#EDF2E8',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  headerButtonSpacer: {
-    width: 42,
-    height: 42,
+  headerAiSettingsButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: theme.colors.white,
+    borderWidth: 1,
+    borderColor: '#E4ECE0',
+    alignItems: 'center',
+    justifyContent: 'center',
+    ...theme.shadowSoft,
+  },
+  headerAiSettingsButtonLocal: {
+    backgroundColor: '#FFF6E7',
+    borderColor: '#F5D8AA',
   },
   headerNewChatButton: {
-    minWidth: 58,
-    height: 34,
-    borderRadius: 17,
+    minWidth: 52,
+    height: 36,
+    borderRadius: 18,
     backgroundColor: theme.colors.primarySoft,
     borderWidth: 1,
     borderColor: '#D6EBDD',
@@ -3147,24 +3789,262 @@ const styles = StyleSheet.create({
   },
   headerNewChatText: {
     color: theme.colors.primaryDark,
-    fontSize: 11,
+    fontSize: 10,
     fontWeight: '900',
   },
   headerCopy: {
     flex: 1,
     minWidth: 0,
     alignItems: 'center',
+    justifyContent: 'center',
+  },
+  headerTitleRow: {
+    maxWidth: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
   },
   headerTitle: {
     color: '#111827',
-    fontSize: 17,
+    fontSize: 16,
     fontWeight: '900',
   },
-  headerSubtitle: {
+  headerInlineStatusText: {
+    color: '#247B3B',
+    fontSize: 11,
+    fontWeight: '900',
+    lineHeight: 14,
+  },
+  headerInlineStatusTextLocal: {
+    color: '#C56B00',
+  },
+  aiSettingsOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(17, 24, 39, 0.28)',
+    justifyContent: 'flex-end',
+  },
+  aiSettingsSheet: {
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    backgroundColor: '#FFFDF7',
+    borderTopWidth: 1,
+    borderColor: '#E5ECE3',
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    ...theme.shadowSoft,
+  },
+  aiSettingsHandle: {
+    alignSelf: 'center',
+    width: 46,
+    height: 4,
+    borderRadius: 999,
+    backgroundColor: '#D7DED3',
+    marginBottom: 18,
+  },
+  aiSettingsHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  aiSettingsEyebrowRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  aiSettingsEyebrow: {
+    color: theme.colors.primaryDark,
+    fontSize: 10,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+  },
+  aiSettingsTitle: {
+    marginTop: 8,
+    color: theme.colors.text,
+    fontSize: 25,
+    fontWeight: '900',
+  },
+  aiSettingsHelper: {
+    marginTop: 8,
+    maxWidth: 280,
+    color: theme.colors.textSoft,
+    fontSize: 13,
+    fontWeight: '700',
+    lineHeight: 19,
+  },
+  aiSettingsCloseButton: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: theme.colors.white,
+    borderWidth: 1,
+    borderColor: '#E0E8DD',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  aiSettingsSectionLabel: {
+    marginTop: 20,
+    marginBottom: 9,
+    color: theme.colors.text,
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  aiModeCardGrid: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  aiModeCard: {
+    flex: 1,
+    minHeight: 128,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255, 255, 255, 0.82)',
+    borderWidth: 1,
+    borderColor: '#E0E8DD',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 14,
+  },
+  aiModeCardActive: {
+    backgroundColor: '#F1FAEF',
+    borderColor: '#BFE2C7',
+  },
+  aiModeIconBox: {
+    width: 42,
+    height: 42,
+    borderRadius: 16,
+    backgroundColor: '#F6FAF3',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 9,
+  },
+  aiModeIconBoxActive: {
+    backgroundColor: '#E4F5E7',
+  },
+  aiModeCardTitle: {
+    color: theme.colors.text,
+    fontSize: 13,
+    fontWeight: '900',
+    textAlign: 'center',
+  },
+  aiModeCardTitleActive: {
+    color: theme.colors.primaryDark,
+  },
+  aiModeCardText: {
+    marginTop: 6,
+    color: theme.colors.textSoft,
+    fontSize: 11,
+    fontWeight: '700',
+    lineHeight: 16,
+    textAlign: 'center',
+  },
+  aiSettingsControlsCard: {
+    borderRadius: 20,
+    backgroundColor: 'rgba(255, 255, 255, 0.88)',
+    borderWidth: 1,
+    borderColor: '#E0E8DD',
+    overflow: 'hidden',
+  },
+  aiSettingsRow: {
+    minHeight: 72,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 12,
+    paddingVertical: 11,
+    gap: 12,
+  },
+  aiSettingsIconBox: {
+    width: 42,
+    height: 42,
+    borderRadius: 15,
+    backgroundColor: theme.colors.primarySoft,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  aiSettingsRowCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  aiSettingsRowTitle: {
+    color: theme.colors.text,
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  aiSettingsRowText: {
+    marginTop: 3,
+    color: theme.colors.textSoft,
+    fontSize: 11,
+    fontWeight: '700',
+    lineHeight: 15,
+  },
+  aiSettingsDivider: {
+    height: 1,
+    backgroundColor: '#EEF1EA',
+    marginLeft: 66,
+  },
+  aiUsageCard: {
+    borderRadius: 20,
+    backgroundColor: '#F2FAEF',
+    borderWidth: 1,
+    borderColor: '#DCEADC',
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 14,
+    gap: 14,
+  },
+  aiUsageIconBox: {
+    width: 48,
+    height: 48,
+    borderRadius: 17,
+    backgroundColor: 'rgba(255, 255, 255, 0.72)',
+    borderWidth: 1,
+    borderColor: '#E1ECDD',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  aiUsageCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  aiUsageLabel: {
+    color: theme.colors.textSoft,
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  aiUsageCount: {
+    marginTop: 2,
+    color: theme.colors.primaryDark,
+    fontSize: 30,
+    fontWeight: '900',
+  },
+  aiUsageText: {
     marginTop: 2,
     color: theme.colors.textSoft,
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '700',
+    lineHeight: 15,
+  },
+  aiUsageResetText: {
+    marginTop: 8,
+    color: theme.colors.primaryDark,
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  aiSettingsResetButton: {
+    alignSelf: 'center',
+    marginTop: 14,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#F0D8D8',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+  },
+  aiSettingsResetText: {
+    color: theme.colors.danger,
+    fontSize: 11,
+    fontWeight: '900',
   },
   miloTalkMessageList: {
     flex: 1,
@@ -3758,16 +4638,19 @@ const styles = StyleSheet.create({
   miloTalkSuggestionRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 7,
+    gap: 8,
   },
   miloTalkSuggestionChip: {
     maxWidth: '100%',
     borderRadius: 999,
-    backgroundColor: theme.colors.white,
+    backgroundColor: 'rgba(255, 255, 255, 0.84)',
     borderWidth: 1,
-    borderColor: '#DBE7DB',
+    borderColor: '#DDEBDD',
+    flexDirection: 'row',
+    alignItems: 'center',
     paddingHorizontal: 11,
     paddingVertical: 8,
+    gap: 6,
   },
   miloTalkSuggestionText: {
     color: theme.colors.primaryDark,
@@ -3826,6 +4709,9 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     lineHeight: 13,
     textAlign: 'center',
+  },
+  miloTalkPrototypeFooterLocal: {
+    color: '#C56B00',
   },
   miloTalkActionGrid: {
     marginTop: 10,
