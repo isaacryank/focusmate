@@ -167,7 +167,8 @@ function MainTabs() {
         name="Settings"
         component={SettingsScreen}
         options={{
-          title: 'Profile',
+          title: 'Settings',
+          headerShown: false,
           tabBarLabel: 'Profile',
           tabBarIcon: ({ color }) => (
             <MaterialCommunityIcons

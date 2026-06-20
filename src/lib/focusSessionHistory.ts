@@ -138,3 +138,7 @@ export async function appendFocusSessionHistory(
     return [];
   }
 }
+
+export async function clearFocusSessionHistory() {
+  await AsyncStorage.removeItem(FOCUS_SESSION_HISTORY_STORAGE_KEY);
+}
