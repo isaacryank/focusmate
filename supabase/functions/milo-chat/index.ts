@@ -37,6 +37,11 @@ type MiloChatRecentMessage = {
   text: string;
 };
 
+type MiloFocusStats = {
+  focusMinutesToday?: number | null;
+  focusSessionsToday?: number | null;
+};
+
 type MiloProposedTask = {
   title: string;
   type: 'task' | 'meeting' | 'date';
@@ -104,6 +109,27 @@ type MiloTimelineInsight = {
   taskIds?: string[];
 };
 
+type MiloInsightStats = {
+  completedToday?: number | null;
+  pending?: number | null;
+  overdue?: number | null;
+  dueToday?: number | null;
+  highPriority?: number | null;
+  focusMinutesToday?: number | null;
+  focusSessionsToday?: number | null;
+};
+
+type MiloInsight = {
+  title: string;
+  summary: string;
+  wins?: string[];
+  concerns?: string[];
+  nextBestTaskId?: string | null;
+  stats?: MiloInsightStats | null;
+  reflection?: string | null;
+  suggestedAction?: MiloChatAction | null;
+};
+
 type MiloChatResponse = {
   text: string;
   relatedTaskId?: string | null;
@@ -115,6 +141,7 @@ type MiloChatResponse = {
   smartPlan?: MiloSmartPlan | null;
   smartNudge?: MiloSmartNudge | null;
   timelineInsight?: MiloTimelineInsight | null;
+  miloInsight?: MiloInsight | null;
   debugReason?: MiloChatFallbackReason;
   usedAi: boolean;
 };
@@ -184,6 +211,7 @@ function fallbackResponse(reason: MiloChatFallbackReason) {
     smartPlan: null,
     smartNudge: null,
     timelineInsight: null,
+    miloInsight: null,
     debugReason: reason,
     usedAi: false,
   } satisfies MiloChatResponse);
@@ -261,6 +289,35 @@ function sanitizeRecentMessage(
   return {
     role,
     text,
+  };
+}
+
+function sanitizeNonNegativeNumber(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+    ? Math.round(value)
+    : null;
+}
+
+function sanitizeFocusStats(rawStats: unknown): MiloFocusStats | null {
+  if (!rawStats || typeof rawStats !== 'object' || Array.isArray(rawStats)) {
+    return null;
+  }
+
+  const stats = rawStats as Record<string, unknown>;
+  const focusMinutesToday = sanitizeNonNegativeNumber(
+    stats.focusMinutesToday
+  );
+  const focusSessionsToday = sanitizeNonNegativeNumber(
+    stats.focusSessionsToday
+  );
+
+  if (focusMinutesToday === null && focusSessionsToday === null) {
+    return null;
+  }
+
+  return {
+    focusMinutesToday,
+    focusSessionsToday,
   };
 }
 
@@ -570,6 +627,65 @@ function sanitizeTimelineInsight(
   };
 }
 
+function sanitizeInsightStats(rawStats: unknown): MiloInsightStats | null {
+  if (!rawStats || typeof rawStats !== 'object' || Array.isArray(rawStats)) {
+    return null;
+  }
+
+  const stats = rawStats as Record<string, unknown>;
+
+  return {
+    completedToday: sanitizeNonNegativeNumber(stats.completedToday),
+    pending: sanitizeNonNegativeNumber(stats.pending),
+    overdue: sanitizeNonNegativeNumber(stats.overdue),
+    dueToday: sanitizeNonNegativeNumber(stats.dueToday),
+    highPriority: sanitizeNonNegativeNumber(stats.highPriority),
+    focusMinutesToday: sanitizeNonNegativeNumber(stats.focusMinutesToday),
+    focusSessionsToday: sanitizeNonNegativeNumber(stats.focusSessionsToday),
+  };
+}
+
+function sanitizeInsightList(value: unknown) {
+  return Array.isArray(value)
+    ? value
+        .map((item) => trimText(item, 180))
+        .filter((item): item is string => Boolean(item))
+        .slice(0, 4)
+    : [];
+}
+
+function sanitizeMiloInsight(
+  rawInsight: unknown,
+  tasks: MiloChatTaskContext[]
+): MiloInsight | null {
+  if (
+    !rawInsight ||
+    typeof rawInsight !== 'object' ||
+    Array.isArray(rawInsight)
+  ) {
+    return null;
+  }
+
+  const insight = rawInsight as Record<string, unknown>;
+  const title = trimText(insight.title, 120);
+  const summary = trimText(insight.summary, 480);
+
+  if (!title || !summary) {
+    return null;
+  }
+
+  return {
+    title,
+    summary,
+    wins: sanitizeInsightList(insight.wins),
+    concerns: sanitizeInsightList(insight.concerns),
+    nextBestTaskId: getExistingTaskId(insight.nextBestTaskId, tasks),
+    stats: sanitizeInsightStats(insight.stats),
+    reflection: trimText(insight.reflection, 360) || null,
+    suggestedAction: sanitizeSuggestedAction(insight.suggestedAction),
+  };
+}
+
 function getTaskDateTimeKey(task: MiloChatTaskContext) {
   return [
     task.due_date || '9999-99-99',
@@ -815,6 +931,137 @@ function buildTimelineInsight(tasks: MiloChatTaskContext[]): MiloTimelineInsight
   };
 }
 
+function buildMiloInsightStats(
+  tasks: MiloChatTaskContext[],
+  focusStats?: MiloFocusStats | null
+): MiloInsightStats {
+  const today = getCurrentDateKey();
+  const pendingTasks = tasks.filter((task) => task.completed !== true);
+  const completedToday = tasks.filter(
+    (task) => task.completed === true && task.due_date === today
+  ).length;
+
+  return {
+    completedToday,
+    pending: pendingTasks.length,
+    overdue: pendingTasks.filter(
+      (task) => task.due_date && task.due_date < today
+    ).length,
+    dueToday: pendingTasks.filter((task) => task.due_date === today).length,
+    highPriority: pendingTasks.filter((task) => task.priority === 'high').length,
+    focusMinutesToday: focusStats?.focusMinutesToday ?? null,
+    focusSessionsToday: focusStats?.focusSessionsToday ?? null,
+  };
+}
+
+function getMiloInsightSuggestedAction(
+  task?: MiloChatTaskContext
+): MiloChatAction | null {
+  if (!task) {
+    return null;
+  }
+
+  if (task.type === 'meeting' && task.hasMeetingLink) {
+    return 'join_meeting';
+  }
+
+  if (task.location) {
+    return 'open_maps';
+  }
+
+  return task.type === 'task' ? 'start_focus' : 'view_task';
+}
+
+function buildMiloInsight({
+  focusStats,
+  tasks,
+}: {
+  focusStats?: MiloFocusStats | null;
+  tasks: MiloChatTaskContext[];
+}): MiloInsight {
+  const stats = buildMiloInsightStats(tasks, focusStats);
+  const nextBestTask = findNudgeTask(tasks);
+  const completedSavedCount = tasks.filter(
+    (task) => task.completed === true
+  ).length;
+  const wins = [
+    stats.completedToday
+      ? `You cleared ${stats.completedToday} task${stats.completedToday === 1 ? '' : 's'} from today's saved list.`
+      : undefined,
+    completedSavedCount && !stats.completedToday
+      ? `Milo sees ${completedSavedCount} completed saved item${completedSavedCount === 1 ? '' : 's'} in your plan.`
+      : undefined,
+    typeof stats.focusMinutesToday === 'number' && stats.focusMinutesToday > 0
+      ? `You protected ${stats.focusMinutesToday} focus minute${stats.focusMinutesToday === 1 ? '' : 's'} today.`
+      : undefined,
+    !stats.completedToday && !stats.focusMinutesToday
+      ? 'You checked in with Milo, which is a good reset point.'
+      : undefined,
+  ].filter((win): win is string => Boolean(win));
+  const concerns = [
+    stats.overdue
+      ? `${stats.overdue} overdue item${stats.overdue === 1 ? ' needs' : 's need'} gentle attention.`
+      : undefined,
+    stats.highPriority
+      ? `${stats.highPriority} high-priority item${stats.highPriority === 1 ? ' is' : 's are'} still pending.`
+      : undefined,
+    stats.dueToday
+      ? `${stats.dueToday} item${stats.dueToday === 1 ? ' is' : 's are'} due today.`
+      : undefined,
+    !focusStats
+      ? 'Focus data is not available yet, so Milo is judging from saved tasks only.'
+      : undefined,
+  ].filter((concern): concern is string => Boolean(concern));
+  const nextBestLine = nextBestTask
+    ? `Your next best move is ${nextBestTask.title}.`
+    : 'Milo does not see a pending saved task that needs action right now.';
+  const focusLine =
+    typeof stats.focusMinutesToday === 'number'
+      ? `Focus today: ${stats.focusMinutesToday} minute${stats.focusMinutesToday === 1 ? '' : 's'} across ${stats.focusSessionsToday ?? 0} session${stats.focusSessionsToday === 1 ? '' : 's'}.`
+      : 'Focus stats are not available yet.';
+
+  return {
+    title: 'Milo Insight for today',
+    summary: `Milo sees ${completedSavedCount} completed saved item${completedSavedCount === 1 ? '' : 's'}, ${stats.pending ?? 0} pending item${stats.pending === 1 ? '' : 's'}, ${stats.overdue ?? 0} overdue, and ${stats.highPriority ?? 0} high-priority item${stats.highPriority === 1 ? '' : 's'}. ${nextBestLine} ${focusLine}`,
+    wins,
+    concerns,
+    nextBestTaskId: nextBestTask?.id ?? null,
+    stats,
+    reflection:
+      nextBestTask && stats.overdue
+        ? 'You are making progress, but protect a small focus block for the overdue work first.'
+        : nextBestTask
+        ? 'You are steady. Pick one clear task and make the next move small enough to start.'
+        : 'Your saved plan looks calm right now. Use the space to rest, review, or prepare early.',
+    suggestedAction: getMiloInsightSuggestedAction(nextBestTask),
+  };
+}
+
+function buildMiloInsightResponse({
+  focusStats,
+  text,
+  tasks,
+}: {
+  focusStats?: MiloFocusStats | null;
+  text?: string;
+  tasks: MiloChatTaskContext[];
+}): MiloChatResponse {
+  return {
+    text: text || 'Awww okay, here is your Milo Insight for today.',
+    relatedTaskId: null,
+    suggestedActions: [],
+    proposedTask: null,
+    proposedTaskUpdate: null,
+    proposedTaskCompletion: null,
+    proposedTaskDeletion: null,
+    smartPlan: null,
+    smartNudge: null,
+    timelineInsight: null,
+    miloInsight: buildMiloInsight({ focusStats, tasks }),
+    usedAi: true,
+  };
+}
+
 function buildPlanningFallbackResponse({
   message,
   tasks,
@@ -841,6 +1088,7 @@ function buildPlanningFallbackResponse({
     proposedTaskCompletion: null,
     proposedTaskDeletion: null,
     usedAi: true,
+    miloInsight: null,
   };
 
   if (planningIntent.hasMeetingPrepIntent) {
@@ -1078,6 +1326,34 @@ function getPlanningIntentInfo(message: string) {
     hasSmartNudgeIntent,
     hasTimelineInsightIntent,
     hasMeetingPrepIntent,
+  };
+}
+
+function getInsightIntentInfo(message: string) {
+  const normalizedMessage = normalizeSearchText(message);
+  const hasInsightIntent =
+    /\b(give me my insight|milo insight|my insight)\b/.test(
+      normalizedMessage
+    ) ||
+    /\b(how am i doing|how productive am i)\b/.test(normalizedMessage) ||
+    /\b(summarize my progress|summary of my progress|progress today|my progress today)\b/.test(
+      normalizedMessage
+    ) ||
+    /\b(today s reflection|todays reflection|today reflection|give me today s reflection|give me todays reflection)\b/.test(
+      normalizedMessage
+    ) ||
+    /\b(what have i completed|what did i complete|completed today)\b/.test(
+      normalizedMessage
+    ) ||
+    /\b(what is still pending|still pending|pending tasks|what is pending)\b/.test(
+      normalizedMessage
+    ) ||
+    /\b(study report|productivity report|progress report)\b/.test(
+      normalizedMessage
+    );
+
+  return {
+    hasInsightIntent,
   };
 }
 
@@ -1419,7 +1695,18 @@ function buildSystemPrompt() {
     'For Timeline insight intent, return timelineInsight. Timeline examples include explain my timeline, is my day packed, timeline today, any clash, and schedule looks okay.',
     'For timelineInsight, detect simple pressure such as multiple tasks on the same day, meetings close to tasks, overdue tasks, heavy high-priority tasks, location relevance, and meeting-link relevance.',
     'Do not falsely claim exact conflicts unless task times clearly overlap. If unsure, say the day looks close or may feel packed.',
+    'For Milo Insight intent, return miloInsight. Insight examples include give me my insight, how am I doing, summarize my progress, progress today, today reflection, how productive am I, what have I completed, what is still pending, study report, productivity report, and Milo insight.',
+    'For miloInsight, summarize progress, overdue work, completed tasks, pending tasks, focus status when focusStats is provided, and one next best action when useful.',
+    'For miloInsight.stats.completedToday, use completed tasks from context that are due today because no task completion timestamp is available.',
+    'For miloInsight focus stats, use only focusStats. If focusStats is missing, set focusMinutesToday and focusSessionsToday to null and say focus data is not available yet.',
+    'For miloInsight.nextBestTaskId, use one existing pending task id from task context or null. suggestedAction must be safe for that task.',
+    'For Milo Insight intent, do not create, update, complete, or delete tasks. Set proposedTask, proposedTaskUpdate, proposedTaskCompletion, and proposedTaskDeletion to null.',
     'For read-only planning fields, set proposedTask, proposedTaskUpdate, proposedTaskCompletion, and proposedTaskDeletion to null.',
+    'When returning any structured card field, keep the text field brief: 1 to 3 short sentences only.',
+    'Structured card fields are smartPlan, smartNudge, timelineInsight, miloInsight, proposedTask, proposedTaskUpdate, proposedTaskCompletion, and proposedTaskDeletion.',
+    'When a structured card is present, do not duplicate card details in text. Do not add a bullet list, repeated stats, step list, or field-by-field summary outside the card.',
+    'For miloInsight with a card, text can be: Awww yes, here is your progress check-in. Milo kept the details in the card so it is easier to read.',
+    'For smartPlan with a card, text can be: Awww okay, Milo made a simple plan for you. Start with the first step and keep it gentle.',
     'For delete/remove intent, return proposedTaskDeletion instead of proposedTask, proposedTaskUpdate, proposedTaskCompletion, relatedTaskId, or suggestedActions.',
     'Delete/remove intent examples include delete, remove, cancel task, cancel date, cancel meeting, no longer need, not happening anymore, has been canceled, has been cancelled, and remove it from my plan.',
     'For proposedTaskDeletion.taskId, use the id of exactly one existing task from the provided task context.',
@@ -1473,10 +1760,12 @@ function buildSystemPrompt() {
 }
 
 function buildUserInput({
+  focusStats,
   message,
   tasks,
   recentMessages,
 }: {
+  focusStats?: MiloFocusStats | null;
   message: string;
   tasks: MiloChatTaskContext[];
   recentMessages: MiloChatRecentMessage[];
@@ -1496,14 +1785,18 @@ function buildUserInput({
     updateIntent: getUpdateIntentInfo(message),
     completionIntent: getCompletionIntentInfo(message),
     planningIntent: getPlanningIntentInfo(message),
+    insightIntent: getInsightIntentInfo(message),
+    focusStats,
   });
 }
 
 async function callOpenAi({
+  focusStats,
   message,
   tasks,
   recentMessages,
 }: {
+  focusStats?: MiloFocusStats | null;
   message: string;
   tasks: MiloChatTaskContext[];
   recentMessages: MiloChatRecentMessage[];
@@ -1530,11 +1823,12 @@ async function callOpenAi({
       model,
       instructions: buildSystemPrompt(),
       input: buildUserInput({
+        focusStats,
         message,
         tasks,
         recentMessages,
       }),
-      max_output_tokens: 500,
+      max_output_tokens: 800,
       store: false,
       text: {
         format: {
@@ -1798,6 +2092,93 @@ async function callOpenAi({
                 },
                 required: ['title', 'message', 'warnings', 'taskIds'],
               },
+              miloInsight: {
+                type: ['object', 'null'],
+                additionalProperties: false,
+                properties: {
+                  title: {
+                    type: 'string',
+                  },
+                  summary: {
+                    type: 'string',
+                  },
+                  wins: {
+                    type: 'array',
+                    items: {
+                      type: 'string',
+                    },
+                  },
+                  concerns: {
+                    type: 'array',
+                    items: {
+                      type: 'string',
+                    },
+                  },
+                  nextBestTaskId: {
+                    type: ['string', 'null'],
+                  },
+                  stats: {
+                    type: ['object', 'null'],
+                    additionalProperties: false,
+                    properties: {
+                      completedToday: {
+                        type: ['number', 'null'],
+                      },
+                      pending: {
+                        type: ['number', 'null'],
+                      },
+                      overdue: {
+                        type: ['number', 'null'],
+                      },
+                      dueToday: {
+                        type: ['number', 'null'],
+                      },
+                      highPriority: {
+                        type: ['number', 'null'],
+                      },
+                      focusMinutesToday: {
+                        type: ['number', 'null'],
+                      },
+                      focusSessionsToday: {
+                        type: ['number', 'null'],
+                      },
+                    },
+                    required: [
+                      'completedToday',
+                      'pending',
+                      'overdue',
+                      'dueToday',
+                      'highPriority',
+                      'focusMinutesToday',
+                      'focusSessionsToday',
+                    ],
+                  },
+                  reflection: {
+                    type: ['string', 'null'],
+                  },
+                  suggestedAction: {
+                    type: ['string', 'null'],
+                    enum: [
+                      'view_task',
+                      'start_focus',
+                      'find_resources',
+                      'open_maps',
+                      'join_meeting',
+                      null,
+                    ],
+                  },
+                },
+                required: [
+                  'title',
+                  'summary',
+                  'wins',
+                  'concerns',
+                  'nextBestTaskId',
+                  'stats',
+                  'reflection',
+                  'suggestedAction',
+                ],
+              },
             },
             required: [
               'text',
@@ -1811,6 +2192,7 @@ async function callOpenAi({
               'smartPlan',
               'smartNudge',
               'timelineInsight',
+              'miloInsight',
             ],
           },
         },
@@ -1879,6 +2261,7 @@ Deno.serve(async (request) => {
         .filter((item): item is MiloChatRecentMessage => Boolean(item))
         .slice(-MAX_RECENT_MESSAGES)
     : [];
+  const focusStats = sanitizeFocusStats(body.focusStats);
   const deletionFollowUpIntent = getDeletionFollowUpInfo({
     message,
     recentMessages,
@@ -1905,6 +2288,7 @@ Deno.serve(async (request) => {
         smartPlan: null,
         smartNudge: null,
         timelineInsight: null,
+        miloInsight: null,
         usedAi: true,
       } satisfies MiloChatResponse);
     }
@@ -1924,6 +2308,7 @@ Deno.serve(async (request) => {
       smartPlan: null,
       smartNudge: null,
       timelineInsight: null,
+      miloInsight: null,
       usedAi: true,
     } satisfies MiloChatResponse);
   }
@@ -1941,12 +2326,14 @@ Deno.serve(async (request) => {
       smartPlan: null,
       smartNudge: null,
       timelineInsight: null,
+      miloInsight: null,
       usedAi: true,
     } satisfies MiloChatResponse);
   }
 
   try {
     const openAiResponse = await callOpenAi({
+      focusStats,
       message,
       tasks,
       recentMessages,
@@ -1965,25 +2352,34 @@ Deno.serve(async (request) => {
     const completionIntent = getCompletionIntentInfo(message);
     const deletionIntent = getDeletionIntentInfo(message);
     const planningIntent = getPlanningIntentInfo(message);
+    const insightIntent = getInsightIntentInfo(message);
     const parsedResponse = parseMiloChatResponse(outputText);
-    const proposedTask = deletionIntent.shouldPreferProposedTaskDeletion
+    const proposedTask =
+      deletionIntent.shouldPreferProposedTaskDeletion ||
+      insightIntent.hasInsightIntent
       ? null
       : sanitizeProposedTask(parsedResponse.proposedTask);
     const proposedTaskUpdate =
-      proposedTask || deletionIntent.shouldPreferProposedTaskDeletion
+      proposedTask ||
+      deletionIntent.shouldPreferProposedTaskDeletion ||
+      insightIntent.hasInsightIntent
         ? null
         : sanitizeProposedTaskUpdate(parsedResponse.proposedTaskUpdate, tasks);
     const proposedTaskCompletion =
       proposedTask ||
       proposedTaskUpdate ||
-      deletionIntent.shouldPreferProposedTaskDeletion
+      deletionIntent.shouldPreferProposedTaskDeletion ||
+      insightIntent.hasInsightIntent
         ? null
         : sanitizeProposedTaskCompletion(
             parsedResponse.proposedTaskCompletion,
             tasks
           );
     const proposedTaskDeletion =
-      proposedTask || proposedTaskUpdate || proposedTaskCompletion
+      proposedTask ||
+      proposedTaskUpdate ||
+      proposedTaskCompletion ||
+      insightIntent.hasInsightIntent
         ? null
         : sanitizeProposedTaskDeletion(
             parsedResponse.proposedTaskDeletion,
@@ -2004,15 +2400,33 @@ Deno.serve(async (request) => {
     let timelineInsight = hasTaskChangingProposal
       ? null
       : sanitizeTimelineInsight(parsedResponse.timelineInsight, tasks);
+    let miloInsight = hasTaskChangingProposal
+      ? null
+      : sanitizeMiloInsight(parsedResponse.miloInsight, tasks);
     let responseText =
       trimText(parsedResponse.text, 900) ||
       'Milo is here with you. Tell me what you want to focus on next.';
+
+    if (!hasTaskChangingProposal && insightIntent.hasInsightIntent) {
+      smartPlan = null;
+      smartNudge = null;
+      timelineInsight = null;
+
+      if (!miloInsight) {
+        miloInsight = buildMiloInsight({ focusStats, tasks });
+      }
+
+      if (!trimText(parsedResponse.text, 900)) {
+        responseText = 'Awww okay, here is your Milo Insight for today.';
+      }
+    }
 
     if (
       !hasTaskChangingProposal &&
       !smartPlan &&
       !smartNudge &&
-      !timelineInsight
+      !timelineInsight &&
+      !miloInsight
     ) {
       if (planningIntent.hasMeetingPrepIntent) {
         const meeting = findNearestUpcomingMeeting(tasks);
@@ -2032,7 +2446,7 @@ Deno.serve(async (request) => {
     }
 
     const hasPlanningResponse = Boolean(
-      smartPlan || smartNudge || timelineInsight
+      smartPlan || smartNudge || timelineInsight || miloInsight
     );
     const shouldSuppressExistingTaskLink =
       hasTaskChangingProposal ||
@@ -2064,6 +2478,7 @@ Deno.serve(async (request) => {
       smartPlan,
       smartNudge,
       timelineInsight,
+      miloInsight,
       usedAi: true,
     } satisfies MiloChatResponse);
   } catch (error) {
@@ -2075,6 +2490,21 @@ Deno.serve(async (request) => {
     });
 
     try {
+      const insightIntent = getInsightIntentInfo(message);
+
+      if (insightIntent.hasInsightIntent) {
+        console.warn('milo-chat using deterministic insight response', {
+          reason,
+        });
+
+        return jsonResponse(
+          buildMiloInsightResponse({
+            focusStats,
+            tasks,
+          })
+        );
+      }
+
       const planningFallback = buildPlanningFallbackResponse({
         message,
         tasks,

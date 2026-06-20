@@ -2,6 +2,7 @@ import React, {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from 'react';
@@ -22,6 +23,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { theme } from '../theme';
 import { useTasks } from '../lib/TaskContext';
+import { useFocus } from '../lib/FocusContext';
 import { openLocationInMaps } from '../lib/mapUtils';
 import {
   buildMiloBrainReply,
@@ -30,6 +32,8 @@ import {
 import {
   askMiloAi,
   buildMiloAiRecentMessages,
+  type MiloAiFocusStats,
+  type MiloAiInsight,
   type MiloAiProposedTaskCompletion,
   type MiloAiProposedTaskDeletion,
   type MiloAiProposedTask,
@@ -49,6 +53,7 @@ import {
   normalizeMeetingUrl,
   openMeetingLink,
 } from '../lib/meetingLinkUtils';
+import type { FocusSession } from '../types/focus';
 import type { Task } from '../types/task';
 
 import MiloMoodImage from '../components/milo/MiloMoodImage';
@@ -83,6 +88,7 @@ type MiloTalkMessage = {
   smartPlan?: MiloAiSmartPlan;
   smartNudge?: MiloAiSmartNudge;
   timelineInsight?: MiloAiTimelineInsight;
+  miloInsight?: MiloAiInsight;
 };
 
 const MILO_TALK_INITIAL_TEXT =
@@ -142,6 +148,27 @@ function createMiloTalkMessageId(role: MiloTalkRole) {
 
 function titleCase(value: string) {
   return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function getTodayDateKey() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function buildTodayMiloAiFocusStats(
+  focusSessions: FocusSession[]
+): MiloAiFocusStats {
+  const todayDate = getTodayDateKey();
+  const todayFocusSessions = focusSessions.filter(
+    (session) => session.completedAt.slice(0, 10) === todayDate
+  );
+
+  return {
+    focusMinutesToday: todayFocusSessions.reduce(
+      (total, session) => total + session.minutes,
+      0
+    ),
+    focusSessionsToday: todayFocusSessions.length,
+  };
 }
 
 function buildMiloTalkTaskSummary(task: Task) {
@@ -287,6 +314,89 @@ function buildValidatedPlanningAction({
     action: actions[0],
     task,
   };
+}
+
+function formatMiloInsightStat(
+  value: number | null | undefined,
+  suffix?: string
+) {
+  if (typeof value !== 'number') {
+    return undefined;
+  }
+
+  return suffix ? `${value} ${suffix}` : `${value}`;
+}
+
+function getMiloInsightStatRows(stats?: MiloAiInsight['stats'] | null) {
+  if (!stats) {
+    return [];
+  }
+
+  return [
+    {
+      label: 'Completed today',
+      value: formatMiloInsightStat(stats.completedToday),
+    },
+    {
+      label: 'Pending',
+      value: formatMiloInsightStat(stats.pending),
+    },
+    {
+      label: 'Overdue',
+      value: formatMiloInsightStat(stats.overdue),
+    },
+    {
+      label: 'Due today',
+      value: formatMiloInsightStat(stats.dueToday),
+    },
+    {
+      label: 'High priority',
+      value: formatMiloInsightStat(stats.highPriority),
+    },
+    {
+      label: 'Focus minutes',
+      value: formatMiloInsightStat(stats.focusMinutesToday, 'min'),
+    },
+    {
+      label: 'Focus sessions',
+      value: formatMiloInsightStat(stats.focusSessionsToday),
+    },
+  ].filter((row): row is { label: string; value: string } =>
+    Boolean(row.value)
+  );
+}
+
+function trimStructuredCardText(value: string) {
+  const text = value.trim();
+
+  if (text.length <= 450) {
+    return text;
+  }
+
+  const paragraphs = text
+    .split(/\n{2,}/)
+    .map((paragraph) => paragraph.trim())
+    .filter(Boolean);
+  const paragraphPreview = paragraphs.slice(0, 2).join('\n\n');
+  const preview = paragraphPreview || text;
+
+  if (preview.length <= 450) {
+    return preview;
+  }
+
+  const sentences = preview.match(/[^.!?\n]+[.!?]+/g);
+
+  if (sentences?.length) {
+    const sentencePreview = sentences.slice(0, 2).join(' ').trim();
+
+    if (sentencePreview.length <= 450) {
+      return sentencePreview;
+    }
+
+    return `${sentencePreview.slice(0, 447).trim()}...`;
+  }
+
+  return `${preview.slice(0, 447).trim()}...`;
 }
 
 function replaceTypingMessage(
@@ -912,6 +1022,7 @@ export default function MiloChatScreen() {
   const navigation = useNavigation<any>();
   const insets = useSafeAreaInsets();
   const { tasks, addTask, updateTask, toggleTask, deleteTask } = useTasks();
+  const { focusSessions } = useFocus();
   const talkScrollRef = useRef<ScrollView | null>(null);
   const mountedRef = useRef(true);
 
@@ -929,6 +1040,10 @@ export default function MiloChatScreen() {
       createdAt: new Date().toISOString(),
     },
   ]);
+  const miloAiFocusStats = useMemo(
+    () => buildTodayMiloAiFocusStats(focusSessions),
+    [focusSessions]
+  );
 
   useLayoutEffect(() => {
     navigation.setOptions({
@@ -1008,6 +1123,7 @@ export default function MiloChatScreen() {
     try {
       const aiReply = await askMiloAi({
         message: prompt,
+        focusStats: miloAiFocusStats,
         tasks,
         meetingLinks: onlineMeetingLinks,
         recentMessages,
@@ -1040,8 +1156,15 @@ export default function MiloChatScreen() {
         const timelineInsight = hasProposal
           ? undefined
           : aiReply.timelineInsight || undefined;
+        const miloInsight = hasProposal
+          ? undefined
+          : aiReply.miloInsight || undefined;
         const hasAiCard = Boolean(
-          hasProposal || smartPlan || smartNudge || timelineInsight
+          hasProposal ||
+            smartPlan ||
+            smartNudge ||
+            timelineInsight ||
+            miloInsight
         );
         const relatedTask =
           hasAiCard
@@ -1051,7 +1174,7 @@ export default function MiloChatScreen() {
         replyMessage = {
           id: createMiloTalkMessageId('milo'),
           role: 'milo',
-          text: aiReply.text,
+          text: hasAiCard ? trimStructuredCardText(aiReply.text) : aiReply.text,
           relatedTask,
           relatedTaskSummary: relatedTask
             ? buildMiloTalkTaskSummary(relatedTask)
@@ -1082,6 +1205,7 @@ export default function MiloChatScreen() {
           smartPlan,
           smartNudge,
           timelineInsight,
+          miloInsight,
           createdAt: new Date().toISOString(),
         };
         nextStatus = 'online';
@@ -1118,6 +1242,11 @@ export default function MiloChatScreen() {
     );
     scrollTalkToBottom();
   };
+
+  const hasUserMessages = chatMessages.some(
+    (message) => message.role === 'user'
+  );
+  const showMiloTalkSuggestions = !hasUserMessages;
 
   const handleOpenResourceFinder = (task?: Task) => {
     navigation.navigate('MainTabs', {
@@ -2275,6 +2404,117 @@ export default function MiloChatScreen() {
     );
   };
 
+  const renderMiloInsightCard = (message: MiloTalkMessage) => {
+    const miloInsight = message.miloInsight;
+
+    if (!miloInsight) {
+      return null;
+    }
+
+    const statRows = getMiloInsightStatRows(miloInsight.stats);
+    const nextBestTask = miloInsight.nextBestTaskId
+      ? tasks.find((item) => item.id === miloInsight.nextBestTaskId)
+      : undefined;
+
+    return (
+      <View style={styles.smartCard}>
+        <View style={styles.smartCardHeader}>
+          <View style={styles.smartCardIcon}>
+            <Ionicons
+              name="analytics-outline"
+              size={17}
+              color={theme.colors.primaryDark}
+            />
+          </View>
+          <View style={styles.smartCardHeaderCopy}>
+            <Text style={styles.smartCardEyebrow}>Milo insight</Text>
+            <Text numberOfLines={2} style={styles.smartCardTitle}>
+              {miloInsight.title}
+            </Text>
+          </View>
+        </View>
+
+        <Text style={styles.smartCardMessage}>{miloInsight.summary}</Text>
+
+        {statRows.length ? (
+          <View style={styles.insightStatGrid}>
+            {statRows.map((row) => (
+              <View key={row.label} style={styles.insightStatChip}>
+                <Text style={styles.insightStatValue}>{row.value}</Text>
+                <Text numberOfLines={1} style={styles.insightStatLabel}>
+                  {row.label}
+                </Text>
+              </View>
+            ))}
+          </View>
+        ) : null}
+
+        {miloInsight.wins?.length ? (
+          <View style={styles.insightList}>
+            <Text style={styles.insightListTitle}>Wins</Text>
+            {miloInsight.wins.map((win, index) => (
+              <View key={`${win}-${index}`} style={styles.insightListRow}>
+                <Ionicons
+                  name="checkmark-circle-outline"
+                  size={14}
+                  color={theme.colors.primaryDark}
+                />
+                <Text style={styles.insightListText}>{win}</Text>
+              </View>
+            ))}
+          </View>
+        ) : null}
+
+        {miloInsight.concerns?.length ? (
+          <View style={styles.insightList}>
+            <Text style={styles.insightListTitle}>Needs attention</Text>
+            {miloInsight.concerns.map((concern, index) => (
+              <View key={`${concern}-${index}`} style={styles.insightListRow}>
+                <Ionicons
+                  name="alert-circle-outline"
+                  size={14}
+                  color={theme.colors.primaryDark}
+                />
+                <Text style={styles.insightListText}>{concern}</Text>
+              </View>
+            ))}
+          </View>
+        ) : null}
+
+        {miloInsight.reflection ? (
+          <View style={styles.insightReflectionBox}>
+            <Text style={styles.insightReflectionLabel}>Milo reflection</Text>
+            <Text style={styles.insightReflectionText}>
+              {miloInsight.reflection}
+            </Text>
+          </View>
+        ) : null}
+
+        {nextBestTask ? (
+          <View style={styles.insightNextTask}>
+            <Ionicons
+              name={proposedTaskIcons[nextBestTask.plannerType]}
+              size={14}
+              color={theme.colors.primaryDark}
+            />
+            <View style={styles.insightNextTaskCopy}>
+              <Text style={styles.insightNextTaskLabel}>Next best focus</Text>
+              <Text numberOfLines={1} style={styles.insightNextTaskTitle}>
+                {nextBestTask.title}
+              </Text>
+            </View>
+          </View>
+        ) : null}
+
+        {renderPlanningActionButton({
+          actionKey: 'milo-insight-action',
+          suggestedAction: miloInsight.suggestedAction,
+          taskId: miloInsight.nextBestTaskId,
+        })}
+      </View>
+    );
+  };
+
   const renderTalkMessage = (message: MiloTalkMessage) => {
     if (message.role === 'user') {
       return (
@@ -2327,6 +2567,8 @@ export default function MiloChatScreen() {
             {message.timelineInsight
               ? renderTimelineInsightCard(message)
               : null}
+
+            {message.miloInsight ? renderMiloInsightCard(message) : null}
 
             {message.relatedTask ? (
               <View style={styles.miloTalkTaskCard}>
@@ -2399,7 +2641,10 @@ export default function MiloChatScreen() {
       <ScrollView
         ref={talkScrollRef}
         style={styles.miloTalkMessageList}
-        contentContainerStyle={styles.miloTalkMessageListContent}
+        contentContainerStyle={[
+          styles.miloTalkMessageListContent,
+          !showMiloTalkSuggestions && styles.miloTalkMessageListContentCompact,
+        ]}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
         onContentSizeChange={scrollTalkToBottom}
@@ -2410,27 +2655,39 @@ export default function MiloChatScreen() {
       <View
         style={[
           styles.miloTalkComposer,
-          { paddingBottom: Math.max(insets.bottom, 10) + 10 },
+          !showMiloTalkSuggestions && styles.miloTalkComposerCompact,
+          {
+            paddingBottom: showMiloTalkSuggestions
+              ? Math.max(insets.bottom, 10) + 10
+              : Math.max(insets.bottom, 8) + 6,
+          },
         ]}
       >
-        <View style={styles.miloTalkSuggestionRow}>
-          {miloTalkSuggestions.map((suggestion) => (
-            <TouchableOpacity
-              key={suggestion}
-              activeOpacity={0.82}
-              style={styles.miloTalkSuggestionChip}
-              onPress={() => void handleSend(suggestion)}
-              accessibilityRole="button"
-              accessibilityLabel={`Send suggestion: ${suggestion}`}
-            >
-              <Text numberOfLines={1} style={styles.miloTalkSuggestionText}>
-                {suggestion}
-              </Text>
-            </TouchableOpacity>
-          ))}
-        </View>
+        {showMiloTalkSuggestions ? (
+          <View style={styles.miloTalkSuggestionRow}>
+            {miloTalkSuggestions.map((suggestion) => (
+              <TouchableOpacity
+                key={suggestion}
+                activeOpacity={0.82}
+                style={styles.miloTalkSuggestionChip}
+                onPress={() => void handleSend(suggestion)}
+                accessibilityRole="button"
+                accessibilityLabel={`Send suggestion: ${suggestion}`}
+              >
+                <Text numberOfLines={1} style={styles.miloTalkSuggestionText}>
+                  {suggestion}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        ) : null}
 
-        <View style={styles.miloTalkInputRow}>
+        <View
+          style={[
+            styles.miloTalkInputRow,
+            !showMiloTalkSuggestions && styles.miloTalkInputRowCompact,
+          ]}
+        >
           <TextInput
             value={miloTalkInput}
             onChangeText={setMiloTalkInput}
@@ -2513,6 +2770,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingTop: 20,
     paddingBottom: 28,
+  },
+  miloTalkMessageListContentCompact: {
+    paddingBottom: 10,
   },
   miloTalkMessageRowUser: {
     flexDirection: 'row',
@@ -2945,6 +3205,106 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '900',
   },
+  insightStatGrid: {
+    marginTop: 11,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 7,
+  },
+  insightStatChip: {
+    minWidth: 92,
+    flexGrow: 1,
+    flexBasis: '30%',
+    borderRadius: 14,
+    backgroundColor: theme.colors.white,
+    borderWidth: 1,
+    borderColor: '#DBE7DB',
+    paddingHorizontal: 9,
+    paddingVertical: 8,
+  },
+  insightStatValue: {
+    color: theme.colors.primaryDark,
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  insightStatLabel: {
+    marginTop: 2,
+    color: theme.colors.textSoft,
+    fontSize: 9,
+    fontWeight: '900',
+  },
+  insightList: {
+    marginTop: 11,
+    gap: 7,
+  },
+  insightListTitle: {
+    color: theme.colors.primaryDark,
+    fontSize: 10,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+  },
+  insightListRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 6,
+  },
+  insightListText: {
+    flex: 1,
+    color: theme.colors.textSoft,
+    fontSize: 11,
+    fontWeight: '800',
+    lineHeight: 15,
+  },
+  insightReflectionBox: {
+    marginTop: 11,
+    borderRadius: 14,
+    backgroundColor: '#FFFDF7',
+    borderWidth: 1,
+    borderColor: '#E6EEE3',
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+  },
+  insightReflectionLabel: {
+    color: theme.colors.primaryDark,
+    fontSize: 10,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+  },
+  insightReflectionText: {
+    marginTop: 5,
+    color: '#111827',
+    fontSize: 11,
+    fontWeight: '800',
+    lineHeight: 16,
+  },
+  insightNextTask: {
+    marginTop: 11,
+    borderRadius: 999,
+    backgroundColor: theme.colors.white,
+    borderWidth: 1,
+    borderColor: '#DBE7DB',
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    gap: 7,
+  },
+  insightNextTaskCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  insightNextTaskLabel: {
+    color: theme.colors.textSoft,
+    fontSize: 9,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+  },
+  insightNextTaskTitle: {
+    marginTop: 2,
+    color: theme.colors.primaryDark,
+    fontSize: 11,
+    fontWeight: '900',
+  },
   miloTalkTaskCard: {
     marginTop: 12,
     borderRadius: 18,
@@ -2988,6 +3348,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingTop: 12,
   },
+  miloTalkComposerCompact: {
+    paddingTop: 7,
+  },
   miloTalkSuggestionRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -3013,6 +3376,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 9,
+  },
+  miloTalkInputRowCompact: {
+    marginTop: 0,
   },
   miloTalkInput: {
     flex: 1,

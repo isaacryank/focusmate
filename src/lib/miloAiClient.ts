@@ -98,6 +98,32 @@ export type MiloAiTimelineInsight = {
   taskIds?: string[];
 };
 
+export type MiloAiInsightStats = {
+  completedToday?: number | null;
+  pending?: number | null;
+  overdue?: number | null;
+  dueToday?: number | null;
+  highPriority?: number | null;
+  focusMinutesToday?: number | null;
+  focusSessionsToday?: number | null;
+};
+
+export type MiloAiInsight = {
+  title: string;
+  summary: string;
+  wins?: string[];
+  concerns?: string[];
+  nextBestTaskId?: string | null;
+  stats?: MiloAiInsightStats | null;
+  reflection?: string | null;
+  suggestedAction?: MiloAiSuggestedAction | null;
+};
+
+export type MiloAiFocusStats = Pick<
+  MiloAiInsightStats,
+  'focusMinutesToday' | 'focusSessionsToday'
+>;
+
 export type MiloAiDebugReason =
   | 'missing_api_key'
   | 'openai_http_error'
@@ -117,6 +143,7 @@ export type MiloAiResponse = {
   smartPlan?: MiloAiSmartPlan | null;
   smartNudge?: MiloAiSmartNudge | null;
   timelineInsight?: MiloAiTimelineInsight | null;
+  miloInsight?: MiloAiInsight | null;
   debugReason?: MiloAiDebugReason;
   usedAi: boolean;
 };
@@ -129,6 +156,7 @@ type RecentMessageSource = MiloAiRecentMessage & {
   smartPlan?: MiloAiSmartPlan;
   smartNudge?: MiloAiSmartNudge;
   timelineInsight?: MiloAiTimelineInsight;
+  miloInsight?: MiloAiInsight;
 };
 
 type AskMiloAiInput = {
@@ -136,6 +164,7 @@ type AskMiloAiInput = {
   tasks: Task[];
   meetingLinks?: OnlineMeetingLink[];
   recentMessages?: MiloAiRecentMessage[];
+  focusStats?: MiloAiFocusStats | null;
 };
 
 const MAX_AI_TASKS = 24;
@@ -143,6 +172,7 @@ const MAX_RECENT_MESSAGES = 8;
 const MAX_TITLE_LENGTH = 120;
 const MAX_DESCRIPTION_LENGTH = 260;
 const MAX_PLANNING_MESSAGE_LENGTH = 360;
+const MAX_INSIGHT_LIST_ITEM_LENGTH = 180;
 const MAX_LOCATION_LENGTH = 160;
 const MAX_MESSAGE_LENGTH = 1200;
 
@@ -545,6 +575,73 @@ function sanitizeMiloAiTimelineInsight(
   };
 }
 
+function sanitizeMiloAiStatNumber(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+    ? Math.round(value)
+    : null;
+}
+
+function sanitizeMiloAiInsightStats(stats: unknown): MiloAiInsightStats | null {
+  if (!stats || typeof stats !== 'object' || Array.isArray(stats)) {
+    return null;
+  }
+
+  const insightStats = stats as Record<string, unknown>;
+
+  return {
+    completedToday: sanitizeMiloAiStatNumber(insightStats.completedToday),
+    pending: sanitizeMiloAiStatNumber(insightStats.pending),
+    overdue: sanitizeMiloAiStatNumber(insightStats.overdue),
+    dueToday: sanitizeMiloAiStatNumber(insightStats.dueToday),
+    highPriority: sanitizeMiloAiStatNumber(insightStats.highPriority),
+    focusMinutesToday: sanitizeMiloAiStatNumber(
+      insightStats.focusMinutesToday
+    ),
+    focusSessionsToday: sanitizeMiloAiStatNumber(
+      insightStats.focusSessionsToday
+    ),
+  };
+}
+
+function sanitizeMiloAiTextList(value: unknown) {
+  return Array.isArray(value)
+    ? value
+        .map((item) => trimUnknownText(item, MAX_INSIGHT_LIST_ITEM_LENGTH))
+        .filter((item): item is string => Boolean(item))
+        .slice(0, 4)
+    : [];
+}
+
+function sanitizeMiloAiInsight(miloInsight: unknown): MiloAiInsight | null {
+  if (
+    !miloInsight ||
+    typeof miloInsight !== 'object' ||
+    Array.isArray(miloInsight)
+  ) {
+    return null;
+  }
+
+  const insight = miloInsight as Record<string, unknown>;
+  const title = trimUnknownText(insight.title, MAX_TITLE_LENGTH);
+  const summary = trimUnknownText(insight.summary, MAX_PLANNING_MESSAGE_LENGTH);
+
+  if (!title || !summary) {
+    return null;
+  }
+
+  return {
+    title,
+    summary,
+    wins: sanitizeMiloAiTextList(insight.wins),
+    concerns: sanitizeMiloAiTextList(insight.concerns),
+    nextBestTaskId: sanitizeMiloAiTaskId(insight.nextBestTaskId),
+    stats: sanitizeMiloAiInsightStats(insight.stats),
+    reflection:
+      trimUnknownText(insight.reflection, MAX_PLANNING_MESSAGE_LENGTH) || null,
+    suggestedAction: sanitizeMiloAiSuggestedAction(insight.suggestedAction),
+  };
+}
+
 function getTaskSortKey(task: Task) {
   return [task.dueDate || '9999-99-99', task.dueTime || '99:99'].join(' ');
 }
@@ -627,6 +724,9 @@ export function buildMiloAiRecentMessages(
         message.timelineInsight?.title
           ? `Timeline insight card: ${message.timelineInsight.title}`
           : undefined,
+        message.miloInsight?.title
+          ? `Milo insight card: ${message.miloInsight.title}`
+          : undefined,
       ].filter(Boolean);
       const text = [message.text, ...context].join('\n');
 
@@ -639,6 +739,7 @@ export function buildMiloAiRecentMessages(
 
 export async function askMiloAi({
   message,
+  focusStats,
   tasks,
   meetingLinks = [],
   recentMessages = [],
@@ -657,6 +758,7 @@ export async function askMiloAi({
         message: prompt,
         tasks: buildMiloAiTaskContext(tasks, meetingLinks),
         recentMessages: buildMiloAiRecentMessages(recentMessages),
+        ...(focusStats ? { focusStats } : {}),
       },
     }
   );
@@ -709,6 +811,7 @@ export async function askMiloAi({
     smartPlan: sanitizeMiloAiSmartPlan(data.smartPlan),
     smartNudge: sanitizeMiloAiSmartNudge(data.smartNudge),
     timelineInsight: sanitizeMiloAiTimelineInsight(data.timelineInsight),
+    miloInsight: sanitizeMiloAiInsight(data.miloInsight),
     debugReason,
     usedAi: data.usedAi !== false,
   };
