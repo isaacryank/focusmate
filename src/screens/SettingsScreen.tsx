@@ -17,6 +17,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import ScreenContainer from '../components/ui/ScreenContainer';
 import AppButton from '../components/ui/AppButton';
@@ -53,8 +54,6 @@ type SettingsModal =
   | 'privacy'
   | 'digitalWellbeing'
   | 'notifications'
-  | 'inAppNotifications'
-  | 'pushSchedule'
   | 'sound'
   | 'appearance'
   | 'language'
@@ -69,7 +68,7 @@ type SettingsModal =
 
 type AppearancePreference = 'system' | 'light' | 'dark';
 type LanguagePreference = 'english' | 'ms';
-type TextSizePreference = 'comfortable' | 'large';
+type TextSizePreference = 'small' | 'default' | 'large';
 
 type DialogTone = 'info' | 'confirm' | 'danger';
 
@@ -84,8 +83,10 @@ type LocalPreferences = {
   appearance: AppearancePreference;
   language: LanguagePreference;
   textSize: TextSizePreference;
-  reducedMotion: boolean;
-  clearContrast: boolean;
+  reduceMotion: boolean;
+  highContrast: boolean;
+  vibrationEnabled: boolean;
+  reminderSoundEnabled: boolean;
 };
 
 type SettingsDialog = {
@@ -115,9 +116,11 @@ const DEFAULT_LOCAL_PROFILE: LocalProfile = {
 const DEFAULT_LOCAL_PREFERENCES: LocalPreferences = {
   appearance: 'system',
   language: 'english',
-  textSize: 'comfortable',
-  reducedMotion: false,
-  clearContrast: true,
+  textSize: 'default',
+  reduceMotion: false,
+  highContrast: false,
+  vibrationEnabled: false,
+  reminderSoundEnabled: true,
 };
 
 const mainGreen = theme.colors.primaryDark;
@@ -151,6 +154,8 @@ function sanitizePreferences(value: unknown): LocalPreferences {
   const appearance = value.appearance;
   const language = value.language;
   const textSize = value.textSize;
+  const reduceMotion = value.reduceMotion ?? value.reducedMotion;
+  const highContrast = value.highContrast ?? value.clearContrast;
 
   return {
     appearance:
@@ -159,17 +164,27 @@ function sanitizePreferences(value: unknown): LocalPreferences {
         : DEFAULT_LOCAL_PREFERENCES.appearance,
     language: language === 'ms' || language === 'english' ? language : 'english',
     textSize:
-      textSize === 'large' || textSize === 'comfortable'
+      textSize === 'small' || textSize === 'default' || textSize === 'large'
         ? textSize
+        : textSize === 'comfortable'
+        ? 'default'
         : DEFAULT_LOCAL_PREFERENCES.textSize,
-    reducedMotion:
-      typeof value.reducedMotion === 'boolean'
-        ? value.reducedMotion
-        : DEFAULT_LOCAL_PREFERENCES.reducedMotion,
-    clearContrast:
-      typeof value.clearContrast === 'boolean'
-        ? value.clearContrast
-        : DEFAULT_LOCAL_PREFERENCES.clearContrast,
+    reduceMotion:
+      typeof reduceMotion === 'boolean'
+        ? reduceMotion
+        : DEFAULT_LOCAL_PREFERENCES.reduceMotion,
+    highContrast:
+      typeof highContrast === 'boolean'
+        ? highContrast
+        : DEFAULT_LOCAL_PREFERENCES.highContrast,
+    vibrationEnabled:
+      typeof value.vibrationEnabled === 'boolean'
+        ? value.vibrationEnabled
+        : DEFAULT_LOCAL_PREFERENCES.vibrationEnabled,
+    reminderSoundEnabled:
+      typeof value.reminderSoundEnabled === 'boolean'
+        ? value.reminderSoundEnabled
+        : DEFAULT_LOCAL_PREFERENCES.reminderSoundEnabled,
   };
 }
 
@@ -211,7 +226,9 @@ function getLanguageLabel(value: LanguagePreference) {
 }
 
 function getTextSizeLabel(value: TextSizePreference) {
-  return value === 'large' ? 'Large' : 'Comfortable';
+  if (value === 'small') return 'Small';
+  if (value === 'large') return 'Large';
+  return 'Default';
 }
 
 function formatMinutes(minutes: number) {
@@ -325,6 +342,10 @@ function ModalSheet({
   children: React.ReactNode;
   onClose: () => void;
 }) {
+  const insets = useSafeAreaInsets();
+  const sheetBottomPadding = Math.max(insets.bottom, 12);
+  const contentBottomPadding = 16;
+
   return (
     <Modal
       visible={visible}
@@ -339,7 +360,12 @@ function ModalSheet({
           behavior={Platform.OS === 'ios' ? 'padding' : undefined}
           style={styles.modalKeyboardArea}
         >
-          <View style={styles.modalSheet}>
+          <View
+            style={[
+              styles.modalSheet,
+              { paddingBottom: sheetBottomPadding },
+            ]}
+          >
             <View style={styles.modalHandle} />
 
             <View style={styles.modalHeader}>
@@ -362,9 +388,14 @@ function ModalSheet({
             </View>
 
             <ScrollView
+              style={styles.modalScroll}
               showsVerticalScrollIndicator={false}
               keyboardShouldPersistTaps="handled"
-              contentContainerStyle={styles.modalContent}
+              bounces
+              contentContainerStyle={[
+                styles.modalContent,
+                { paddingBottom: contentBottomPadding },
+              ]}
             >
               {children}
             </ScrollView>
@@ -390,10 +421,12 @@ function BulletLine({ children }: { children: React.ReactNode }) {
 
 function OptionButton({
   label,
+  description,
   selected,
   onPress,
 }: {
   label: string;
+  description?: string;
   selected: boolean;
   onPress: () => void;
 }) {
@@ -405,20 +438,62 @@ function OptionButton({
       accessibilityRole="button"
       accessibilityLabel={label}
     >
-      <Text
-        style={[
-          styles.optionButtonText,
-          selected && styles.optionButtonTextSelected,
-        ]}
-      >
-        {label}
-      </Text>
+      <View style={styles.optionButtonCopy}>
+        <Text
+          style={[
+            styles.optionButtonText,
+            selected && styles.optionButtonTextSelected,
+          ]}
+        >
+          {label}
+        </Text>
+        {description ? (
+          <Text
+            style={[
+              styles.optionButtonDescription,
+              selected && styles.optionButtonDescriptionSelected,
+            ]}
+          >
+            {description}
+          </Text>
+        ) : null}
+      </View>
       {selected ? (
         <Ionicons name="checkmark-circle" size={18} color={mainGreen} />
       ) : (
         <Ionicons name="ellipse-outline" size={18} color={theme.colors.muted} />
       )}
     </TouchableOpacity>
+  );
+}
+
+function PreferenceToggleRow({
+  title,
+  subtitle,
+  value,
+  onValueChange,
+}: {
+  title: string;
+  subtitle: string;
+  value: boolean;
+  onValueChange: (value: boolean) => void;
+}) {
+  return (
+    <View style={styles.toggleRow}>
+      <View style={styles.toggleCopy}>
+        <Text style={styles.toggleTitle}>{title}</Text>
+        <Text style={styles.toggleSubtitle}>{subtitle}</Text>
+      </View>
+      <Switch
+        value={value}
+        onValueChange={onValueChange}
+        trackColor={{
+          false: theme.colors.border,
+          true: theme.colors.primarySoft,
+        }}
+        thumbColor={value ? theme.colors.primary : theme.colors.muted}
+      />
+    </View>
   );
 }
 
@@ -725,6 +800,44 @@ export default function SettingsScreen() {
   const handleSelectLanguage = async (language: LanguagePreference) => {
     await handleSavePreferences({ language });
     setActiveModal(null);
+  };
+
+  const handleOpenInAppNotifications = () => {
+    showDialog({
+      title: 'In-app notifications',
+      message:
+        'Manage alerts shown inside FocusMate. Reminder Center and planner screens already show active reminder context, while deeper per-category in-app controls are planned for a later phase.',
+      icon: 'notifications',
+      tone: 'info',
+      primaryLabel: 'Open Reminder Center',
+      secondaryLabel: 'Done',
+      onPrimaryPress: () => {
+        setActiveModal(null);
+        navigation.navigate('ReminderCenter');
+      },
+    });
+  };
+
+  const handleOpenPushSchedule = () => {
+    showDialog({
+      title: 'Push notification schedule',
+      message:
+        'Set a schedule to turn off push notifications. This is coming soon, so FocusMate will not save a fake quiet schedule in this prototype phase.',
+      icon: 'moon',
+      tone: 'info',
+      primaryLabel: 'Got it',
+    });
+  };
+
+  const handleOpenDeviceRingtone = () => {
+    showDialog({
+      title: 'Device ringtone',
+      message:
+        'Device ringtone picker support is coming soon. FocusMate is not using unsupported native ringtone APIs in this phase.',
+      icon: 'musical-notes',
+      tone: 'info',
+      primaryLabel: 'Got it',
+    });
   };
 
   const handleUpdateMiloAiSettings = async (
@@ -1380,7 +1493,8 @@ export default function SettingsScreen() {
           FocusMate stores task data for the signed-in user through Supabase when
           an account session is available. Some prototype preferences, including
           username, gender, birthday, local display name, language, and theme
-          choice, are stored locally on this device.
+          choice, accessibility, and sound controls, are stored locally on this
+          device.
         </InfoText>
         <BulletLine>
           Milo AI Online uses the Supabase Edge Function securely.
@@ -1449,10 +1563,11 @@ export default function SettingsScreen() {
         <View style={styles.modalActionCard}>
           <ModalActionRow
             title="In-app notifications"
+            subtitle="Manage alerts shown inside FocusMate."
             icon="notifications-circle"
             iconColor="#F59E0B"
             iconBackground="#FFF5DE"
-            onPress={() => setActiveModal('inAppNotifications')}
+            onPress={handleOpenInAppNotifications}
           />
           <ModalActionRow
             title="Push notification schedule"
@@ -1460,120 +1575,117 @@ export default function SettingsScreen() {
             icon="moon"
             iconColor="#6366F1"
             iconBackground="#EEF0FF"
-            onPress={() => setActiveModal('pushSchedule')}
+            onPress={handleOpenPushSchedule}
+          />
+          <ModalActionRow
+            title="Reminder Center"
+            subtitle="View active and upcoming task reminders."
+            icon="alarm"
+            iconColor="#FF8A00"
+            iconBackground="#FFF1DF"
+            onPress={() => {
+              setActiveModal(null);
+              navigation.navigate('ReminderCenter');
+            }}
           />
         </View>
-      </ModalSheet>
-
-      <ModalSheet
-        visible={activeModal === 'inAppNotifications'}
-        title="In-app notifications"
-        subtitle="Local app notification behavior for this prototype."
-        onClose={() => setActiveModal('notifications')}
-      >
-        <InfoPanel
-          icon="notifications"
-          title="In-app notification controls"
-          message="FocusMate can show reminder context inside the app through Reminder Center and planner screens. Deeper per-category toggles are planned for a later phase."
-        />
-        <BulletLine>
-          Reminder Center remains the source of truth for current reminder items.
-        </BulletLine>
-        <BulletLine>
-          Milo will keep reminder language calm and useful instead of noisy.
-        </BulletLine>
-      </ModalSheet>
-
-      <ModalSheet
-        visible={activeModal === 'pushSchedule'}
-        title="Push notification schedule"
-        subtitle="Coming soon"
-        onClose={() => setActiveModal('notifications')}
-      >
-        <InfoPanel
-          icon="moon"
-          title="Quiet schedule planned"
-          message="A schedule to turn off push notifications is not implemented yet. This keeps the UI honest while leaving a clear place for the feature."
-        />
-        <BulletLine>
-          No fake schedule is saved in this prototype phase.
-        </BulletLine>
-        <BulletLine>
-          Existing task reminder behavior stays available through Reminder Center.
-        </BulletLine>
       </ModalSheet>
 
       <ModalSheet
         visible={activeModal === 'sound'}
         title="Sound & vibration"
-        subtitle="Reminder sound controls for future builds."
+        subtitle="Prototype controls saved locally on this device."
         onClose={() => setActiveModal(null)}
       >
         <InfoPanel
           icon="volume-high"
-          title="Sound controls"
-          message="FocusMate keeps this phase safe by using supported reminder audio and haptics only."
+          title="Reminder feedback"
+          message="These controls save your preference without calling unsupported ringtone or audio APIs."
         />
-        <BulletLine>App reminder sounds use supported Expo notification audio.</BulletLine>
-        <BulletLine>
-          Vibration and haptics can support timer and reminder feedback.
-        </BulletLine>
-        <BulletLine>
-          Device ringtone and deeper audio controls are planned when native
-          support is safe to add.
-        </BulletLine>
+        <View style={styles.toggleCard}>
+          <PreferenceToggleRow
+            title="Reminder sound"
+            subtitle="Use FocusMate reminder sound."
+            value={localPreferences.reminderSoundEnabled}
+            onValueChange={(value) =>
+              void handleSavePreferences({ reminderSoundEnabled: value })
+            }
+          />
+          <View style={styles.toggleDivider} />
+          <PreferenceToggleRow
+            title="Vibration"
+            subtitle="Use device vibration for important alerts."
+            value={localPreferences.vibrationEnabled}
+            onValueChange={(value) =>
+              void handleSavePreferences({ vibrationEnabled: value })
+            }
+          />
+        </View>
+        <View style={styles.modalActionCard}>
+          <ModalActionRow
+            title="Device ringtone"
+            subtitle="Device ringtone picker support is coming soon."
+            icon="musical-notes"
+            iconColor="#FB5B7D"
+            iconBackground="#FFECEF"
+            onPress={handleOpenDeviceRingtone}
+          />
+        </View>
       </ModalSheet>
 
       <ModalSheet
         visible={activeModal === 'appearance'}
         title="Appearance / Theme"
-        subtitle="Saved locally for Phase 11A."
+        subtitle="Saved locally for this prototype phase."
         onClose={() => setActiveModal(null)}
       >
         <View style={styles.optionStack}>
           <OptionButton
             label="System"
+            description="Follow your device setting."
             selected={localPreferences.appearance === 'system'}
             onPress={() => void handleSelectAppearance('system')}
           />
           <OptionButton
             label="Light"
+            description="Use the bright FocusMate theme."
             selected={localPreferences.appearance === 'light'}
             onPress={() => void handleSelectAppearance('light')}
           />
           <OptionButton
             label="Dark"
+            description="Dark theme support is coming soon."
             selected={localPreferences.appearance === 'dark'}
             onPress={() => void handleSelectAppearance('dark')}
           />
         </View>
         <InfoText>
-          FocusMate is still rendered with the current light theme. This stores
-          the user preference so global theming can connect later.
+          Full app-wide dark theme will be added in a later phase.
         </InfoText>
       </ModalSheet>
 
       <ModalSheet
         visible={activeModal === 'language'}
         title="Language"
-        subtitle="Saved locally for Phase 11A."
+        subtitle="Saved locally for this prototype phase."
         onClose={() => setActiveModal(null)}
       >
         <View style={styles.optionStack}>
           <OptionButton
             label="English"
+            description="Default app language."
             selected={localPreferences.language === 'english'}
             onPress={() => void handleSelectLanguage('english')}
           />
           <OptionButton
             label="Bahasa Melayu"
+            description="Malay interface support is coming soon."
             selected={localPreferences.language === 'ms'}
             onPress={() => void handleSelectLanguage('ms')}
           />
         </View>
         <InfoText>
-          Full app translation is coming later. For now, this preference is saved
-          locally and ready for i18n wiring.
+          Full app-wide translation will be added in a later phase.
         </InfoText>
       </ModalSheet>
 
@@ -1583,12 +1695,23 @@ export default function SettingsScreen() {
         subtitle="Local preferences for readability and motion."
         onClose={() => setActiveModal(null)}
       >
-        <Text style={styles.modalSectionLabel}>Text size & readability</Text>
+        <InfoPanel
+          icon="accessibility"
+          title="Accessibility preferences"
+          message="These accessibility preferences are saved locally. Full app-wide support will be expanded later."
+        />
+
+        <Text style={styles.modalSectionLabel}>Text size</Text>
         <View style={styles.optionStack}>
           <OptionButton
-            label="Comfortable"
-            selected={localPreferences.textSize === 'comfortable'}
-            onPress={() => void handleSavePreferences({ textSize: 'comfortable' })}
+            label="Small"
+            selected={localPreferences.textSize === 'small'}
+            onPress={() => void handleSavePreferences({ textSize: 'small' })}
+          />
+          <OptionButton
+            label="Default"
+            selected={localPreferences.textSize === 'default'}
+            onPress={() => void handleSavePreferences({ textSize: 'default' })}
           />
           <OptionButton
             label="Large"
@@ -1598,35 +1721,23 @@ export default function SettingsScreen() {
         </View>
 
         <View style={styles.toggleCard}>
-          <View style={styles.toggleRow}>
-            <View style={styles.toggleCopy}>
-              <Text style={styles.toggleTitle}>Reduced motion</Text>
-              <Text style={styles.toggleSubtitle}>
-                Store a preference for calmer transitions later.
-              </Text>
-            </View>
-            <Switch
-              value={localPreferences.reducedMotion}
-              onValueChange={(value) =>
-                void handleSavePreferences({ reducedMotion: value })
-              }
-            />
-          </View>
+          <PreferenceToggleRow
+            title="Reduce motion"
+            subtitle="Save a preference for calmer motion when full support is added."
+            value={localPreferences.reduceMotion}
+            onValueChange={(value) =>
+              void handleSavePreferences({ reduceMotion: value })
+            }
+          />
           <View style={styles.toggleDivider} />
-          <View style={styles.toggleRow}>
-            <View style={styles.toggleCopy}>
-              <Text style={styles.toggleTitle}>Clear contrast</Text>
-              <Text style={styles.toggleSubtitle}>
-                Keep stronger contrast as the default FocusMate style.
-              </Text>
-            </View>
-            <Switch
-              value={localPreferences.clearContrast}
-              onValueChange={(value) =>
-                void handleSavePreferences({ clearContrast: value })
-              }
-            />
-          </View>
+          <PreferenceToggleRow
+            title="High contrast"
+            subtitle="Save a preference for stronger visual contrast later."
+            value={localPreferences.highContrast}
+            onValueChange={(value) =>
+              void handleSavePreferences({ highContrast: value })
+            }
+          />
         </View>
       </ModalSheet>
 
@@ -1636,18 +1747,21 @@ export default function SettingsScreen() {
         subtitle="For meetings, tasks, and map handoff."
         onClose={() => setActiveModal(null)}
       >
-        <BulletLine>
-          FocusMate uses task and meeting locations to help Milo prepare routes,
-          venue reminders, and context.
-        </BulletLine>
-        <BulletLine>
-          Existing planner items can open device map apps when a saved location is
-          available.
-        </BulletLine>
-        <BulletLine>
-          Deeper permission-based location features can be added later without
-          changing the mobile auth model.
-        </BulletLine>
+        <InfoPanel
+          icon="location"
+          title="Task location support"
+          message="FocusMate can store task or meeting locations so Milo can keep venue context near your plans."
+        />
+        <InfoPanel
+          icon="map"
+          title="Open in Maps"
+          message="Current task and meeting location actions use the device map app through React Native Linking."
+        />
+        <InfoPanel
+          icon="navigate-circle"
+          title="Location permissions"
+          message="The task location picker handles current-location permission when you use it. A full Settings permission status panel is coming soon."
+        />
       </ModalSheet>
 
       <ModalSheet
@@ -1871,13 +1985,16 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
   },
   modalSheet: {
-    maxHeight: '88%',
+    maxHeight: '92%',
     borderTopLeftRadius: 26,
     borderTopRightRadius: 26,
     backgroundColor: theme.colors.backgroundSoft,
     paddingTop: 9,
     paddingHorizontal: 16,
     paddingBottom: 18,
+  },
+  modalScroll: {
+    flexShrink: 1,
   },
   modalHandle: {
     width: 42,
@@ -2081,10 +2198,16 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 14,
+    paddingVertical: 11,
+    gap: 10,
   },
   optionButtonSelected: {
     borderColor: '#9DE7B2',
     backgroundColor: theme.colors.primarySoft,
+  },
+  optionButtonCopy: {
+    flex: 1,
+    minWidth: 0,
   },
   optionButtonText: {
     color: theme.colors.text,
@@ -2093,6 +2216,16 @@ const styles = StyleSheet.create({
   },
   optionButtonTextSelected: {
     color: mainGreen,
+  },
+  optionButtonDescription: {
+    marginTop: 3,
+    color: theme.colors.muted,
+    fontSize: 11,
+    fontWeight: '700',
+    lineHeight: 16,
+  },
+  optionButtonDescriptionSelected: {
+    color: theme.colors.textSoft,
   },
   toggleCard: {
     borderRadius: 18,
