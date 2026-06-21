@@ -30,6 +30,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { theme } from '../theme';
+import { useFocusMateTheme } from '../theme/FocusMateThemeProvider';
 import { useTasks } from '../lib/TaskContext';
 import { useFocus } from '../lib/FocusContext';
 import { openLocationInMaps } from '../lib/mapUtils';
@@ -1470,6 +1471,8 @@ function validateProposedTaskDeletionForSave({
 }
 
 export default function MiloChatScreen() {
+  const { isDark } = useFocusMateTheme();
+
   const navigation = useNavigation<any>();
   const route = useRoute<RouteProp<RootStackParamList, 'MiloChat'>>();
   const insets = useSafeAreaInsets();
@@ -1890,6 +1893,10 @@ export default function MiloChatScreen() {
   );
   const showMiloTalkSuggestions = !hasUserMessages;
   const miloAiModeLabel = miloAiSettings.aiMode === 'online' ? '• AI' : '• Local';
+  const aiSettingsSwitchTrackColor = isDark
+    ? { false: theme.colors.inputBorder, true: theme.colors.primary }
+    : { false: '#D7E1D8', true: '#BFE9CE' };
+  const aiSettingsSwitchThumbColor = isDark ? theme.colors.card : theme.colors.white;
 
   const handleOpenMiloAiSettings = async () => {
     try {
@@ -3643,11 +3650,11 @@ export default function MiloChatScreen() {
                       skipAiForSmallTalk: value,
                     })
                   }
-                  trackColor={{ false: '#D7E1D8', true: '#BFE9CE' }}
+                  trackColor={aiSettingsSwitchTrackColor}
                   thumbColor={
                     miloAiSettings.skipAiForSmallTalk
                       ? theme.colors.primaryDark
-                      : theme.colors.white
+                      : aiSettingsSwitchThumbColor
                   }
                 />
               </View>
@@ -3675,11 +3682,11 @@ export default function MiloChatScreen() {
                   onValueChange={(value) =>
                     void handleUpdateMiloAiSettings({ showDebugReason: value })
                   }
-                  trackColor={{ false: '#D7E1D8', true: '#BFE9CE' }}
+                  trackColor={aiSettingsSwitchTrackColor}
                   thumbColor={
                     miloAiSettings.showDebugReason
                       ? theme.colors.primaryDark
-                      : theme.colors.white
+                      : aiSettingsSwitchThumbColor
                   }
                 />
               </View>
@@ -3727,13 +3734,13 @@ export default function MiloChatScreen() {
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
-    backgroundColor: '#FAFCF7',
+    backgroundColor: theme.colors.chatBackground,
   },
   header: {
     minHeight: 74,
-    backgroundColor: '#FFFDF7',
+    backgroundColor: theme.colors.surface,
     borderBottomWidth: 1,
-    borderBottomColor: '#EEF1EA',
+    borderBottomColor: theme.colors.divider,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -3753,9 +3760,9 @@ const styles = StyleSheet.create({
     width: 38,
     height: 38,
     borderRadius: 19,
-    backgroundColor: 'rgba(255, 255, 255, 0.72)',
+    backgroundColor: theme.colors.card,
     borderWidth: 1,
-    borderColor: '#EDF2E8',
+    borderColor: theme.colors.border,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -3763,16 +3770,16 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: theme.colors.white,
+    backgroundColor: theme.colors.card,
     borderWidth: 1,
-    borderColor: '#E4ECE0',
+    borderColor: theme.colors.border,
     alignItems: 'center',
     justifyContent: 'center',
     ...theme.shadowSoft,
   },
   headerAiSettingsButtonLocal: {
-    backgroundColor: '#FFF6E7',
-    borderColor: '#F5D8AA',
+    backgroundColor: theme.colors.warningSoft,
+    borderColor: `${theme.colors.warning}45`,
   },
   headerNewChatButton: {
     minWidth: 52,
@@ -3780,7 +3787,7 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     backgroundColor: theme.colors.primarySoft,
     borderWidth: 1,
-    borderColor: '#D6EBDD',
+    borderColor: `${theme.colors.primary}35`,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
@@ -3806,30 +3813,30 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   headerTitle: {
-    color: '#111827',
+    color: theme.colors.text,
     fontSize: 16,
     fontWeight: '900',
   },
   headerInlineStatusText: {
-    color: '#247B3B',
+    color: theme.colors.primary,
     fontSize: 11,
     fontWeight: '900',
     lineHeight: 14,
   },
   headerInlineStatusTextLocal: {
-    color: '#C56B00',
+    color: theme.colors.warning,
   },
   aiSettingsOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(17, 24, 39, 0.28)',
+    backgroundColor: theme.colors.overlay,
     justifyContent: 'flex-end',
   },
   aiSettingsSheet: {
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,
-    backgroundColor: '#FFFDF7',
+    backgroundColor: theme.colors.surface,
     borderTopWidth: 1,
-    borderColor: '#E5ECE3',
+    borderColor: theme.colors.border,
     paddingHorizontal: 16,
     paddingTop: 12,
     ...theme.shadowSoft,
@@ -3839,7 +3846,7 @@ const styles = StyleSheet.create({
     width: 46,
     height: 4,
     borderRadius: 999,
-    backgroundColor: '#D7DED3',
+    backgroundColor: theme.colors.border,
     marginBottom: 18,
   },
   aiSettingsHeader: {
@@ -3877,9 +3884,9 @@ const styles = StyleSheet.create({
     width: 38,
     height: 38,
     borderRadius: 19,
-    backgroundColor: theme.colors.white,
+    backgroundColor: theme.colors.card,
     borderWidth: 1,
-    borderColor: '#E0E8DD',
+    borderColor: theme.colors.border,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -3898,29 +3905,29 @@ const styles = StyleSheet.create({
     flex: 1,
     minHeight: 128,
     borderRadius: 20,
-    backgroundColor: 'rgba(255, 255, 255, 0.82)',
+    backgroundColor: theme.colors.card,
     borderWidth: 1,
-    borderColor: '#E0E8DD',
+    borderColor: theme.colors.border,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 12,
     paddingVertical: 14,
   },
   aiModeCardActive: {
-    backgroundColor: '#F1FAEF',
-    borderColor: '#BFE2C7',
+    backgroundColor: theme.colors.primarySoft,
+    borderColor: theme.colors.primary,
   },
   aiModeIconBox: {
     width: 42,
     height: 42,
     borderRadius: 16,
-    backgroundColor: '#F6FAF3',
+    backgroundColor: theme.colors.input,
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 9,
   },
   aiModeIconBoxActive: {
-    backgroundColor: '#E4F5E7',
+    backgroundColor: theme.colors.cardSoft,
   },
   aiModeCardTitle: {
     color: theme.colors.text,
@@ -3941,9 +3948,9 @@ const styles = StyleSheet.create({
   },
   aiSettingsControlsCard: {
     borderRadius: 20,
-    backgroundColor: 'rgba(255, 255, 255, 0.88)',
+    backgroundColor: theme.colors.card,
     borderWidth: 1,
-    borderColor: '#E0E8DD',
+    borderColor: theme.colors.border,
     overflow: 'hidden',
   },
   aiSettingsRow: {
@@ -3981,14 +3988,14 @@ const styles = StyleSheet.create({
   },
   aiSettingsDivider: {
     height: 1,
-    backgroundColor: '#EEF1EA',
+    backgroundColor: theme.colors.divider,
     marginLeft: 66,
   },
   aiUsageCard: {
     borderRadius: 20,
-    backgroundColor: '#F2FAEF',
+    backgroundColor: theme.colors.card,
     borderWidth: 1,
-    borderColor: '#DCEADC',
+    borderColor: theme.colors.border,
     flexDirection: 'row',
     alignItems: 'center',
     padding: 14,
@@ -3998,9 +4005,9 @@ const styles = StyleSheet.create({
     width: 48,
     height: 48,
     borderRadius: 17,
-    backgroundColor: 'rgba(255, 255, 255, 0.72)',
+    backgroundColor: theme.colors.primarySoft,
     borderWidth: 1,
-    borderColor: '#E1ECDD',
+    borderColor: `${theme.colors.primary}35`,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -4036,8 +4043,9 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
     marginTop: 14,
     borderRadius: 999,
+    backgroundColor: theme.colors.dangerSoft,
     borderWidth: 1,
-    borderColor: '#F0D8D8',
+    borderColor: `${theme.colors.danger}45`,
     paddingHorizontal: 14,
     paddingVertical: 8,
   },
@@ -4069,7 +4077,7 @@ const styles = StyleSheet.create({
     borderTopRightRadius: 20,
     borderBottomLeftRadius: 20,
     borderBottomRightRadius: 8,
-    backgroundColor: theme.colors.primaryDark,
+    backgroundColor: theme.colors.outgoingBubble,
     paddingHorizontal: 13,
     paddingVertical: 10,
   },
@@ -4113,14 +4121,14 @@ const styles = StyleSheet.create({
     borderTopRightRadius: 20,
     borderBottomLeftRadius: 20,
     borderBottomRightRadius: 20,
-    backgroundColor: theme.colors.white,
+    backgroundColor: theme.colors.incomingBubble,
     borderWidth: 1,
-    borderColor: '#E5ECE3',
+    borderColor: theme.colors.border,
     paddingHorizontal: 13,
     paddingVertical: 11,
   },
   miloTalkMiloText: {
-    color: '#111827',
+    color: theme.colors.text,
     fontSize: 14,
     fontWeight: '800',
     lineHeight: 20,
@@ -4131,9 +4139,9 @@ const styles = StyleSheet.create({
   proposedTaskCard: {
     marginTop: 12,
     borderRadius: 18,
-    backgroundColor: '#F7FBF6',
+    backgroundColor: theme.colors.cardSoft,
     borderWidth: 1,
-    borderColor: '#DCEADC',
+    borderColor: theme.colors.border,
     paddingHorizontal: 11,
     paddingVertical: 11,
   },
@@ -4162,7 +4170,7 @@ const styles = StyleSheet.create({
   },
   proposedTaskTitle: {
     marginTop: 3,
-    color: '#111827',
+    color: theme.colors.text,
     fontSize: 13,
     fontWeight: '900',
     lineHeight: 18,
@@ -4170,14 +4178,14 @@ const styles = StyleSheet.create({
   proposedTaskRows: {
     marginTop: 10,
     borderTopWidth: 1,
-    borderTopColor: '#E6EEE3',
+    borderTopColor: theme.colors.divider,
   },
   proposedTaskRow: {
     minHeight: 30,
     flexDirection: 'row',
     alignItems: 'center',
     borderBottomWidth: 1,
-    borderBottomColor: '#E6EEE3',
+    borderBottomColor: theme.colors.divider,
     paddingVertical: 6,
   },
   proposedTaskLabel: {
@@ -4188,7 +4196,7 @@ const styles = StyleSheet.create({
   },
   proposedTaskValue: {
     flex: 1,
-    color: '#111827',
+    color: theme.colors.text,
     fontSize: 11,
     fontWeight: '900',
     textAlign: 'right',
@@ -4225,9 +4233,9 @@ const styles = StyleSheet.create({
   proposedTaskCancelButton: {
     minHeight: 38,
     borderRadius: 19,
-    backgroundColor: theme.colors.white,
+    backgroundColor: theme.colors.card,
     borderWidth: 1,
-    borderColor: '#DBE7DB',
+    borderColor: theme.colors.border,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 14,
@@ -4243,13 +4251,13 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     backgroundColor: theme.colors.primarySoft,
     borderWidth: 1,
-    borderColor: '#CFEFDA',
+    borderColor: `${theme.colors.primary}40`,
     paddingHorizontal: 10,
     paddingVertical: 7,
   },
   proposedTaskStatusPillMuted: {
-    backgroundColor: theme.colors.white,
-    borderColor: '#DBE7DB',
+    backgroundColor: theme.colors.card,
+    borderColor: theme.colors.border,
   },
   proposedTaskStatusText: {
     color: theme.colors.primaryDark,
@@ -4262,9 +4270,9 @@ const styles = StyleSheet.create({
   taskUpdateCard: {
     marginTop: 12,
     borderRadius: 18,
-    backgroundColor: '#F7FBF6',
+    backgroundColor: theme.colors.cardSoft,
     borderWidth: 1,
-    borderColor: '#DCEADC',
+    borderColor: theme.colors.border,
     paddingHorizontal: 11,
     paddingVertical: 11,
   },
@@ -4278,11 +4286,11 @@ const styles = StyleSheet.create({
   taskUpdateRows: {
     marginTop: 10,
     borderTopWidth: 1,
-    borderTopColor: '#E6EEE3',
+    borderTopColor: theme.colors.divider,
   },
   taskUpdateRow: {
     borderBottomWidth: 1,
-    borderBottomColor: '#E6EEE3',
+    borderBottomColor: theme.colors.divider,
     paddingVertical: 8,
   },
   taskUpdateLabel: {
@@ -4301,9 +4309,9 @@ const styles = StyleSheet.create({
     flex: 1,
     minWidth: 0,
     borderRadius: 12,
-    backgroundColor: theme.colors.white,
+    backgroundColor: theme.colors.card,
     borderWidth: 1,
-    borderColor: '#E6EEE3',
+    borderColor: theme.colors.border,
     paddingHorizontal: 8,
     paddingVertical: 7,
   },
@@ -4314,7 +4322,7 @@ const styles = StyleSheet.create({
     marginBottom: 3,
   },
   taskUpdateValueText: {
-    color: '#111827',
+    color: theme.colors.text,
     fontSize: 10,
     fontWeight: '900',
     lineHeight: 14,
@@ -4322,9 +4330,9 @@ const styles = StyleSheet.create({
   taskCompletionCard: {
     marginTop: 12,
     borderRadius: 18,
-    backgroundColor: '#F7FBF6',
+    backgroundColor: theme.colors.cardSoft,
     borderWidth: 1,
-    borderColor: '#DCEADC',
+    borderColor: theme.colors.border,
     paddingHorizontal: 11,
     paddingVertical: 11,
   },
@@ -4338,9 +4346,9 @@ const styles = StyleSheet.create({
   taskDeletionCard: {
     marginTop: 12,
     borderRadius: 18,
-    backgroundColor: '#FFF8F6',
+    backgroundColor: theme.colors.dangerSoft,
     borderWidth: 1,
-    borderColor: '#F1D8D2',
+    borderColor: `${theme.colors.danger}35`,
     paddingHorizontal: 11,
     paddingVertical: 11,
   },
@@ -4354,9 +4362,9 @@ const styles = StyleSheet.create({
   smartCard: {
     marginTop: 12,
     borderRadius: 18,
-    backgroundColor: '#F7FBF6',
+    backgroundColor: theme.colors.cardSoft,
     borderWidth: 1,
-    borderColor: '#DCEADC',
+    borderColor: theme.colors.border,
     paddingHorizontal: 11,
     paddingVertical: 11,
   },
@@ -4385,14 +4393,14 @@ const styles = StyleSheet.create({
   },
   smartCardTitle: {
     marginTop: 3,
-    color: '#111827',
+    color: theme.colors.text,
     fontSize: 13,
     fontWeight: '900',
     lineHeight: 18,
   },
   smartCardMessage: {
     marginTop: 10,
-    color: '#111827',
+    color: theme.colors.text,
     fontSize: 12,
     fontWeight: '800',
     lineHeight: 17,
@@ -4425,7 +4433,7 @@ const styles = StyleSheet.create({
     minWidth: 0,
   },
   smartPlanStepLabel: {
-    color: '#111827',
+    color: theme.colors.text,
     fontSize: 12,
     fontWeight: '900',
     lineHeight: 17,
@@ -4474,9 +4482,9 @@ const styles = StyleSheet.create({
   timelineTaskPill: {
     maxWidth: '100%',
     borderRadius: 999,
-    backgroundColor: theme.colors.white,
+    backgroundColor: theme.colors.card,
     borderWidth: 1,
-    borderColor: '#DBE7DB',
+    borderColor: theme.colors.border,
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 9,
@@ -4500,9 +4508,9 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     flexBasis: '30%',
     borderRadius: 14,
-    backgroundColor: theme.colors.white,
+    backgroundColor: theme.colors.card,
     borderWidth: 1,
-    borderColor: '#DBE7DB',
+    borderColor: theme.colors.border,
     paddingHorizontal: 9,
     paddingVertical: 8,
   },
@@ -4542,9 +4550,9 @@ const styles = StyleSheet.create({
   insightReflectionBox: {
     marginTop: 11,
     borderRadius: 14,
-    backgroundColor: '#FFFDF7',
+    backgroundColor: theme.colors.card,
     borderWidth: 1,
-    borderColor: '#E6EEE3',
+    borderColor: theme.colors.border,
     paddingHorizontal: 10,
     paddingVertical: 9,
   },
@@ -4556,7 +4564,7 @@ const styles = StyleSheet.create({
   },
   insightReflectionText: {
     marginTop: 5,
-    color: '#111827',
+    color: theme.colors.text,
     fontSize: 11,
     fontWeight: '800',
     lineHeight: 16,
@@ -4564,9 +4572,9 @@ const styles = StyleSheet.create({
   insightNextTask: {
     marginTop: 11,
     borderRadius: 999,
-    backgroundColor: theme.colors.white,
+    backgroundColor: theme.colors.card,
     borderWidth: 1,
-    borderColor: '#DBE7DB',
+    borderColor: theme.colors.border,
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 10,
@@ -4592,9 +4600,9 @@ const styles = StyleSheet.create({
   miloTalkTaskCard: {
     marginTop: 12,
     borderRadius: 18,
-    backgroundColor: '#F7FBF6',
+    backgroundColor: theme.colors.cardSoft,
     borderWidth: 1,
-    borderColor: '#E6EEE3',
+    borderColor: theme.colors.border,
     paddingHorizontal: 11,
     paddingVertical: 10,
     flexDirection: 'row',
@@ -4615,7 +4623,7 @@ const styles = StyleSheet.create({
     minWidth: 0,
   },
   miloTalkTaskTitle: {
-    color: '#111827',
+    color: theme.colors.text,
     fontSize: 13,
     fontWeight: '900',
   },
@@ -4627,8 +4635,8 @@ const styles = StyleSheet.create({
   },
   miloTalkComposer: {
     borderTopWidth: 1,
-    borderTopColor: '#EEF1EA',
-    backgroundColor: '#FFFDF7',
+    borderTopColor: theme.colors.divider,
+    backgroundColor: theme.colors.surface,
     paddingHorizontal: 12,
     paddingTop: 12,
   },
@@ -4643,9 +4651,9 @@ const styles = StyleSheet.create({
   miloTalkSuggestionChip: {
     maxWidth: '100%',
     borderRadius: 999,
-    backgroundColor: 'rgba(255, 255, 255, 0.84)',
+    backgroundColor: theme.colors.card,
     borderWidth: 1,
-    borderColor: '#DDEBDD',
+    borderColor: `${theme.colors.primary}35`,
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 11,
@@ -4672,10 +4680,10 @@ const styles = StyleSheet.create({
     minWidth: 0,
     minHeight: 48,
     borderRadius: 22,
-    backgroundColor: theme.colors.white,
+    backgroundColor: theme.colors.input,
     borderWidth: 1,
-    borderColor: '#DBE7DB',
-    color: '#111827',
+    borderColor: theme.colors.inputBorder,
+    color: theme.colors.text,
     fontSize: 13,
     fontWeight: '800',
     paddingHorizontal: 13,
@@ -4698,7 +4706,7 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
   miloTalkSendButtonDisabled: {
-    backgroundColor: '#BFD4C4',
+    backgroundColor: theme.colors.inputBorder,
     shadowOpacity: 0,
     elevation: 0,
   },
@@ -4711,7 +4719,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   miloTalkPrototypeFooterLocal: {
-    color: '#C56B00',
+    color: theme.colors.warning,
   },
   miloTalkActionGrid: {
     marginTop: 10,
@@ -4735,9 +4743,9 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.primaryDark,
   },
   miloTalkActionSecondary: {
-    backgroundColor: theme.colors.white,
+    backgroundColor: theme.colors.card,
     borderWidth: 1,
-    borderColor: '#DBE7DB',
+    borderColor: theme.colors.border,
   },
   miloTalkActionText: {
     fontSize: 11,

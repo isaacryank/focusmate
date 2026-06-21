@@ -21,6 +21,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import ScreenContainer from '../components/ui/ScreenContainer';
 import AppButton from '../components/ui/AppButton';
 import { theme } from '../theme';
+import { useFocusMateTheme } from '../theme/FocusMateThemeProvider';
 import { useAuth } from '../lib/AuthContext';
 import { useFocus } from '../lib/FocusContext';
 import { useTasks } from '../lib/TaskContext';
@@ -140,8 +141,6 @@ const DEFAULT_FEEDBACK_DRAFT: FeedbackDraft = {
   message: '',
   contactEmail: '',
 };
-
-const mainGreen = theme.colors.primaryDark;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -501,7 +500,7 @@ function OptionButton({
         ) : null}
       </View>
       {selected ? (
-        <Ionicons name="checkmark-circle" size={18} color={mainGreen} />
+        <Ionicons name="checkmark-circle" size={18} color={theme.colors.primaryDark} />
       ) : (
         <Ionicons name="ellipse-outline" size={18} color={theme.colors.muted} />
       )}
@@ -591,7 +590,11 @@ function InfoPanel({
 }) {
   return (
     <View style={styles.infoPanel}>
-      <CircleIcon icon={icon} color={mainGreen} backgroundColor={theme.colors.primarySoft} />
+      <CircleIcon
+        icon={icon}
+        color={theme.colors.primaryDark}
+        backgroundColor={theme.colors.primarySoft}
+      />
       <View style={styles.infoPanelCopy}>
         <Text style={styles.infoPanelTitle}>{title}</Text>
         <Text style={styles.infoPanelMessage}>{message}</Text>
@@ -610,7 +613,7 @@ function SettingsDialogModal({
   if (!dialog) return null;
 
   const isDanger = dialog.tone === 'danger';
-  const iconColor = isDanger ? theme.colors.danger : mainGreen;
+  const iconColor = isDanger ? theme.colors.danger : theme.colors.primaryDark;
   const iconBackground = isDanger ? theme.colors.dangerSoft : theme.colors.primarySoft;
 
   const handlePrimaryPress = () => {
@@ -673,6 +676,12 @@ function StatPill({ label, value }: { label: string; value: string }) {
 }
 
 export default function SettingsScreen() {
+  const {
+    preference: themePreference,
+    resolvedTheme,
+    setThemePreference,
+  } = useFocusMateTheme();
+
   const navigation = useNavigation<any>();
   const { userName, user, signOut } = useAuth();
   const { tasks, clearAllTasks } = useTasks();
@@ -842,6 +851,11 @@ export default function SettingsScreen() {
     };
 
     setLocalPreferences(nextPreferences);
+
+    if (partial.appearance) {
+      await setThemePreference(partial.appearance);
+    }
+
     await saveLocalPreferences(nextPreferences);
   };
 
@@ -1225,7 +1239,7 @@ export default function SettingsScreen() {
       <SectionCard title="Preferences">
         <SettingsRow
           title="Appearance / Theme"
-          value={getAppearanceLabel(localPreferences.appearance)}
+          value={getAppearanceLabel(themePreference)}
           icon="color-palette"
           iconColor="#8B5CF6"
           iconBackground="#F2ECFF"
@@ -1310,7 +1324,7 @@ export default function SettingsScreen() {
             subtitle="Name, username, gender, and birthday."
             value={displayName}
             icon="create"
-            iconColor={mainGreen}
+            iconColor={theme.colors.primaryDark}
             iconBackground={theme.colors.primarySoft}
             onPress={handleOpenEditProfile}
           />
@@ -1506,7 +1520,7 @@ export default function SettingsScreen() {
         <View style={styles.usageCard}>
           <CircleIcon
             icon="flash"
-            color={mainGreen}
+            color={theme.colors.primaryDark}
             backgroundColor={theme.colors.primarySoft}
           />
           <View style={styles.usageCopy}>
@@ -1606,7 +1620,7 @@ export default function SettingsScreen() {
           </>
         ) : (
           <View style={styles.emptyInfoCard}>
-            <Ionicons name="leaf-outline" size={28} color={mainGreen} />
+            <Ionicons name="leaf-outline" size={28} color={theme.colors.primaryDark} />
             <Text style={styles.emptyInfoTitle}>No activity yet</Text>
             <Text style={styles.emptyInfoText}>
               Start focus sessions and complete tasks to build your wellbeing
@@ -1712,25 +1726,24 @@ export default function SettingsScreen() {
           <OptionButton
             label="System"
             description="Follow your device setting."
-            selected={localPreferences.appearance === 'system'}
+            selected={themePreference === 'system'}
             onPress={() => void handleSelectAppearance('system')}
           />
           <OptionButton
             label="Light"
             description="Use the bright FocusMate theme."
-            selected={localPreferences.appearance === 'light'}
+            selected={themePreference === 'light'}
             onPress={() => void handleSelectAppearance('light')}
           />
           <OptionButton
             label="Dark"
-            description="Dark theme support is coming soon."
-            selected={localPreferences.appearance === 'dark'}
+            description="Use the cozy WhatsApp-style night theme."
+            selected={themePreference === 'dark'}
             onPress={() => void handleSelectAppearance('dark')}
           />
         </View>
         <InfoText>
-          Dark theme is saved as a preference. Full app-wide dark mode will come
-          later.
+          Current resolved theme: {getAppearanceLabel(resolvedTheme)}.
         </InfoText>
       </ModalSheet>
 
@@ -2010,9 +2023,9 @@ const styles = StyleSheet.create({
   profileCard: {
     minHeight: 72,
     borderRadius: 18,
-    backgroundColor: theme.colors.white,
+    backgroundColor: theme.colors.card,
     borderWidth: 1,
-    borderColor: '#EEF2F5',
+    borderColor: theme.colors.primary,
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 14,
@@ -2058,16 +2071,16 @@ const styles = StyleSheet.create({
   sectionTitle: {
     marginLeft: 5,
     marginBottom: 5,
-    color: mainGreen,
+    color: theme.colors.primaryDark,
     fontSize: 10,
     fontWeight: '900',
     textTransform: 'uppercase',
   },
   sectionCard: {
     borderRadius: 16,
-    backgroundColor: theme.colors.white,
+    backgroundColor: theme.colors.card,
     borderWidth: 1,
-    borderColor: '#EDF1F4',
+    borderColor: theme.colors.primarySoft,
     overflow: 'hidden',
     ...theme.shadowSoft,
   },
@@ -2235,7 +2248,7 @@ const styles = StyleSheet.create({
   modalSectionLabel: {
     marginLeft: 4,
     marginBottom: 8,
-    color: mainGreen,
+    color: theme.colors.primaryDark,
     fontSize: 11,
     fontWeight: '900',
     textTransform: 'uppercase',
@@ -2318,7 +2331,7 @@ const styles = StyleSheet.create({
     width: 7,
     height: 7,
     borderRadius: 4,
-    backgroundColor: mainGreen,
+    backgroundColor: theme.colors.primaryDark,
     marginTop: 7,
   },
   bulletText: {
@@ -2359,7 +2372,7 @@ const styles = StyleSheet.create({
     fontWeight: '900',
   },
   optionButtonTextSelected: {
-    color: mainGreen,
+    color: theme.colors.primaryDark,
   },
   optionButtonDescription: {
     marginTop: 3,
@@ -2493,7 +2506,7 @@ const styles = StyleSheet.create({
     padding: 13,
   },
   statPillValue: {
-    color: mainGreen,
+    color: theme.colors.primaryDark,
     fontSize: 18,
     fontWeight: '900',
   },

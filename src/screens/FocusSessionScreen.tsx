@@ -32,6 +32,7 @@ import * as Speech from 'expo-speech';
 import * as Haptics from 'expo-haptics';
 
 import { theme } from '../theme';
+import { useFocusMateTheme } from '../theme/FocusMateThemeProvider';
 import { useTasks } from '../lib/TaskContext';
 import { useFocus } from '../lib/FocusContext';
 import {
@@ -328,6 +329,33 @@ const SAVED_PRESET_VISUAL_META: PresetVisualMeta = {
   color: theme.colors.primaryDark,
   softColor: theme.colors.primarySoft,
 };
+
+function getRuntimePresetVisual(
+  presetId: PomodoroPresetId,
+  fallbackVisual: PresetVisualMeta
+): PresetVisualMeta {
+  if (presetId === 'quick') {
+    return {
+      ...fallbackVisual,
+      color: theme.colors.blue,
+      softColor: theme.colors.blueSoft,
+    };
+  }
+
+  if (presetId === 'custom') {
+    return {
+      ...fallbackVisual,
+      color: theme.colors.warning,
+      softColor: theme.colors.warningSoft,
+    };
+  }
+
+  return {
+    ...fallbackVisual,
+    color: theme.colors.primaryDark,
+    softColor: theme.colors.primarySoft,
+  };
+}
 
 function clampNumber(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
@@ -932,6 +960,7 @@ function PresetButton({
   selected: boolean;
   onPress: () => void;
 }) {
+  const runtimeVisual = getRuntimePresetVisual(preset.id, preset.visual);
   const selectedProgress = useRef(new Animated.Value(selected ? 1 : 0)).current;
 
   useEffect(() => {
@@ -976,13 +1005,13 @@ function PresetButton({
         <View
           style={[
             styles.presetIconBubble,
-            { backgroundColor: preset.visual.softColor },
+            { backgroundColor: runtimeVisual.softColor },
           ]}
         >
           <Ionicons
-            name={preset.visual.icon}
+            name={runtimeVisual.icon}
             size={24}
-            color={preset.visual.color}
+            color={runtimeVisual.color}
           />
         </View>
 
@@ -999,6 +1028,8 @@ function PresetButton({
 }
 
 export default function FocusSessionScreen() {
+  const { isDark } = useFocusMateTheme();
+
   const navigation = useNavigation<any>();
   const route = useRoute<any>();
   const { height: windowHeight, width: windowWidth } = useWindowDimensions();
@@ -1086,7 +1117,14 @@ export default function FocusSessionScreen() {
   const activePreset =
     presetOptions.find((presetOption) => presetOption.id === selectedPreset) ??
     resolvePresetOption('classic', customSettings, savedPresets);
+  const activePresetVisual = getRuntimePresetVisual(
+    activePreset.id,
+    activePreset.visual
+  );
   const timerSettings = activePreset.settings;
+  const focusHeroGradientColors = isDark
+    ? (['#12362E', '#111B21'] as const)
+    : (['#F8FFF9', '#E9F9ED'] as const);
   const currentModeConfig = MODE_META[currentMode];
   const totalSeconds = getModeSeconds(currentMode, timerSettings);
   const todayDate = getTodayDate();
@@ -3055,14 +3093,14 @@ export default function FocusSessionScreen() {
             <View
               style={[
                 styles.focusBlockPresetIcon,
-                { backgroundColor: activePreset.visual.softColor },
+                { backgroundColor: activePresetVisual.softColor },
                 compactFocusBlock && styles.focusBlockPresetIconCompact,
               ]}
             >
               <Ionicons
-                name={activePreset.visual.icon}
+                name={activePresetVisual.icon}
                 size={compactFocusBlock ? 22 : 26}
-                color={activePreset.visual.color}
+                color={activePresetVisual.color}
               />
             </View>
 
@@ -3740,7 +3778,7 @@ export default function FocusSessionScreen() {
         </View>
 
         <LinearGradient
-          colors={['#F8FFF9', '#E9F9ED']}
+          colors={focusHeroGradientColors}
           start={{ x: 0, y: 0 }}
           end={{ x: 1, y: 1 }}
           style={styles.heroCard}
@@ -3884,13 +3922,13 @@ export default function FocusSessionScreen() {
               <View
                 style={[
                   styles.detailIconBubble,
-                  { backgroundColor: activePreset.visual.softColor },
+                  { backgroundColor: activePresetVisual.softColor },
                 ]}
               >
                 <Ionicons
-                  name={activePreset.visual.icon}
+                  name={activePresetVisual.icon}
                   size={28}
-                  color={activePreset.visual.color}
+                  color={activePresetVisual.color}
                 />
               </View>
 
@@ -3942,9 +3980,9 @@ export default function FocusSessionScreen() {
             <View style={styles.presetDetailNoteBox}>
               <View style={styles.noteIconBubble}>
                 <Ionicons
-                  name={activePreset.visual.icon}
+                  name={activePresetVisual.icon}
                   size={18}
-                  color={activePreset.visual.color}
+                  color={activePresetVisual.color}
                 />
               </View>
               <Text style={styles.presetDetailNote}>
@@ -4076,7 +4114,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     overflow: 'hidden',
     borderWidth: 1,
-    borderColor: '#DAF1DE',
+    borderColor: theme.colors.border,
     ...theme.shadowSoft,
   },
   heroHillBack: {
@@ -4087,8 +4125,8 @@ const styles = StyleSheet.create({
     height: 62,
     borderTopLeftRadius: 90,
     borderTopRightRadius: 120,
-    backgroundColor: '#D6F2D5',
-    opacity: 0.75,
+    backgroundColor: theme.colors.primarySoft,
+    opacity: 0.72,
   },
   heroHillFront: {
     position: 'absolute',
@@ -4098,8 +4136,8 @@ const styles = StyleSheet.create({
     height: 46,
     borderTopLeftRadius: 100,
     borderTopRightRadius: 80,
-    backgroundColor: '#C2E8B7',
-    opacity: 0.68,
+    backgroundColor: theme.colors.cardSoft,
+    opacity: 0.72,
   },
   heroSparkleOne: {
     position: 'absolute',
@@ -4108,7 +4146,7 @@ const styles = StyleSheet.create({
     width: 10,
     height: 7,
     borderRadius: 5,
-    backgroundColor: '#A7DE9D',
+    backgroundColor: theme.colors.primary,
     transform: [{ rotate: '-18deg' }],
   },
   heroSparkleTwo: {
@@ -4118,7 +4156,7 @@ const styles = StyleSheet.create({
     width: 4,
     height: 4,
     borderRadius: 2,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: theme.colors.textSoft,
   },
   heroTextArea: {
     flex: 1,
@@ -4157,7 +4195,7 @@ const styles = StyleSheet.create({
   analyticsCard: {
     flex: 1,
     minHeight: 73,
-    backgroundColor: theme.colors.surface,
+    backgroundColor: theme.colors.card,
     borderRadius: 16,
     paddingVertical: 12,
     paddingHorizontal: 8,
@@ -4196,7 +4234,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   presetCard: {
-    backgroundColor: theme.colors.surface,
+    backgroundColor: theme.colors.card,
     borderRadius: 22,
     paddingVertical: 15,
     paddingHorizontal: 12,
@@ -4276,7 +4314,7 @@ const styles = StyleSheet.create({
     width: 95,
     minHeight: 122,
     borderRadius: 13,
-    backgroundColor: theme.colors.surface,
+    backgroundColor: theme.colors.card,
     borderWidth: 1,
     borderColor: theme.colors.border,
     paddingHorizontal: 8,
@@ -4359,8 +4397,8 @@ const styles = StyleSheet.create({
     ...theme.shadowSoft,
   },
   presetDetailCardCustom: {
-    borderColor: '#F2E2B9',
-    backgroundColor: '#FFFDF7',
+    borderColor: `${theme.colors.warning}45`,
+    backgroundColor: theme.colors.cardSoft,
   },
   presetDetailHeaderRow: {
     flexDirection: 'row',
@@ -4446,7 +4484,7 @@ const styles = StyleSheet.create({
   presetValueSeparator: {
     width: 1,
     height: 44,
-    backgroundColor: '#E1E5DD',
+    backgroundColor: theme.colors.divider,
     marginHorizontal: 5,
   },
   metricSeparator: {
@@ -4487,9 +4525,9 @@ const styles = StyleSheet.create({
   },
   realTimeTimerNoteBox: {
     borderRadius: 13,
-    backgroundColor: '#F8FCF8',
+    backgroundColor: theme.colors.cardSoft,
     borderWidth: 1,
-    borderColor: '#DCEBDD',
+    borderColor: theme.colors.border,
     flexDirection: 'row',
     alignItems: 'center',
     marginTop: 9,
@@ -4509,7 +4547,7 @@ const styles = StyleSheet.create({
     width: 32,
     height: 32,
     borderRadius: 16,
-    backgroundColor: theme.colors.surface,
+    backgroundColor: theme.colors.card,
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 10,
@@ -4522,7 +4560,7 @@ const styles = StyleSheet.create({
   },
   customValuePill: {
     borderRadius: theme.radius.pill,
-    backgroundColor: theme.colors.surface,
+    backgroundColor: theme.colors.card,
     borderWidth: 1,
     borderColor: theme.colors.border,
     paddingHorizontal: 10,
@@ -4543,7 +4581,7 @@ const styles = StyleSheet.create({
     flex: 1,
     height: 52,
     borderRadius: 16,
-    backgroundColor: theme.colors.surface,
+    backgroundColor: theme.colors.card,
     borderWidth: 1,
     borderColor: theme.colors.primary,
     justifyContent: 'center',
@@ -4563,7 +4601,7 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     backgroundColor: theme.colors.surface,
     borderWidth: 1,
-    borderColor: '#F1B8C0',
+    borderColor: `${theme.colors.danger}45`,
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 10,
@@ -4603,7 +4641,7 @@ const styles = StyleSheet.create({
     width: 24,
     height: 24,
     borderRadius: 12,
-    backgroundColor: theme.colors.surface,
+    backgroundColor: theme.colors.card,
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 8,
@@ -4614,7 +4652,7 @@ const styles = StyleSheet.create({
     fontSize: 15,
   },
   timerCard: {
-    backgroundColor: theme.colors.surface,
+    backgroundColor: theme.colors.card,
     borderRadius: theme.radius.xl,
     padding: 18,
     marginBottom: 22,
@@ -4637,12 +4675,12 @@ const styles = StyleSheet.create({
     width: '100%',
     maxWidth: 340,
     borderRadius: 30,
-    backgroundColor: theme.colors.surface,
+    backgroundColor: theme.colors.card,
     paddingTop: 22,
     paddingHorizontal: 18,
     paddingBottom: 18,
     borderWidth: 1,
-    borderColor: '#EDF4EA',
+    borderColor: theme.colors.primarySoft,
     overflow: 'hidden',
     ...theme.shadow,
   },
@@ -4660,7 +4698,7 @@ const styles = StyleSheet.create({
     width: 12,
     height: 7,
     borderRadius: 8,
-    backgroundColor: '#BDE6B8',
+    backgroundColor: theme.colors.primary,
     transform: [{ rotate: '-22deg' }],
   },
   focusModalLeafTwo: {
@@ -4670,7 +4708,7 @@ const styles = StyleSheet.create({
     width: 11,
     height: 7,
     borderRadius: 8,
-    backgroundColor: '#C9EFC7',
+    backgroundColor: theme.colors.primary,
     transform: [{ rotate: '-38deg' }],
   },
   focusModalLeafThree: {
@@ -4680,7 +4718,7 @@ const styles = StyleSheet.create({
     width: 13,
     height: 8,
     borderRadius: 8,
-    backgroundColor: '#C6EBC3',
+    backgroundColor: theme.colors.primary,
     transform: [{ rotate: '-24deg' }],
   },
   focusBlockStatusPill: {
@@ -4708,7 +4746,7 @@ const styles = StyleSheet.create({
   },
   focusBlockTimer: {
     marginTop: 17,
-    color: '#176D3A',
+    color: theme.colors.primary,
     fontSize: 58,
     fontWeight: '900',
     textAlign: 'center',
@@ -4783,7 +4821,7 @@ const styles = StyleSheet.create({
     width: 10,
     height: 10,
     borderRadius: 5,
-    backgroundColor: '#DDE3EC',
+    backgroundColor: theme.colors.border,
     marginHorizontal: 3,
   },
   focusBlockDotActive: {
@@ -4808,7 +4846,7 @@ const styles = StyleSheet.create({
     height: 62,
     borderTopLeftRadius: 120,
     borderTopRightRadius: 120,
-    backgroundColor: '#DDF5D8',
+    backgroundColor: theme.colors.primarySoft,
   },
   focusBlockMessageHillFront: {
     position: 'absolute',
@@ -4818,7 +4856,7 @@ const styles = StyleSheet.create({
     height: 48,
     borderTopLeftRadius: 120,
     borderTopRightRadius: 90,
-    backgroundColor: '#CBEFC4',
+    backgroundColor: theme.colors.cardSoft,
   },
   focusBlockMiloMessage: {
     position: 'absolute',
@@ -4827,9 +4865,9 @@ const styles = StyleSheet.create({
     width: 139,
     minHeight: 54,
     borderRadius: 16,
-    backgroundColor: '#F7FCF7',
+    backgroundColor: theme.colors.card,
     borderWidth: 1,
-    borderColor: '#D9EADA',
+    borderColor: `${theme.colors.primary}35`,
     justifyContent: 'center',
     paddingHorizontal: 15,
     paddingVertical: 10,
@@ -4913,7 +4951,7 @@ const styles = StyleSheet.create({
   },
   timerEditorOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(34, 40, 49, 0.45)',
+    backgroundColor: theme.colors.overlay,
     justifyContent: 'flex-end',
     alignItems: 'center',
     paddingHorizontal: 14,
@@ -4923,7 +4961,7 @@ const styles = StyleSheet.create({
     maxWidth: 430,
     borderTopLeftRadius: theme.radius.xl,
     borderTopRightRadius: theme.radius.xl,
-    backgroundColor: theme.colors.surface,
+    backgroundColor: theme.colors.card,
     paddingHorizontal: 18,
     paddingTop: 10,
     paddingBottom: 18,
@@ -4975,7 +5013,7 @@ const styles = StyleSheet.create({
   },
   presetNameField: {
     borderRadius: theme.radius.lg,
-    backgroundColor: theme.colors.backgroundSoft,
+    backgroundColor: theme.colors.surface,
     borderWidth: 1,
     borderColor: theme.colors.border,
     padding: 11,
@@ -4985,7 +5023,7 @@ const styles = StyleSheet.create({
     height: 42,
     marginTop: 8,
     borderRadius: theme.radius.md,
-    backgroundColor: theme.colors.surface,
+    backgroundColor: theme.colors.input,
     borderWidth: 1,
     borderColor: theme.colors.border,
     color: theme.colors.text,
@@ -5012,7 +5050,9 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     borderRadius: theme.radius.md,
-    backgroundColor: 'rgba(255, 255, 255, 0.55)',
+    backgroundColor: theme.colors.card,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
     paddingLeft: 10,
     paddingRight: 6,
     marginBottom: 7,
@@ -5035,7 +5075,7 @@ const styles = StyleSheet.create({
   },
   timerEditorField: {
     borderRadius: theme.radius.lg,
-    backgroundColor: theme.colors.backgroundSoft,
+    backgroundColor: theme.colors.surface,
     borderWidth: 1,
     borderColor: theme.colors.border,
     padding: 11,
@@ -5061,7 +5101,7 @@ const styles = StyleSheet.create({
     width: 126,
     height: 42,
     borderRadius: theme.radius.md,
-    backgroundColor: theme.colors.surface,
+    backgroundColor: theme.colors.input,
     borderWidth: 1,
     borderColor: theme.colors.border,
     flexDirection: 'row',
@@ -5091,7 +5131,7 @@ const styles = StyleSheet.create({
     flex: 1,
     height: 34,
     borderRadius: theme.radius.pill,
-    backgroundColor: theme.colors.surface,
+    backgroundColor: theme.colors.card,
     borderWidth: 1,
     borderColor: theme.colors.border,
     justifyContent: 'center',
@@ -5111,7 +5151,7 @@ const styles = StyleSheet.create({
     flex: 1,
     height: 48,
     borderRadius: theme.radius.md,
-    backgroundColor: theme.colors.backgroundSoft,
+    backgroundColor: theme.colors.cardSoft,
     borderWidth: 1,
     borderColor: theme.colors.border,
     justifyContent: 'center',
@@ -5138,7 +5178,7 @@ const styles = StyleSheet.create({
   },
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(34, 40, 49, 0.42)',
+    backgroundColor: theme.colors.overlay,
     justifyContent: 'center',
     alignItems: 'center',
     paddingHorizontal: 24,
@@ -5147,10 +5187,10 @@ const styles = StyleSheet.create({
     width: '100%',
     maxWidth: 360,
     borderRadius: theme.radius.xl,
-    backgroundColor: theme.colors.surface,
+    backgroundColor: theme.colors.card,
     padding: 22,
     borderWidth: 1,
-    borderColor: theme.colors.border,
+    borderColor: theme.colors.primarySoft,
     ...theme.shadow,
   },
   taskPickerModalCard: {
@@ -5207,7 +5247,7 @@ const styles = StyleSheet.create({
     borderRadius: theme.radius.md,
     backgroundColor: theme.colors.primarySoft,
     borderWidth: 1,
-    borderColor: '#CDEFD9',
+    borderColor: theme.colors.primary,
     justifyContent: 'center',
     alignItems: 'center',
     marginTop: 10,
@@ -5266,7 +5306,7 @@ const styles = StyleSheet.create({
     borderRadius: theme.radius.lg,
     backgroundColor: theme.colors.primarySoft,
     borderWidth: 1,
-    borderColor: '#CDEFD9',
+    borderColor: theme.colors.primary,
     justifyContent: 'center',
     alignItems: 'center',
     padding: 14,

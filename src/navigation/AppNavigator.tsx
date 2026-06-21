@@ -1,7 +1,12 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { StyleSheet, TouchableOpacity, View } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { NavigationContainer, useNavigation } from '@react-navigation/native';
+import {
+  DarkTheme,
+  DefaultTheme,
+  NavigationContainer,
+  useNavigation,
+} from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -9,6 +14,7 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 
 import { RootStackParamList, MainTabParamList } from '../types/navigation';
 import { theme } from '../theme';
+import { useFocusMateTheme } from '../theme/FocusMateThemeProvider';
 import { useAuth } from '../lib/AuthContext';
 
 import OnboardingScreen from '../screens/OnboardingScreen';
@@ -43,6 +49,7 @@ function EmptyTabScreen() {
 
 function CenterAddButton() {
   const navigation = useNavigation<any>();
+  const { theme: appTheme } = useFocusMateTheme();
 
   const handlePress = () => {
     const parentNavigation = navigation.getParent?.();
@@ -64,7 +71,11 @@ function CenterAddButton() {
         accessibilityRole="button"
         accessibilityLabel="Create planner item"
       >
-        <MaterialCommunityIcons name="plus" size={32} color="#FFFFFF" />
+        <MaterialCommunityIcons
+          name="plus"
+          size={32}
+          color={appTheme.colors.white}
+        />
       </TouchableOpacity>
     </View>
   );
@@ -72,13 +83,14 @@ function CenterAddButton() {
 
 function MainTabs() {
   const insets = useSafeAreaInsets();
+  const { theme: appTheme } = useFocusMateTheme();
 
   return (
     <Tab.Navigator
       screenOptions={{
         tabBarShowLabel: true,
-        tabBarActiveTintColor: theme.colors.primaryDark,
-        tabBarInactiveTintColor: theme.colors.muted,
+        tabBarActiveTintColor: appTheme.colors.primary,
+        tabBarInactiveTintColor: appTheme.colors.subtleText,
         tabBarLabelStyle: {
           fontSize: 11,
           fontWeight: '900',
@@ -94,18 +106,18 @@ function MainTabs() {
           height: 74,
           borderRadius: 90,
           borderTopWidth: 0,
-          backgroundColor: theme.colors.surface,
+          backgroundColor: appTheme.colors.surface,
           paddingTop: 2,
           paddingBottom: 2,
           ...theme.shadow,
         },
         headerStyle: {
-          backgroundColor: theme.colors.background,
+          backgroundColor: appTheme.colors.background,
         },
         headerShadowVisible: false,
         headerTitleStyle: {
           fontWeight: '900',
-          color: theme.colors.text,
+          color: appTheme.colors.text,
         },
       }}
     >
@@ -185,6 +197,7 @@ function MainTabs() {
 
 export default function AppNavigator() {
   const { isAuthenticated, isLoadingAuth } = useAuth();
+  const { theme: appTheme, isDark } = useFocusMateTheme();
 
   const [isCheckingOnboarding, setIsCheckingOnboarding] = useState(true);
   const [hasCompletedOnboarding, setHasCompletedOnboarding] = useState(false);
@@ -214,24 +227,42 @@ export default function AppNavigator() {
     }
   };
 
+  const navigationTheme = useMemo(
+    () => ({
+      ...(isDark ? DarkTheme : DefaultTheme),
+      dark: isDark,
+      colors: {
+        ...(isDark ? DarkTheme : DefaultTheme).colors,
+        primary: appTheme.colors.primary,
+        background: appTheme.colors.background,
+        card: appTheme.colors.surface,
+        text: appTheme.colors.text,
+        border: appTheme.colors.border,
+        notification: appTheme.colors.danger,
+      },
+    }),
+    [appTheme, isDark]
+  );
+
   if (isLoadingAuth || isCheckingOnboarding) {
     return null;
   }
 
   return (
-    <NavigationContainer>
+    <NavigationContainer theme={navigationTheme}>
       <RootStack.Navigator
         screenOptions={{
           headerStyle: {
-            backgroundColor: theme.colors.background,
+            backgroundColor: appTheme.colors.background,
           },
           headerShadowVisible: false,
           headerTitleStyle: {
             fontWeight: '900',
-            color: theme.colors.text,
+            color: appTheme.colors.text,
           },
+          headerTintColor: appTheme.colors.text,
           contentStyle: {
-            backgroundColor: theme.colors.background,
+            backgroundColor: appTheme.colors.background,
           },
         }}
       >

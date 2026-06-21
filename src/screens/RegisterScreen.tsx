@@ -15,11 +15,14 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 
 import { theme } from '../theme';
+import { useFocusMateTheme } from '../theme/FocusMateThemeProvider';
 import { useAuth } from '../lib/AuthContext';
 
 const miloIdleImage = require('../../assets/mascot/milo_idle.png');
 
 export default function RegisterScreen() {
+  useFocusMateTheme();
+
   const navigation = useNavigation<any>();
   const { signUpWithEmail } = useAuth();
 

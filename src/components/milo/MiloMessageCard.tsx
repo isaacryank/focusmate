@@ -4,6 +4,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 
 import { theme } from '../../theme';
+import { useFocusMateTheme } from '../../theme/FocusMateThemeProvider';
 import { MiloMood, getMiloMoodLabel } from '../../lib/miloPersonality';
 import MiloMoodImage from './MiloMoodImage';
 
@@ -32,9 +33,15 @@ export default function MiloMessageCard({
   compact = false,
   miloSize,
 }: MiloMessageCardProps) {
+  const { isDark } = useFocusMateTheme();
+
   return (
     <LinearGradient
-      colors={['#F7FFF9', '#DDF8E7']}
+      colors={
+        isDark
+          ? [theme.colors.card, theme.colors.cardSoft]
+          : ['#F7FFF9', '#DDF8E7']
+      }
       start={{ x: 0, y: 0 }}
       end={{ x: 1, y: 1 }}
       style={[styles.card, compact && styles.compactCard]}

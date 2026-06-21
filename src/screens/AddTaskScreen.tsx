@@ -22,6 +22,7 @@ import {
   TaskPriority,
 } from '../types/task';
 import { theme } from '../theme';
+import { useFocusMateTheme } from '../theme/FocusMateThemeProvider';
 import { useTasks } from '../lib/TaskContext';
 import { schedulePlannerReminder } from '../lib/notificationUtils';
 import { buildMiloSmartData } from '../lib/miloSmartPlan';
@@ -696,6 +697,8 @@ function SecondaryButton({
 }
 
 export default function AddTaskScreen({ navigation }: Props) {
+  useFocusMateTheme();
+
   const { addTask, tasks } = useTasks();
 
   useLayoutEffect(() => {
@@ -1972,12 +1975,12 @@ const styles = StyleSheet.create({
     right: 0,
     height: 2,
     borderRadius: 2,
-    backgroundColor: '#DDE5EC',
+    backgroundColor: theme.colors.divider,
   },
   stepperTrackActive: {
     height: 2,
     borderRadius: 2,
-    backgroundColor: '#AEE8BE',
+    backgroundColor: theme.colors.primary,
   },
   stepCircle: {
     width: 28,
@@ -1985,7 +1988,7 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     backgroundColor: theme.colors.surface,
     borderWidth: 1,
-    borderColor: '#DDE5EC',
+    borderColor: theme.colors.border,
     justifyContent: 'center',
     alignItems: 'center',
     zIndex: 3,
@@ -2029,12 +2032,12 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     marginLeft: 8,
     borderWidth: 1,
-    borderColor: '#CFEFDA',
+    borderColor: theme.colors.inputBorder,
     ...theme.shadowSoft,
   },
   speechBubbleInvalid: {
-    backgroundColor: '#FFF5F5',
-    borderColor: '#F8CACA',
+    backgroundColor: theme.colors.dangerSoft,
+    borderColor: theme.colors.inputBorder,
   },
   speechTail: {
     position: 'absolute',
@@ -2045,12 +2048,12 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.primarySoft,
     borderLeftWidth: 1,
     borderBottomWidth: 1,
-    borderColor: '#CFEFDA',
+    borderColor: theme.colors.inputBorder,
     transform: [{ rotate: '45deg' }],
   },
   speechTailInvalid: {
-    backgroundColor: '#FFF5F5',
-    borderColor: '#F8CACA',
+    backgroundColor: theme.colors.dangerSoft,
+    borderColor: theme.colors.inputBorder,
   },
   speechText: {
     color: theme.colors.text,
@@ -2080,8 +2083,8 @@ const styles = StyleSheet.create({
     ...theme.shadowSoft,
   },
   detailCardInvalid: {
-    backgroundColor: '#FFFAFA',
-    borderColor: '#F8CACA',
+    backgroundColor: theme.colors.dangerSoft,
+    borderColor: theme.colors.inputBorder,
   },
   detailCardHeader: {
     flexDirection: 'row',
@@ -2129,7 +2132,7 @@ const styles = StyleSheet.create({
     flex: 1,
     minHeight: 40,
     borderRadius: 14,
-    backgroundColor: theme.colors.backgroundSoft,
+    backgroundColor: theme.colors.input,
     borderWidth: 1,
     borderColor: theme.colors.border,
     justifyContent: 'center',
@@ -2218,12 +2221,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 14,
     borderWidth: 1,
-    borderColor: '#CFEFDA',
+    borderColor: theme.colors.inputBorder,
     ...theme.shadowSoft,
   },
   scheduleBubbleConflict: {
-    backgroundColor: '#FFF7ED',
-    borderColor: '#FED7AA',
+    backgroundColor: theme.colors.warningSoft,
+    borderColor: theme.colors.inputBorder,
   },
   scheduleBubbleTail: {
     position: 'absolute',
@@ -2234,12 +2237,12 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.primarySoft,
     borderLeftWidth: 1,
     borderBottomWidth: 1,
-    borderColor: '#CFEFDA',
+    borderColor: theme.colors.inputBorder,
     transform: [{ rotate: '45deg' }],
   },
   scheduleBubbleTailConflict: {
-    backgroundColor: '#FFF7ED',
-    borderColor: '#FED7AA',
+    backgroundColor: theme.colors.warningSoft,
+    borderColor: theme.colors.inputBorder,
   },
   scheduleBubbleText: {
     color: theme.colors.text,
@@ -2258,9 +2261,9 @@ const styles = StyleSheet.create({
   conflictButton: {
     minHeight: 32,
     borderRadius: 16,
-    backgroundColor: theme.colors.surface,
+    backgroundColor: theme.colors.card,
     borderWidth: 1,
-    borderColor: '#FED7AA',
+    borderColor: theme.colors.inputBorder,
     justifyContent: 'center',
     paddingHorizontal: 10,
     marginRight: 7,
@@ -2272,7 +2275,7 @@ const styles = StyleSheet.create({
     fontWeight: '900',
   },
   scheduleCard: {
-    backgroundColor: theme.colors.surface,
+    backgroundColor: theme.colors.card,
     borderRadius: 24,
     paddingHorizontal: 14,
     paddingVertical: 6,
@@ -2314,7 +2317,7 @@ const styles = StyleSheet.create({
   },
   scheduleValue: {
     flex: 1,
-    color: theme.colors.textSoft,
+    color: theme.colors.mutedText,
     fontSize: 13,
     fontWeight: '800',
     textAlign: 'right',
@@ -2327,7 +2330,7 @@ const styles = StyleSheet.create({
     padding: 14,
   },
   sheet: {
-    backgroundColor: theme.colors.surface,
+    backgroundColor: theme.colors.card,
     borderRadius: 24,
     padding: 15,
     borderWidth: 1,
@@ -2335,19 +2338,19 @@ const styles = StyleSheet.create({
     ...theme.shadow,
   },
   meetingSheet: {
-    backgroundColor: theme.colors.surface,
+    backgroundColor: theme.colors.card,
     borderRadius: 24,
     padding: 15,
     borderWidth: 1,
-    borderColor: '#DDD4FF',
+    borderColor: theme.colors.border,
     ...theme.shadow,
   },
   confirmSheet: {
-    backgroundColor: theme.colors.surface,
+    backgroundColor: theme.colors.card,
     borderRadius: 24,
     padding: 15,
     borderWidth: 1,
-    borderColor: '#FED7AA',
+    borderColor: theme.colors.border,
     ...theme.shadow,
   },
   confirmMiloRow: {
@@ -2356,13 +2359,13 @@ const styles = StyleSheet.create({
   },
   confirmBubble: {
     flex: 1,
-    backgroundColor: '#FFF7ED',
+    backgroundColor: theme.colors.warningSoft,
     borderRadius: 20,
     paddingHorizontal: 14,
     paddingVertical: 12,
     marginLeft: 9,
     borderWidth: 1,
-    borderColor: '#FED7AA',
+    borderColor: theme.colors.inputBorder,
   },
   confirmText: {
     color: '#92400E',
@@ -2407,7 +2410,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: theme.colors.surface,
+    backgroundColor: theme.colors.card,
     borderBottomWidth: 1,
     borderBottomColor: theme.colors.border,
     paddingHorizontal: 13,
@@ -2421,7 +2424,7 @@ const styles = StyleSheet.create({
     fontWeight: '900',
   },
   customBox: {
-    backgroundColor: theme.colors.backgroundSoft,
+    backgroundColor: theme.colors.input,
     borderRadius: 18,
     padding: 12,
     marginTop: 12,
@@ -2442,7 +2445,7 @@ const styles = StyleSheet.create({
     minWidth: 58,
     minHeight: 42,
     borderRadius: 14,
-    backgroundColor: theme.colors.surface,
+    backgroundColor: theme.colors.card,
     borderWidth: 1,
     borderColor: theme.colors.border,
     color: theme.colors.text,
@@ -2474,7 +2477,7 @@ const styles = StyleSheet.create({
   sheetTextInput: {
     minHeight: 48,
     borderRadius: 16,
-    backgroundColor: theme.colors.backgroundSoft,
+    backgroundColor: theme.colors.input,
     borderWidth: 1,
     borderColor: theme.colors.border,
     color: theme.colors.text,
@@ -2490,8 +2493,8 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   meetingInputInvalid: {
-    backgroundColor: '#FFFAFA',
-    borderColor: '#F8CACA',
+    backgroundColor: theme.colors.dangerSoft,
+    borderColor: theme.colors.inputBorder,
   },
   detectedProviderPill: {
     alignSelf: 'flex-start',
@@ -2499,7 +2502,7 @@ const styles = StyleSheet.create({
     borderRadius: 15,
     backgroundColor: theme.colors.purpleSoft,
     borderWidth: 1,
-    borderColor: '#DDD4FF',
+    borderColor: theme.colors.inputBorder,
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 10,
@@ -2530,7 +2533,7 @@ const styles = StyleSheet.create({
     borderRadius: 15,
     backgroundColor: theme.colors.dangerSoft,
     borderWidth: 1,
-    borderColor: '#F8CACA',
+    borderColor: theme.colors.inputBorder,
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: 9,
@@ -2556,7 +2559,7 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     backgroundColor: theme.colors.primarySoft,
     borderWidth: 1,
-    borderColor: '#CFEFDA',
+    borderColor: theme.colors.inputBorder,
     paddingHorizontal: 11,
     paddingVertical: 8,
     marginRight: 8,
@@ -2672,7 +2675,7 @@ const styles = StyleSheet.create({
     padding: 12,
     marginTop: 12,
     borderWidth: 1,
-    borderColor: '#CFEFDA',
+    borderColor: theme.colors.inputBorder,
   },
   supportTextArea: {
     flex: 1,
@@ -2692,12 +2695,12 @@ const styles = StyleSheet.create({
     marginTop: 3,
   },
   warningCard: {
-    backgroundColor: '#FFF1E8',
+    backgroundColor: theme.colors.warningSoft,
     borderRadius: 22,
     padding: 13,
     marginTop: 12,
     borderWidth: 1,
-    borderColor: '#FED7AA',
+    borderColor: theme.colors.inputBorder,
   },
   warningHeader: {
     flexDirection: 'row',
@@ -2722,7 +2725,7 @@ const styles = StyleSheet.create({
     marginTop: 10,
   },
   warningButton: {
-    backgroundColor: theme.colors.surface,
+    backgroundColor: theme.colors.card,
     borderRadius: 15,
     paddingHorizontal: 10,
     paddingVertical: 8,
@@ -2754,14 +2757,14 @@ const styles = StyleSheet.create({
   },
   reviewSpeechBubble: {
     flex: 1,
-    backgroundColor: '#ECFAF0',
+    backgroundColor: theme.colors.primarySoft,
     borderRadius: 22,
     paddingHorizontal: 15,
     paddingVertical: 12,
     marginLeft: 4,
     borderWidth: 1,
-    borderColor: '#CDEFD8',
-    shadowColor: '#0F5132',
+    borderColor: theme.colors.inputBorder,
+    shadowColor: theme.colors.shadow,
     shadowOffset: {
       width: 0,
       height: 5,
@@ -2776,10 +2779,10 @@ const styles = StyleSheet.create({
     top: 24,
     width: 14,
     height: 14,
-    backgroundColor: '#ECFAF0',
+    backgroundColor: theme.colors.primarySoft,
     borderLeftWidth: 1,
     borderBottomWidth: 1,
-    borderColor: '#CDEFD8',
+    borderColor: theme.colors.inputBorder,
     transform: [{ rotate: '45deg' }],
   },
   reviewSpeechText: {
@@ -2789,14 +2792,14 @@ const styles = StyleSheet.create({
     lineHeight: 19,
   },
   summaryCard: {
-    backgroundColor: theme.colors.surface,
+    backgroundColor: theme.colors.card,
     borderRadius: 20,
     paddingHorizontal: 15,
     paddingTop: 14,
     paddingBottom: 7,
     borderWidth: 1,
-    borderColor: '#E4EAEF',
-    shadowColor: '#111827',
+    borderColor: theme.colors.border,
+    shadowColor: theme.colors.shadow,
     shadowOffset: {
       width: 0,
       height: 7,
@@ -2828,12 +2831,12 @@ const styles = StyleSheet.create({
   summaryEditButton: {
     minHeight: 27,
     borderRadius: 999,
-    backgroundColor: '#ECFAF0',
+    backgroundColor: theme.colors.primarySoft,
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 10,
     borderWidth: 1,
-    borderColor: '#CDEFD8',
+    borderColor: theme.colors.inputBorder,
   },
   summaryEditText: {
     color: theme.colors.primaryDark,
@@ -2842,14 +2845,14 @@ const styles = StyleSheet.create({
     marginLeft: 4,
   },
   summaryRows: {
-    backgroundColor: theme.colors.surface,
+    backgroundColor: theme.colors.card,
   },
   reviewSummaryRow: {
     minHeight: 43,
     flexDirection: 'row',
     alignItems: 'center',
     borderBottomWidth: 1,
-    borderBottomColor: '#EEF2F5',
+    borderBottomColor: theme.colors.divider,
   },
   reviewSummaryRowLast: {
     borderBottomWidth: 0,
@@ -2858,13 +2861,13 @@ const styles = StyleSheet.create({
     width: 24,
     height: 24,
     borderRadius: 9,
-    backgroundColor: '#F3FBF6',
+    backgroundColor: theme.colors.primarySoft,
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 10,
   },
   reviewSummaryLabel: {
-    color: '#4B5563',
+    color: theme.colors.mutedText,
     fontSize: 12,
     fontWeight: '800',
     width: 96,
@@ -2933,14 +2936,14 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: theme.colors.surface,
+    backgroundColor: theme.colors.card,
     borderRadius: 20,
     paddingHorizontal: 14,
     paddingVertical: 13,
     marginTop: 11,
     borderWidth: 1,
-    borderColor: '#E4EAEF',
-    shadowColor: '#111827',
+    borderColor: theme.colors.border,
+    shadowColor: theme.colors.shadow,
     shadowOffset: {
       width: 0,
       height: 6,
@@ -2968,7 +2971,7 @@ const styles = StyleSheet.create({
     paddingRight: 10,
   },
   urgencyHint: {
-    color: '#6B7280',
+    color: theme.colors.mutedText,
     fontSize: 11.5,
     fontWeight: '700',
     marginTop: 2,
@@ -2987,13 +2990,13 @@ const styles = StyleSheet.create({
   reviewConflictNote: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#FFF7ED',
+    backgroundColor: theme.colors.warningSoft,
     borderRadius: 17,
     paddingHorizontal: 12,
     paddingVertical: 10,
     marginTop: 10,
     borderWidth: 1,
-    borderColor: '#FDBA74',
+    borderColor: theme.colors.inputBorder,
   },
   reviewConflictText: {
     flex: 1,

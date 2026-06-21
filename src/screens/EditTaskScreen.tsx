@@ -20,6 +20,7 @@ import {
   TaskPriority,
 } from '../types/task';
 import { theme } from '../theme';
+import { useFocusMateTheme } from '../theme/FocusMateThemeProvider';
 import { useTasks } from '../lib/TaskContext';
 import { schedulePlannerReminder } from '../lib/notificationUtils';
 import {
@@ -198,6 +199,8 @@ function DateTimeButton({
 }
 
 export default function EditTaskScreen({ navigation, route }: Props) {
+  useFocusMateTheme();
+
   const { tasks, updateTask } = useTasks();
   const task = tasks.find((item) => item.id === route.params.taskId);
 

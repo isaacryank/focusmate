@@ -9,6 +9,7 @@ import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 
 import { theme } from '../theme';
+import { useFocusMateTheme } from '../theme/FocusMateThemeProvider';
 import { useTasks } from '../lib/TaskContext';
 import { Task } from '../types/task';
 import { getTodayDate } from '../lib/miloPersonality';
@@ -485,6 +486,8 @@ function ReminderAccordionCard({
 }
 
 export default function ReminderCenterScreen() {
+  useFocusMateTheme();
+
   const navigation = useNavigation<any>();
   const { tasks, toggleTask } = useTasks();
 

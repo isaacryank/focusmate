@@ -17,6 +17,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 
 import { theme } from '../theme';
+import { useFocusMateTheme } from '../theme/FocusMateThemeProvider';
 import { useTasks } from '../lib/TaskContext';
 import { PlannerType, Task } from '../types/task';
 import { getTaskUrgency } from '../lib/taskUrgency';
@@ -119,9 +120,9 @@ function getTaskMiloImage(task: Task): ImageSourcePropType {
 function getPriorityTone(priority: Task['priority'], fallbackColor: string) {
   if (priority === 'high') {
     return {
-      color: '#9A6B00',
-      backgroundColor: theme.colors.yellowSoft,
-      borderColor: '#F5D990',
+      color: theme.colors.warning,
+      backgroundColor: theme.colors.warningSoft,
+      borderColor: `${theme.colors.warning}45`,
     };
   }
 
@@ -136,7 +137,7 @@ function getPriorityTone(priority: Task['priority'], fallbackColor: string) {
   return {
     color: theme.colors.blue,
     backgroundColor: theme.colors.blueSoft,
-    borderColor: '#CFE5FB',
+    borderColor: `${theme.colors.blue}35`,
   };
 }
 
@@ -318,11 +319,14 @@ function TaskCard({
   onOpenMaps: () => void;
   onJoinMeeting: () => void;
 }) {
+  const { isDark } = useFocusMateTheme();
   const isCompleted = task.status === 'completed';
   const typeConfig = getTypeConfig(task.plannerType);
   const urgency = getTaskUrgency(task);
   const urgencyColor = theme.colors[urgency.colorKey];
   const priorityTone = getPriorityTone(task.priority, typeConfig.color);
+  const neutralChipBackground = isDark ? theme.colors.input : '#F9FBFA';
+  const neutralChipBorder = isDark ? theme.colors.border : '#E2EEE7';
 
   const accentColor =
     urgency.level === 'overdue' || urgency.level === 'urgent'
@@ -452,16 +456,16 @@ function TaskCard({
           iconName="calendar-outline"
           label={task.dueDate || 'Any day'}
           color={theme.colors.textSoft}
-          backgroundColor="#F9FBFA"
-          borderColor="#E2EEE7"
+          backgroundColor={neutralChipBackground}
+          borderColor={neutralChipBorder}
         />
         {task.dueTime ? (
           <TaskMetaChip
             iconName="time-outline"
             label={task.dueTime}
             color={theme.colors.textSoft}
-            backgroundColor="#F9FBFA"
-            borderColor="#E2EEE7"
+            backgroundColor={neutralChipBackground}
+            borderColor={neutralChipBorder}
           />
         ) : null}
         {checklistCount > 0 ? (
@@ -469,8 +473,8 @@ function TaskCard({
             iconName="list-outline"
             label={`${completedChecklistCount}/${checklistCount}`}
             color={theme.colors.textSoft}
-            backgroundColor="#F9FBFA"
-            borderColor="#E2EEE7"
+            backgroundColor={neutralChipBackground}
+            borderColor={neutralChipBorder}
           />
         ) : null}
       </View>
@@ -521,6 +525,8 @@ function TaskCard({
 }
 
 export default function TasksScreen() {
+  const { isDark } = useFocusMateTheme();
+
   const navigation = useNavigation<any>();
   const { tasks, toggleTask, deleteTask } = useTasks();
 
@@ -691,6 +697,15 @@ export default function TasksScreen() {
   };
 
   const hasActiveFilters = filter !== 'all' || Boolean(searchText.trim());
+  const heroGradientColors = isDark
+    ? (['#12362E', '#111B21'] as const)
+    : (['#F8FFF9', '#DDF7E6'] as const);
+  const summaryBackgrounds = {
+    total: isDark ? theme.colors.card : '#F5FCF7',
+    pending: isDark ? theme.colors.warningSoft : '#FFF9EB',
+    completed: isDark ? theme.colors.blueSoft : '#F4FAFF',
+    today: isDark ? theme.colors.purpleSoft : '#F8F5FF',
+  };
 
   const resetSearchAndFilters = () => {
     setSearchText('');
@@ -709,7 +724,7 @@ export default function TasksScreen() {
         ListHeaderComponent={
           <View style={styles.listHeader}>
             <LinearGradient
-              colors={['#F8FFF9', '#DDF7E6']}
+              colors={heroGradientColors}
               start={{ x: 0, y: 0 }}
               end={{ x: 1, y: 1 }}
               style={styles.headerCard}
@@ -781,28 +796,28 @@ export default function TasksScreen() {
                 value={taskStats.total}
                 iconName="albums-outline"
                 color={theme.colors.primaryDark}
-                backgroundColor="#F5FCF7"
+                backgroundColor={summaryBackgrounds.total}
               />
               <StatSummaryCard
                 label="Pending"
                 value={taskStats.pending}
                 iconName="hourglass-outline"
-                color="#D97706"
-                backgroundColor="#FFF9EB"
+                color={theme.colors.warning}
+                backgroundColor={summaryBackgrounds.pending}
               />
               <StatSummaryCard
                 label="Done"
                 value={taskStats.completed}
                 iconName="checkmark-circle-outline"
                 color={theme.colors.blue}
-                backgroundColor="#F4FAFF"
+                backgroundColor={summaryBackgrounds.completed}
               />
               <StatSummaryCard
                 label="Today"
                 value={taskStats.today}
                 iconName="today-outline"
                 color={theme.colors.purple}
-                backgroundColor="#F8F5FF"
+                backgroundColor={summaryBackgrounds.today}
               />
             </View>
 
@@ -865,7 +880,7 @@ export default function TasksScreen() {
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
-    backgroundColor: '#F6FBF4',
+    backgroundColor: theme.colors.background,
   },
   taskList: {
     flex: 1,
@@ -882,7 +897,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     overflow: 'hidden',
     borderWidth: 1,
-    borderColor: '#D6F1DF',
+    borderColor: theme.colors.border,
     ...theme.shadowSoft,
   },
   heroGlowLarge: {
@@ -913,7 +928,7 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
     overflow: 'hidden',
     borderRadius: theme.radius.pill,
-    backgroundColor: 'rgba(255,255,255,0.84)',
+    backgroundColor: theme.colors.card,
     paddingHorizontal: 9,
     paddingVertical: 4,
     fontSize: 11,
@@ -938,7 +953,7 @@ const styles = StyleSheet.create({
     width: 84,
     height: 84,
     borderRadius: 42,
-    backgroundColor: 'rgba(255,255,255,0.88)',
+    backgroundColor: theme.colors.card,
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: -6,
@@ -960,7 +975,7 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     backgroundColor: theme.colors.surface,
     borderWidth: 1,
-    borderColor: '#DDEBE2',
+    borderColor: theme.colors.border,
     paddingHorizontal: 12,
     flexDirection: 'row',
     alignItems: 'center',
@@ -980,7 +995,7 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     backgroundColor: theme.colors.surface,
     borderWidth: 1,
-    borderColor: '#DDEBE2',
+    borderColor: theme.colors.border,
     alignItems: 'center',
     justifyContent: 'center',
     marginLeft: 9,
@@ -1005,7 +1020,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginHorizontal: 4,
     borderWidth: 1,
-    borderColor: 'rgba(221,235,226,0.82)',
+    borderColor: theme.colors.border,
   },
   summaryIconWrap: {
     width: 25,
@@ -1039,7 +1054,7 @@ const styles = StyleSheet.create({
     borderRadius: theme.radius.pill,
     backgroundColor: theme.colors.surface,
     borderWidth: 1,
-    borderColor: '#DDEBE2',
+    borderColor: theme.colors.border,
     marginRight: 8,
     flexDirection: 'row',
     alignItems: 'center',
@@ -1064,7 +1079,7 @@ const styles = StyleSheet.create({
     paddingBottom: 130,
   },
   taskCard: {
-    backgroundColor: theme.colors.surface,
+    backgroundColor: theme.colors.card,
     borderRadius: 20,
     paddingVertical: 10,
     paddingLeft: 13,
@@ -1072,14 +1087,14 @@ const styles = StyleSheet.create({
     marginBottom: 10,
     overflow: 'hidden',
     borderWidth: 1,
-    borderColor: '#DDEBE2',
+    borderColor: theme.colors.border,
     ...theme.shadowSoft,
   },
   taskCardPressed: {
     opacity: 0.88,
   },
   taskCardCompleted: {
-    backgroundColor: '#FBFEFC',
+    backgroundColor: theme.colors.cardSoft,
     opacity: 0.88,
   },
   accentBar: {
@@ -1101,10 +1116,10 @@ const styles = StyleSheet.create({
     height: 28,
     borderRadius: 14,
     borderWidth: 2,
-    borderColor: '#C9D8CE',
+    borderColor: theme.colors.inputBorder,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: theme.colors.surface,
+    backgroundColor: theme.colors.input,
   },
   checkboxCompleted: {
     borderColor: theme.colors.primary,
@@ -1169,9 +1184,9 @@ const styles = StyleSheet.create({
     width: 31,
     height: 31,
     borderRadius: 15.5,
-    backgroundColor: '#FFF3F3',
+    backgroundColor: theme.colors.dangerSoft,
     borderWidth: 1,
-    borderColor: '#FFE0E0',
+    borderColor: `${theme.colors.danger}35`,
     justifyContent: 'center',
     alignItems: 'center',
     marginTop: 6,
@@ -1205,7 +1220,7 @@ const styles = StyleSheet.create({
   utilityRow: {
     marginTop: 7,
     borderTopWidth: 1,
-    borderTopColor: '#EEF5F0',
+    borderTopColor: theme.colors.divider,
     paddingTop: 7,
     flexDirection: 'row',
     alignItems: 'center',
@@ -1236,11 +1251,11 @@ const styles = StyleSheet.create({
   },
   locationInfoPill: {
     backgroundColor: theme.colors.primarySoft,
-    borderColor: '#CBEFD8',
+    borderColor: `${theme.colors.primary}40`,
   },
   meetingInfoPill: {
     backgroundColor: theme.colors.purpleSoft,
-    borderColor: '#DED6FF',
+    borderColor: `${theme.colors.purple}40`,
   },
   infoPillText: {
     maxWidth: 112,
@@ -1269,12 +1284,12 @@ const styles = StyleSheet.create({
   },
   emptyCard: {
     marginTop: 26,
-    backgroundColor: theme.colors.surface,
+    backgroundColor: theme.colors.card,
     borderRadius: theme.radius.xl,
     padding: 26,
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: '#DDEBE2',
+    borderColor: theme.colors.border,
     ...theme.shadowSoft,
   },
   emptyMiloImage: {

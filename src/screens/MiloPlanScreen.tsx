@@ -6,6 +6,7 @@ import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { RootStackParamList } from '../types/navigation';
 import { Subtask } from '../types/task';
 import { theme } from '../theme';
+import { useFocusMateTheme } from '../theme/FocusMateThemeProvider';
 import { useTasks } from '../lib/TaskContext';
 import { generateMiloPlan } from '../lib/miloPlanner';
 import {
@@ -96,6 +97,8 @@ function ExistingChecklistItem({
 }
 
 export default function MiloPlanScreen({ navigation, route }: Props) {
+  useFocusMateTheme();
+
   const { tasks, updateTask } = useTasks();
 
   const [notice, setNotice] = useState<{

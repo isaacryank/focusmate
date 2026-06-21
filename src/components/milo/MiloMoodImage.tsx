@@ -7,6 +7,7 @@ import {
 } from 'react-native';
 
 import { MiloMood } from '../../lib/miloPersonality';
+import { useFocusMateTheme } from '../../theme/FocusMateThemeProvider';
 
 const miloImages: Record<MiloMood, ImageSourcePropType> = {
   idle: require('../../../assets/mascot/milo_idle.png'),
@@ -31,6 +32,8 @@ export default function MiloMoodImage({
   size?: number;
   style?: StyleProp<ImageStyle>;
 }) {
+  useFocusMateTheme();
+
   const motion = React.useRef(new Animated.Value(0)).current;
 
   React.useEffect(() => {

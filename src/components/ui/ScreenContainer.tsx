@@ -9,6 +9,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { theme } from '../../theme';
+import { useFocusMateTheme } from '../../theme/FocusMateThemeProvider';
 
 type ScreenContainerProps = {
   children: React.ReactNode;
@@ -31,6 +32,8 @@ export default function ScreenContainer({
   style,
   contentStyle,
 }: ScreenContainerProps) {
+  useFocusMateTheme();
+
   const insets = useSafeAreaInsets();
 
   const innerStyle = [

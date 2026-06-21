@@ -4,6 +4,7 @@ import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 
 import { theme } from '../theme';
+import { useFocusMateTheme } from '../theme/FocusMateThemeProvider';
 import { useTasks } from '../lib/TaskContext';
 import { useFocus } from '../lib/FocusContext';
 import { Task } from '../types/task';
@@ -229,6 +230,8 @@ function InsightCard({
 }
 
 export default function AnalyticsScreen() {
+  useFocusMateTheme();
+
   const navigation = useNavigation<any>();
   const { tasks } = useTasks();
   const { focusSessions, totalFocusMinutes, clearFocusSessions } = useFocus();

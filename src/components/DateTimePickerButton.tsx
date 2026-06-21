@@ -12,6 +12,7 @@ import DateTimePicker, {
 import { Ionicons } from '@expo/vector-icons';
 
 import { theme } from '../theme';
+import { useFocusMateTheme } from '../theme/FocusMateThemeProvider';
 import {
   dateFromStorage,
   formatDateForStorage,
@@ -36,6 +37,8 @@ export default function DateTimePickerButton({
   placeholder,
   onChange,
 }: DateTimePickerButtonProps) {
+  useFocusMateTheme();
+
   const [isPickerVisible, setIsPickerVisible] = useState(false);
 
   const pickerValue = useMemo(() => {

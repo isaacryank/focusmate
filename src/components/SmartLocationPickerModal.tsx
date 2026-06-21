@@ -16,6 +16,7 @@ import { Ionicons } from '@expo/vector-icons';
 import MapView, { Marker, Region } from 'react-native-maps';
 
 import { theme } from '../theme';
+import { useFocusMateTheme } from '../theme/FocusMateThemeProvider';
 import {
   createCoordinatePlace,
   createManualPlace,
@@ -82,6 +83,8 @@ export default function SmartLocationPickerModal({
   onCancel,
   onSave,
 }: Props) {
+  useFocusMateTheme();
+
   const [query, setQuery] = useState('');
   const [selectedPlace, setSelectedPlace] = useState<LocationPlace | null>(null);
   const [searchResults, setSearchResults] = useState<LocationPlace[]>([]);

@@ -3,6 +3,7 @@ import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
 import { theme } from '../../theme';
+import { useFocusMateTheme } from '../../theme/FocusMateThemeProvider';
 import { Task } from '../../types/task';
 import { getTaskUrgency } from '../../lib/taskUrgency';
 
@@ -55,6 +56,8 @@ export default function PlannerItemCard({
   onToggle,
   compact = false,
 }: PlannerItemCardProps) {
+  useFocusMateTheme();
+
   const typeAccent = getTypeAccent(task);
   const statusAccent = getStatusAccent(task);
   const urgency = getTaskUrgency(task);

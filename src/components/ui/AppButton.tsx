@@ -8,6 +8,7 @@ import {
 } from 'react-native';
 
 import { theme } from '../../theme';
+import { useFocusMateTheme } from '../../theme/FocusMateThemeProvider';
 
 type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger';
 
@@ -28,6 +29,8 @@ export default function AppButton({
   loading = false,
   disabled = false,
 }: AppButtonProps) {
+  useFocusMateTheme();
+
   const buttonStyle =
     variant === 'primary'
       ? styles.primaryButton

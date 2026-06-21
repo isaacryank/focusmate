@@ -27,6 +27,7 @@ import { getTodayDate } from '../lib/miloPersonality';
 import { getTaskUrgency } from '../lib/taskUrgency';
 import { useTasks } from '../lib/TaskContext';
 import { theme } from '../theme';
+import { useFocusMateTheme } from '../theme/FocusMateThemeProvider';
 import { Task } from '../types/task';
 
 import ScreenContainer from '../components/ui/ScreenContainer';
@@ -65,38 +66,35 @@ const typeLabels: Record<Task['plannerType'], string> = {
   date: 'Date',
 };
 
-const typeTone: Record<
-  Task['plannerType'],
-  {
-    color: string;
-    backgroundColor: string;
-    iconBackground: string;
-    chipBackground: string;
-    iconName: React.ComponentProps<typeof Ionicons>['name'];
+function getTypeTone(plannerType: Task['plannerType']) {
+  if (plannerType === 'meeting') {
+    return {
+      color: theme.colors.purple,
+      backgroundColor: theme.colors.card,
+      iconBackground: theme.colors.purple,
+      chipBackground: theme.colors.purpleSoft,
+      iconName: 'people-outline' as const,
+    };
   }
-> = {
-  task: {
-    color: theme.colors.primaryDark,
-    backgroundColor: 'rgba(231,248,237,0.72)',
+
+  if (plannerType === 'date') {
+    return {
+      color: theme.colors.warning,
+      backgroundColor: theme.colors.card,
+      iconBackground: theme.colors.warning,
+      chipBackground: theme.colors.warningSoft,
+      iconName: 'calendar-outline' as const,
+    };
+  }
+
+  return {
+    color: theme.colors.primary,
+    backgroundColor: theme.colors.card,
     iconBackground: theme.colors.primary,
-    chipBackground: '#DDF7E8',
-    iconName: 'book-outline',
-  },
-  meeting: {
-    color: theme.colors.purple,
-    backgroundColor: 'rgba(240,236,255,0.76)',
-    iconBackground: theme.colors.purple,
-    chipBackground: '#EEE8FF',
-    iconName: 'people-outline',
-  },
-  date: {
-    color: '#D97706',
-    backgroundColor: 'rgba(255,246,217,0.78)',
-    iconBackground: '#F59E0B',
-    chipBackground: '#FFE9BF',
-    iconName: 'calendar-outline',
-  },
-};
+    chipBackground: theme.colors.primarySoft,
+    iconName: 'book-outline' as const,
+  };
+}
 
 const indicatorColors: Record<IndicatorTone, string> = {
   task: theme.colors.primaryDark,
@@ -495,7 +493,7 @@ function TimelineItem({
   onJoinMeeting: (url: string) => void;
   conflictChip?: ConflictChipInfo;
 }) {
-  const tone = typeTone[item.plannerType];
+  const tone = getTypeTone(item.plannerType);
   const urgency = getTaskUrgency(item);
   const isDone = item.status === 'completed';
   const showUrgencyChip =
@@ -539,7 +537,15 @@ function TimelineItem({
         <View style={[styles.routeLineBottom, isLast && styles.routeLineHidden]} />
       </View>
 
-      <View style={[styles.timelineMainCard, { backgroundColor: tone.backgroundColor }]}>
+      <View
+        style={[
+          styles.timelineMainCard,
+          {
+            backgroundColor: tone.backgroundColor,
+            borderColor: tone.chipBackground,
+          },
+        ]}
+      >
         <View style={styles.timelineTimeColumn}>
           <Text style={[styles.timelineTime, { color: tone.color }]}>
             {item.dueTime || 'Anytime'}
@@ -771,6 +777,8 @@ function MonthCalendarModal({
 }
 
 export default function CalendarScreen() {
+  const { isDark } = useFocusMateTheme();
+
   const navigation = useNavigation<any>();
   const { tasks, toggleTask } = useTasks();
   const { width } = useWindowDimensions();
@@ -880,11 +888,11 @@ export default function CalendarScreen() {
         </View>
       </View>
 
-      <View style={styles.heroCard}>
-        <View style={styles.heroGlowLarge} />
-        <View style={styles.heroGlowSmall} />
+      <View style={[styles.heroCard, isDark && styles.heroCardDark]}>
+        <View style={[styles.heroGlowLarge, isDark && styles.heroGlowLargeDark]} />
+        <View style={[styles.heroGlowSmall, isDark && styles.heroGlowSmallDark]} />
         <View style={[styles.heroCopy, { maxWidth: compactWidth ? 170 : 194 }]}>
-          <View style={styles.moodPill}>
+          <View style={[styles.moodPill, isDark && styles.moodPillDark]}>
             <Ionicons name="sparkles" size={13} color={theme.colors.primaryDark} />
             <Text style={styles.moodPillText}>{hero.moodLabel}</Text>
           </View>
@@ -1005,7 +1013,7 @@ export default function CalendarScreen() {
           tone={{
             color: theme.colors.danger,
             backgroundColor: theme.colors.dangerSoft,
-            iconBackground: '#FFE0E0',
+            iconBackground: theme.colors.dangerSoft,
           }}
         />
         <SummaryTile
@@ -1014,8 +1022,8 @@ export default function CalendarScreen() {
           iconName="time"
           tone={{
             color: '#D97706',
-            backgroundColor: '#FFF4DF',
-            iconBackground: '#FFE8B8',
+            backgroundColor: theme.colors.warningSoft,
+            iconBackground: theme.colors.warningSoft,
           }}
         />
         <SummaryTile
@@ -1025,7 +1033,7 @@ export default function CalendarScreen() {
           tone={{
             color: theme.colors.primaryDark,
             backgroundColor: theme.colors.primarySoft,
-            iconBackground: '#D7F4E0',
+            iconBackground: theme.colors.primarySoft,
           }}
         />
       </View>
@@ -1114,6 +1122,11 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     ...theme.shadowSoft,
   },
+  heroCardDark: {
+    backgroundColor: '#12362E',
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+  },
   heroGlowLarge: {
     position: 'absolute',
     right: -50,
@@ -1123,6 +1136,9 @@ const styles = StyleSheet.create({
     borderRadius: 89,
     backgroundColor: 'rgba(255,255,255,0.35)',
   },
+  heroGlowLargeDark: {
+    backgroundColor: 'rgba(0,168,132,0.18)',
+  },
   heroGlowSmall: {
     position: 'absolute',
     right: 96,
@@ -1131,6 +1147,9 @@ const styles = StyleSheet.create({
     height: 70,
     borderRadius: 35,
     backgroundColor: 'rgba(255,255,255,0.24)',
+  },
+  heroGlowSmallDark: {
+    backgroundColor: 'rgba(0,168,132,0.12)',
   },
   heroCopy: {
     flex: 1,
@@ -1147,6 +1166,11 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     marginBottom: 10,
+  },
+  moodPillDark: {
+    backgroundColor: theme.colors.primarySoft,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
   },
   moodPillText: {
     marginLeft: 5,
@@ -1195,7 +1219,7 @@ const styles = StyleSheet.create({
   dateItem: {
     height: 60,
     borderRadius: 14,
-    backgroundColor: '#FCFEFC',
+    backgroundColor: theme.colors.input,
     paddingVertical: 6,
     marginRight: DATE_ITEM_GAP,
     alignItems: 'center',
@@ -1264,9 +1288,11 @@ const styles = StyleSheet.create({
   },
   timelineCard: {
     borderRadius: 26,
-    backgroundColor: theme.colors.surface,
+    backgroundColor: theme.colors.card,
     padding: 12,
     marginBottom: 12,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
     ...theme.shadowSoft,
   },
   timelineHeader: {
@@ -1285,7 +1311,7 @@ const styles = StyleSheet.create({
   viewDayButton: {
     minHeight: 30,
     borderRadius: theme.radius.pill,
-    backgroundColor: '#F2FAF5',
+    backgroundColor: theme.colors.primarySoft,
     paddingHorizontal: 9,
     flexDirection: 'row',
     alignItems: 'center',
@@ -1366,6 +1392,7 @@ const styles = StyleSheet.create({
     paddingVertical: 7,
     flexDirection: 'row',
     alignItems: 'center',
+    borderWidth: 1,
   },
   timelineTimeColumn: {
     width: 54,
@@ -1422,7 +1449,7 @@ const styles = StyleSheet.create({
   urgencyChip: {
     maxWidth: 78,
     borderRadius: theme.radius.pill,
-    backgroundColor: 'rgba(255,255,255,0.66)',
+    backgroundColor: theme.colors.card,
     paddingHorizontal: 5,
     paddingVertical: 1,
     marginLeft: 3,
@@ -1445,16 +1472,16 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   conflictChipWarning: {
-    backgroundColor: '#FFF4DF',
-    borderColor: '#FED7AA',
+    backgroundColor: theme.colors.warningSoft,
+    borderColor: theme.colors.inputBorder,
   },
   conflictChipActive: {
     backgroundColor: theme.colors.dangerSoft,
-    borderColor: '#FECACA',
+    borderColor: theme.colors.inputBorder,
   },
   conflictChipCalm: {
     backgroundColor: theme.colors.successSoft,
-    borderColor: '#BBF7D0',
+    borderColor: theme.colors.inputBorder,
   },
   conflictChipText: {
     flexShrink: 1,
@@ -1495,7 +1522,7 @@ const styles = StyleSheet.create({
     width: 28,
     height: 28,
     borderRadius: 14,
-    backgroundColor: 'rgba(255,255,255,0.68)',
+    backgroundColor: theme.colors.card,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -1503,7 +1530,9 @@ const styles = StyleSheet.create({
     minWidth: 40,
     minHeight: 26,
     borderRadius: theme.radius.pill,
-    backgroundColor: 'rgba(255,255,255,0.72)',
+    backgroundColor: theme.colors.card,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
     paddingHorizontal: 7,
     flexDirection: 'row',
     alignItems: 'center',
@@ -1607,7 +1636,7 @@ const styles = StyleSheet.create({
   noteCard: {
     minHeight: 88,
     borderRadius: 22,
-    backgroundColor: '#E5F8EC',
+    backgroundColor: theme.colors.cardSoft,
     padding: 9,
     flexDirection: 'row',
     alignItems: 'center',

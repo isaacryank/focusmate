@@ -3,6 +3,7 @@ import { StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
 import { theme } from '../../theme';
+import { useFocusMateTheme } from '../../theme/FocusMateThemeProvider';
 
 type NoticeType = 'success' | 'info' | 'warning' | 'error';
 
@@ -49,6 +50,8 @@ export default function NoticeCard({
   title,
   message,
 }: NoticeCardProps) {
+  useFocusMateTheme();
+
   const config = getNoticeConfig(type);
 
   return (

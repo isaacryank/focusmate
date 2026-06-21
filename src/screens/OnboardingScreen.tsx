@@ -14,6 +14,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 
 import { theme } from '../theme';
+import { useFocusMateTheme } from '../theme/FocusMateThemeProvider';
 import ScreenContainer from '../components/ui/ScreenContainer';
 import AppButton from '../components/ui/AppButton';
 
@@ -36,6 +37,8 @@ type Slide = {
 };
 
 export default function OnboardingScreen({ onFinish }: OnboardingScreenProps) {
+  useFocusMateTheme();
+
   const { width } = useWindowDimensions();
   const listRef = useRef<FlatList<Slide>>(null);
   const [activeIndex, setActiveIndex] = useState(0);

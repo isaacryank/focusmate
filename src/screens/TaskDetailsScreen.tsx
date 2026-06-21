@@ -14,6 +14,7 @@ import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 
 import { RootStackParamList } from '../types/navigation';
 import { theme } from '../theme';
+import { useFocusMateTheme } from '../theme/FocusMateThemeProvider';
 import { useTasks } from '../lib/TaskContext';
 import { getMiloReaction } from '../lib/miloReaction';
 import { openLocationInMaps } from '../lib/mapUtils';
@@ -473,6 +474,8 @@ function CompactButton({
 }
 
 export default function TaskDetailsScreen({ navigation, route }: Props) {
+  useFocusMateTheme();
+
   const { tasks, toggleTask, deleteTask } = useTasks();
   const [activeTab, setActiveTab] = useState<DetailTab>('plan');
   const [showAllPlanSteps, setShowAllPlanSteps] = useState(false);

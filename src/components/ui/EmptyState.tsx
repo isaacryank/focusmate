@@ -9,6 +9,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 
 import { theme } from '../../theme';
+import { useFocusMateTheme } from '../../theme/FocusMateThemeProvider';
 import AppButton from './AppButton';
 
 type EmptyStateProps = {
@@ -26,6 +27,8 @@ export default function EmptyState({
   actionLabel,
   onActionPress,
 }: EmptyStateProps) {
+  useFocusMateTheme();
+
   return (
     <View style={styles.card}>
       <Image source={imageSource} style={styles.image} resizeMode="contain" />

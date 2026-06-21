@@ -3,6 +3,7 @@ import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
 import { theme } from '../../theme';
+import { useFocusMateTheme } from '../../theme/FocusMateThemeProvider';
 
 type SectionHeaderProps = {
   title: string;
@@ -17,6 +18,8 @@ export default function SectionHeader({
   actionLabel,
   onActionPress,
 }: SectionHeaderProps) {
+  useFocusMateTheme();
+
   return (
     <View style={styles.container}>
       <View style={styles.textArea}>

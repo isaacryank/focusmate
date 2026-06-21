@@ -11,6 +11,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 
 import { theme } from '../theme';
+import { useFocusMateTheme } from '../theme/FocusMateThemeProvider';
 
 const miloFocusedImage = require('../../assets/mascot/milo_focused.png');
 const miloHappyImage = require('../../assets/mascot/milo_happy.png');
@@ -115,6 +116,8 @@ function ArchitectureStep({
 }
 
 export default function IntegrationCenterScreen() {
+  useFocusMateTheme();
+
   return (
     <SafeAreaView style={styles.safeArea}>
       <ScrollView

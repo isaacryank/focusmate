@@ -13,6 +13,7 @@ import { useFocusEffect, useNavigation } from '@react-navigation/native';
 
 import ScreenContainer from '../components/ui/ScreenContainer';
 import { theme } from '../theme';
+import { useFocusMateTheme } from '../theme/FocusMateThemeProvider';
 import {
   clearMiloChatSessions,
   deleteMiloChatSession,
@@ -36,6 +37,8 @@ function formatSessionTime(value: string) {
 }
 
 export default function MiloChatHistoryScreen() {
+  useFocusMateTheme();
+
   const navigation = useNavigation<any>();
   const [sessions, setSessions] = useState<MiloChatSession[]>([]);
   const [isLoading, setIsLoading] = useState(true);

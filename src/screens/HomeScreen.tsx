@@ -37,6 +37,7 @@ import { useAuth } from '../lib/AuthContext';
 import { useTasks } from '../lib/TaskContext';
 import { Task } from '../types/task';
 import { theme } from '../theme';
+import { useFocusMateTheme } from '../theme/FocusMateThemeProvider';
 
 import EmptyState from '../components/ui/EmptyState';
 import ScreenContainer from '../components/ui/ScreenContainer';
@@ -60,19 +61,19 @@ const typeTone: Record<
   { backgroundColor: string; color: string; chipBackground: string }
 > = {
   task: {
-    backgroundColor: '#DFF7E8',
+    backgroundColor: theme.colors.cardSoft,
     color: theme.colors.primaryDark,
-    chipBackground: '#EAFBF0',
+    chipBackground: theme.colors.primarySoft,
   },
   meeting: {
-    backgroundColor: '#EEE8FF',
+    backgroundColor: theme.colors.purpleSoft,
     color: theme.colors.purple,
     chipBackground: theme.colors.purpleSoft,
   },
   date: {
-    backgroundColor: '#FFF0D9',
+    backgroundColor: theme.colors.warningSoft,
     color: '#B7791F',
-    chipBackground: '#FFF6E8',
+    chipBackground: theme.colors.warningSoft,
   },
 };
 
@@ -166,7 +167,7 @@ function getMiloSticker(
 
 function getUrgencyColors(urgency: TaskUrgency) {
   if (urgency.level === 'urgent') {
-    return { color: '#D97706', backgroundColor: '#FFF2DC' };
+    return { color: '#D97706', backgroundColor: theme.colors.warningSoft };
   }
 
   if (urgency.level === 'medium') {
@@ -197,7 +198,7 @@ function getSituationColors(situation: MiloTaskSituation, urgency: TaskUrgency) 
     case 'happening_now':
     case 'starting_soon':
     case 'high_focus':
-      return { color: '#D97706', backgroundColor: '#FFF2DC' };
+      return { color: '#D97706', backgroundColor: theme.colors.warningSoft };
     case 'accepted_overlap':
       return { color: '#92400E', backgroundColor: theme.colors.yellowSoft };
     case 'due_today':
@@ -264,7 +265,7 @@ function CountChip({
     tone === 'danger'
       ? { color: theme.colors.danger, backgroundColor: theme.colors.dangerSoft }
       : tone === 'today'
-      ? { color: '#D97706', backgroundColor: '#FFF2DC' }
+      ? { color: '#D97706', backgroundColor: theme.colors.warningSoft }
       : { color: theme.colors.primaryDark, backgroundColor: theme.colors.primarySoft };
   const iconName =
     tone === 'danger'
@@ -348,18 +349,18 @@ function QuickActionButton({
     tone === 'join'
       ? {
           backgroundColor: theme.colors.purpleSoft,
-          borderColor: '#DED6FF',
+          borderColor: theme.colors.inputBorder,
           color: theme.colors.purple,
         }
       : tone === 'maps'
       ? {
-          backgroundColor: theme.colors.surface,
-          borderColor: '#CBEFD8',
+          backgroundColor: theme.colors.card,
+          borderColor: theme.colors.inputBorder,
           color: theme.colors.primaryDark,
         }
       : {
           backgroundColor: theme.colors.primarySoft,
-          borderColor: '#CBEFD8',
+          borderColor: theme.colors.inputBorder,
           color: theme.colors.primaryDark,
         };
 
@@ -523,6 +524,8 @@ function MiloTaskRow({
 }
 
 export default function HomeScreen() {
+  const { isDark } = useFocusMateTheme();
+
   const navigation = useNavigation<any>();
   const { userName } = useAuth();
   const { tasks } = useTasks();
@@ -711,14 +714,18 @@ export default function HomeScreen() {
       <View
         style={[
           styles.heroCard,
-          { minHeight: compactWidth ? 232 : 244, backgroundColor: hero.heroTint },
+          {
+            minHeight: compactWidth ? 232 : 244,
+            backgroundColor: isDark ? '#12362E' : hero.heroTint,
+          },
+          isDark && styles.heroCardDark,
         ]}
       >
-        <View style={styles.heroCircleLarge} />
-        <View style={styles.heroCircleSmall} />
+        <View style={[styles.heroCircleLarge, isDark && styles.heroCircleLargeDark]} />
+        <View style={[styles.heroCircleSmall, isDark && styles.heroCircleSmallDark]} />
 
         <View style={[styles.heroCopy, { maxWidth: compactWidth ? 176 : 194 }]}>
-          <View style={styles.moodPill}>
+          <View style={[styles.moodPill, isDark && styles.moodPillDark]}>
             <Ionicons name="heart" size={13} color={theme.colors.primaryDark} />
             <Text style={styles.moodPillText}>{hero.moodLabel}</Text>
           </View>
@@ -816,8 +823,8 @@ export default function HomeScreen() {
             subtitle="planned"
             tone={{
               color: theme.colors.primaryDark,
-              backgroundColor: '#F3FCF6',
-              iconBackground: '#E3F8EA',
+              backgroundColor: theme.colors.cardSoft,
+              iconBackground: theme.colors.primarySoft,
             }}
           />
           <StatCard
@@ -827,8 +834,8 @@ export default function HomeScreen() {
             subtitle="calls"
             tone={{
               color: theme.colors.purple,
-              backgroundColor: '#F7F4FF',
-              iconBackground: '#EDE7FF',
+              backgroundColor: theme.colors.purpleSoft,
+              iconBackground: theme.colors.purpleSoft,
             }}
           />
           <StatCard
@@ -838,8 +845,8 @@ export default function HomeScreen() {
             subtitle="events"
             tone={{
               color: '#D97706',
-              backgroundColor: '#FFF8EA',
-              iconBackground: '#FFF0CC',
+              backgroundColor: theme.colors.warningSoft,
+              iconBackground: theme.colors.warningSoft,
             }}
           />
           <StatCard
@@ -849,7 +856,7 @@ export default function HomeScreen() {
             subtitle="progress"
             tone={{
               color: theme.colors.blue,
-              backgroundColor: '#F3F9FF',
+              backgroundColor: theme.colors.blueSoft,
               iconBackground: theme.colors.blueSoft,
             }}
           />
@@ -994,6 +1001,10 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     ...theme.shadowSoft,
   },
+  heroCardDark: {
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+  },
   heroCircleLarge: {
     position: 'absolute',
     right: -48,
@@ -1003,6 +1014,9 @@ const styles = StyleSheet.create({
     borderRadius: 89,
     backgroundColor: 'rgba(255,255,255,0.34)',
   },
+  heroCircleLargeDark: {
+    backgroundColor: 'rgba(0,168,132,0.18)',
+  },
   heroCircleSmall: {
     position: 'absolute',
     right: 98,
@@ -1011,6 +1025,9 @@ const styles = StyleSheet.create({
     height: 68,
     borderRadius: 34,
     backgroundColor: 'rgba(255,255,255,0.24)',
+  },
+  heroCircleSmallDark: {
+    backgroundColor: 'rgba(0,168,132,0.12)',
   },
   heroCopy: {
     flex: 1,
@@ -1027,6 +1044,11 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     marginBottom: 10,
+  },
+  moodPillDark: {
+    backgroundColor: theme.colors.primarySoft,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
   },
   moodPillText: {
     marginLeft: 5,
@@ -1072,7 +1094,7 @@ const styles = StyleSheet.create({
     minWidth: 0,
     minHeight: 38,
     borderRadius: theme.radius.pill,
-    backgroundColor: theme.colors.surface,
+    backgroundColor: theme.colors.card,
     paddingLeft: 11,
     paddingRight: 9,
     flexDirection: 'row',
@@ -1103,9 +1125,11 @@ const styles = StyleSheet.create({
   },
   glanceCard: {
     borderRadius: 26,
-    backgroundColor: theme.colors.surface,
+    backgroundColor: theme.colors.card,
     padding: 14,
     marginBottom: 20,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
     ...theme.shadowSoft,
   },
   sectionTitleRow: {
@@ -1148,7 +1172,7 @@ const styles = StyleSheet.create({
     paddingBottom: 7,
     alignItems: 'flex-start',
     borderWidth: 1,
-    borderColor: 'rgba(232,237,242,0.68)',
+    borderColor: theme.colors.border,
   },
   statIconWrap: {
     width: 30,
@@ -1197,11 +1221,11 @@ const styles = StyleSheet.create({
   },
   actionCard: {
     borderRadius: 28,
-    backgroundColor: theme.colors.surface,
+    backgroundColor: theme.colors.card,
     padding: 14,
     marginBottom: 14,
     borderWidth: 1,
-    borderColor: '#DDEBE2',
+    borderColor: theme.colors.border,
     ...theme.shadowSoft,
   },
   actionHeader: {
@@ -1222,7 +1246,7 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     backgroundColor: theme.colors.primarySoft,
     borderWidth: 1,
-    borderColor: '#CBEFD8',
+    borderColor: theme.colors.inputBorder,
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 9,
@@ -1249,7 +1273,7 @@ const styles = StyleSheet.create({
     borderRadius: theme.radius.pill,
     backgroundColor: theme.colors.primarySoft,
     borderWidth: 1,
-    borderColor: '#CBEFD8',
+    borderColor: theme.colors.inputBorder,
     paddingHorizontal: 12,
     paddingVertical: 7,
     marginLeft: 10,
@@ -1267,13 +1291,13 @@ const styles = StyleSheet.create({
   itemRow: {
     minHeight: 92,
     borderRadius: 22,
-    backgroundColor: '#FBFEFC',
+    backgroundColor: theme.colors.surface,
     marginBottom: 8,
     padding: 8,
     flexDirection: 'row',
     alignItems: 'stretch',
     borderWidth: 1,
-    borderColor: '#DDEBE2',
+    borderColor: theme.colors.border,
   },
   itemPressArea: {
     flex: 1,
@@ -1290,7 +1314,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginRight: 9,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.82)',
+    borderColor: theme.colors.border,
   },
   miloThumbImage: {
     width: 52,
@@ -1304,9 +1328,9 @@ const styles = StyleSheet.create({
     width: 22,
     height: 22,
     borderRadius: 11,
-    backgroundColor: theme.colors.surface,
+    backgroundColor: theme.colors.card,
     borderWidth: 1,
-    borderColor: '#DDEBE2',
+    borderColor: theme.colors.border,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -1334,9 +1358,9 @@ const styles = StyleSheet.create({
   },
   typeChip: {
     borderRadius: theme.radius.pill,
-    backgroundColor: theme.colors.background,
+    backgroundColor: theme.colors.input,
     borderWidth: 1,
-    borderColor: 'rgba(221,235,226,0.72)',
+    borderColor: theme.colors.inputBorder,
     paddingHorizontal: 7,
     paddingVertical: 3,
   },
@@ -1349,7 +1373,7 @@ const styles = StyleSheet.create({
   itemUrgencyChip: {
     borderRadius: theme.radius.pill,
     borderWidth: 1,
-    borderColor: 'rgba(221,235,226,0.72)',
+    borderColor: theme.colors.inputBorder,
     paddingHorizontal: 7,
     paddingVertical: 3,
     marginLeft: 4,
@@ -1399,15 +1423,15 @@ const styles = StyleSheet.create({
   },
   availabilityChipLocation: {
     backgroundColor: theme.colors.primarySoft,
-    borderColor: '#CBEFD8',
+    borderColor: theme.colors.inputBorder,
   },
   availabilityChipLink: {
     backgroundColor: theme.colors.purpleSoft,
-    borderColor: '#DED6FF',
+    borderColor: theme.colors.inputBorder,
   },
   availabilityChipMuted: {
-    backgroundColor: '#F9FBFA',
-    borderColor: '#E2EEE7',
+    backgroundColor: theme.colors.input,
+    borderColor: theme.colors.inputBorder,
   },
   availabilityChipText: {
     flexShrink: 1,

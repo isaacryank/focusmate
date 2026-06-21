@@ -13,6 +13,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 
 import { theme } from '../theme';
+import { useFocusMateTheme } from '../theme/FocusMateThemeProvider';
 import { useTasks } from '../lib/TaskContext';
 import {
   getMiloRecommendedTasks,
@@ -206,6 +207,8 @@ function EmptyTodayCard({
 }
 
 export default function TodayPlanScreen() {
+  useFocusMateTheme();
+
   const navigation = useNavigation<any>();
   const { tasks } = useTasks();
 
