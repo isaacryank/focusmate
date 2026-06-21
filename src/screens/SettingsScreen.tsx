@@ -919,7 +919,7 @@ export default function SettingsScreen() {
     showDialog({
       title: 'In-app notifications',
       message:
-        'Manage alerts shown inside FocusMate. Reminder Center and planner screens already show active reminder context, while deeper per-category in-app controls are planned for a later phase.',
+        'Alerts shown inside FocusMate. Reminder Center remains the source for active reminders.',
       icon: 'notifications',
       tone: 'info',
       primaryLabel: 'Open Reminder Center',
@@ -935,7 +935,7 @@ export default function SettingsScreen() {
     showDialog({
       title: 'Push notification schedule',
       message:
-        'Set a schedule to turn off push notifications. This is coming soon, so FocusMate will not save a fake quiet schedule in this prototype phase.',
+        'Quiet hours for push notifications are coming later. No schedule is saved yet.',
       icon: 'moon',
       tone: 'info',
       primaryLabel: 'Got it',
@@ -946,7 +946,7 @@ export default function SettingsScreen() {
     showDialog({
       title: 'Device ringtone',
       message:
-        'Device ringtone picker support is coming soon. FocusMate is not using unsupported native ringtone APIs in this phase.',
+        'Device ringtone picker support is coming later.',
       icon: 'musical-notes',
       tone: 'info',
       primaryLabel: 'Got it',
@@ -1053,7 +1053,7 @@ export default function SettingsScreen() {
     showDialog({
       title: 'Reset local FocusMate data?',
       message:
-        'This clears local profile settings, app preferences, prototype feedback, Milo chat history, Milo AI settings, focus history, and local planner/demo data on this device. It will not delete your Supabase account, authentication account, remote user data, or remove the app from your device.',
+        'Clears local profile/settings, app preferences, prototype feedback, Milo chat/history settings, focus history, and local planner/demo data. It will not delete your Supabase/auth account, remote data, or remove the app.',
       icon: 'refresh-circle',
       tone: 'danger',
       primaryLabel: 'Reset local data',
@@ -1084,7 +1084,7 @@ export default function SettingsScreen() {
           showDialog({
             title: 'Local reset complete',
             message:
-              'FocusMate cleared local prototype data on this device and kept your account safe.',
+              'FocusMate cleared local prototype data and kept your account safe.',
             icon: 'checkmark-circle',
             tone: 'info',
             primaryLabel: 'Done',
@@ -1546,29 +1546,18 @@ export default function SettingsScreen() {
       <ModalSheet
         visible={activeModal === 'verify'}
         title="Security check"
-        subtitle="A clear checklist without fake verification."
+        subtitle="A quick safety checklist."
         onClose={() => setActiveModal(null)}
       >
         <InfoPanel
           icon="shield-checkmark"
-          title="FocusMate security posture"
-          message="This screen summarizes what is active now and what remains protected by confirmation flows."
+          title="Security basics"
+          message="Current safeguards in this prototype."
         />
-        <BulletLine>
-          Supabase session is used when an email account is signed in.
-        </BulletLine>
-        <BulletLine>
-          Password changes use Supabase password reset instead of storing secrets
-          in the app.
-        </BulletLine>
-        <BulletLine>
-          Milo task create, update, complete, and delete actions require user
-          confirmation before changing planner data.
-        </BulletLine>
-        <BulletLine>
-          AI Online calls use the Supabase Edge Function, keeping service keys
-          out of the mobile app.
-        </BulletLine>
+        <BulletLine>Signed-in Supabase session.</BulletLine>
+        <BulletLine>Password reset available by email.</BulletLine>
+        <BulletLine>Milo changes need confirmation.</BulletLine>
+        <BulletLine>AI key is not stored in the app.</BulletLine>
       </ModalSheet>
 
       <ModalSheet
@@ -1577,26 +1566,11 @@ export default function SettingsScreen() {
         subtitle="What FocusMate stores and how Milo AI is protected."
         onClose={() => setActiveModal(null)}
       >
-        <InfoText>
-          FocusMate stores task data for the signed-in user through Supabase when
-          an account session is available. Some prototype preferences, including
-          username, gender, birthday, local display name, language, and theme
-          choice, accessibility, and sound controls, are stored locally on this
-          device.
-        </InfoText>
-        <BulletLine>
-          Milo AI Online uses the Supabase Edge Function securely.
-        </BulletLine>
-        <BulletLine>
-          The OpenAI key is not stored inside the mobile app.
-        </BulletLine>
-        <BulletLine>
-          Local Milo Brain can still work when AI Online is off or unavailable.
-        </BulletLine>
-        <BulletLine>
-          Task create, update, and delete actions from Milo require user
-          confirmation before they are applied.
-        </BulletLine>
+        <BulletLine>Tasks are scoped to your signed-in account.</BulletLine>
+        <BulletLine>Some settings are stored locally on this device.</BulletLine>
+        <BulletLine>AI Online uses the Supabase Edge Function.</BulletLine>
+        <BulletLine>OpenAI key is not stored in the app.</BulletLine>
+        <BulletLine>Milo actions require confirmation.</BulletLine>
       </ModalSheet>
 
       <ModalSheet
@@ -1626,17 +1600,8 @@ export default function SettingsScreen() {
               />
             </View>
             <InfoText>
-              You have logged {formatMinutes(wellbeingSummary.minutes)} across{' '}
-              {wellbeingSummary.sessions} focus session
-              {wellbeingSummary.sessions === 1 ? '' : 's'}, completed{' '}
-              {plannerSummary.completed} task
-              {plannerSummary.completed === 1 ? '' : 's'}, and still have{' '}
-              {plannerSummary.pending} pending planner item
-              {plannerSummary.pending === 1 ? '' : 's'}.
-            </InfoText>
-            <InfoText>
-              This summary uses saved focus sessions and planner items already in
-              FocusMate. No fake streaks or placeholder numbers are added.
+              Real data only: focus time, sessions, completed tasks, and pending
+              tasks.
             </InfoText>
           </>
         ) : (
@@ -1651,17 +1616,17 @@ export default function SettingsScreen() {
         )}
 
         <SectionCard title="Wellbeing tips">
-          <BulletLine>Take short breaks between deep work blocks.</BulletLine>
-          <BulletLine>Avoid overloading your day with too many priorities.</BulletLine>
-          <BulletLine>Use Focus Mode when you need distraction-free work time.</BulletLine>
-          <BulletLine>Let Milo help prepare tasks before starting.</BulletLine>
+          <BulletLine>Take breaks.</BulletLine>
+          <BulletLine>Avoid overloading your day.</BulletLine>
+          <BulletLine>Use Focus Mode.</BulletLine>
+          <BulletLine>Prepare tasks with Milo.</BulletLine>
         </SectionCard>
       </ModalSheet>
 
       <ModalSheet
         visible={activeModal === 'notifications'}
         title="Notifications"
-        subtitle="Choose how FocusMate keeps reminders intentional."
+        subtitle="Reminder controls and quiet-time placeholders."
         onClose={() => setActiveModal(null)}
       >
         <View style={styles.modalActionCard}>
@@ -1675,7 +1640,7 @@ export default function SettingsScreen() {
           />
           <ModalActionRow
             title="Push notification schedule"
-            subtitle="Set a schedule to turn off push notifications."
+            subtitle="Quiet schedule coming soon."
             icon="moon"
             iconColor="#6366F1"
             iconBackground="#EEF0FF"
@@ -1683,7 +1648,7 @@ export default function SettingsScreen() {
           />
           <ModalActionRow
             title="Reminder Center"
-            subtitle="View active and upcoming task reminders."
+            subtitle="Active and upcoming reminders."
             icon="alarm"
             iconColor="#FF8A00"
             iconBackground="#FFF1DF"
@@ -1698,13 +1663,13 @@ export default function SettingsScreen() {
       <ModalSheet
         visible={activeModal === 'sound'}
         title="Sound & vibration"
-        subtitle="Prototype controls saved locally on this device."
+        subtitle="Local prototype controls."
         onClose={() => setActiveModal(null)}
       >
         <InfoPanel
           icon="volume-high"
           title="Reminder feedback"
-          message="These controls save your preference without calling unsupported ringtone or audio APIs."
+          message="Saved locally for now."
         />
         <View style={styles.toggleCard}>
           <PreferenceToggleRow
@@ -1728,7 +1693,7 @@ export default function SettingsScreen() {
         <View style={styles.modalActionCard}>
           <ModalActionRow
             title="Device ringtone"
-            subtitle="Device ringtone picker support is coming soon."
+            subtitle="Picker support coming later."
             icon="musical-notes"
             iconColor="#FB5B7D"
             iconBackground="#FFECEF"
@@ -1764,7 +1729,8 @@ export default function SettingsScreen() {
           />
         </View>
         <InfoText>
-          Full app-wide dark theme will be added in a later phase.
+          Dark theme is saved as a preference. Full app-wide dark mode will come
+          later.
         </InfoText>
       </ModalSheet>
 
@@ -1789,7 +1755,7 @@ export default function SettingsScreen() {
           />
         </View>
         <InfoText>
-          Full app-wide translation will be added in a later phase.
+          Malay is saved as a preference. Full translation will come later.
         </InfoText>
       </ModalSheet>
 
@@ -1802,7 +1768,7 @@ export default function SettingsScreen() {
         <InfoPanel
           icon="accessibility"
           title="Accessibility preferences"
-          message="These accessibility preferences are saved locally. Full app-wide support will be expanded later."
+          message="Saved locally for now. App-wide accessibility support will expand later."
         />
 
         <Text style={styles.modalSectionLabel}>Text size</Text>
@@ -1827,7 +1793,7 @@ export default function SettingsScreen() {
         <View style={styles.toggleCard}>
           <PreferenceToggleRow
             title="Reduce motion"
-            subtitle="Save a preference for calmer motion when full support is added."
+            subtitle="Calmer motion preference."
             value={localPreferences.reduceMotion}
             onValueChange={(value) =>
               void handleSavePreferences({ reduceMotion: value })
@@ -1836,7 +1802,7 @@ export default function SettingsScreen() {
           <View style={styles.toggleDivider} />
           <PreferenceToggleRow
             title="High contrast"
-            subtitle="Save a preference for stronger visual contrast later."
+            subtitle="Stronger contrast preference."
             value={localPreferences.highContrast}
             onValueChange={(value) =>
               void handleSavePreferences({ highContrast: value })
@@ -1854,17 +1820,17 @@ export default function SettingsScreen() {
         <InfoPanel
           icon="location"
           title="Task location support"
-          message="FocusMate can store task or meeting locations so Milo can keep venue context near your plans."
+          message="Store task and meeting locations."
         />
         <InfoPanel
           icon="map"
           title="Open in Maps"
-          message="Current task and meeting location actions use the device map app through React Native Linking."
+          message="Open saved locations in your device Maps app."
         />
         <InfoPanel
           icon="navigate-circle"
           title="Location permissions"
-          message="The task location picker handles current-location permission when you use it. A full Settings permission status panel is coming soon."
+          message="Permission-based location settings are coming later."
         />
       </ModalSheet>
 
@@ -1874,31 +1840,29 @@ export default function SettingsScreen() {
         subtitle="A quick FocusMate walkthrough."
         onClose={() => setActiveModal(null)}
       >
-        <SectionCard title="Getting started">
-          <BulletLine>Create a task from the plus button.</BulletLine>
-          <BulletLine>Add date, time, reminder, priority, and location if needed.</BulletLine>
+        <SectionCard title="Create tasks">
+          <BulletLine>Add title, date, reminder, priority, and location.</BulletLine>
         </SectionCard>
 
-        <SectionCard title="Smart planning">
-          <BulletLine>Open a task and use Plan Prep to generate a Milo Smart Plan.</BulletLine>
-          <BulletLine>Start Focus remains separate from Plan Prep.</BulletLine>
+        <SectionCard title="Plan with Milo">
+          <BulletLine>Use Plan Prep before starting Focus Mode.</BulletLine>
         </SectionCard>
 
         <SectionCard title="Talk with Milo">
-          <BulletLine>Ask Milo about tasks, planning, focus, and reminders.</BulletLine>
-          <BulletLine>Milo may use AI Online or Local Milo Brain depending on settings.</BulletLine>
+          <BulletLine>Ask about tasks, focus, planning, and reminders.</BulletLine>
+          <BulletLine>Milo uses AI Online or Local Brain based on settings.</BulletLine>
         </SectionCard>
 
         <SectionCard title="Focus Mode">
-          <BulletLine>Choose a task, start a focus session, and review focus history.</BulletLine>
+          <BulletLine>Choose a task, focus, then review history.</BulletLine>
         </SectionCard>
 
         <SectionCard title="Reminders">
-          <BulletLine>Use Reminder Center to view active and upcoming reminders.</BulletLine>
+          <BulletLine>Use Reminder Center for active and upcoming reminders.</BulletLine>
         </SectionCard>
 
         <SectionCard title="Safety">
-          <BulletLine>Milo task changes require confirmation before being applied.</BulletLine>
+          <BulletLine>Milo task changes always need your confirmation.</BulletLine>
         </SectionCard>
       </ModalSheet>
 
@@ -1909,8 +1873,7 @@ export default function SettingsScreen() {
         onClose={() => setActiveModal(null)}
       >
         <InfoText>
-          A backend feedback inbox is not connected yet. This form stores
-          feedback locally on this device for FYP demo review.
+          Stored locally for prototype review. No backend submission yet.
         </InfoText>
 
         <Text style={styles.modalSectionLabel}>Feedback type</Text>
@@ -1987,17 +1950,16 @@ export default function SettingsScreen() {
         </View>
 
         <SectionCard title="Milo Brain">
-          <BulletLine>Hybrid AI companion for planning, reminders, and focus.</BulletLine>
-          <BulletLine>Local Milo Brain works offline or on-device for core replies.</BulletLine>
-          <BulletLine>AI Online uses a Supabase Edge Function securely.</BulletLine>
-          <BulletLine>OpenAI key is not stored inside the mobile app.</BulletLine>
-          <BulletLine>Task create, update, and delete actions require confirmation.</BulletLine>
-          <BulletLine>Local fallback keeps core features working if AI is unavailable.</BulletLine>
+          <BulletLine>Hybrid Milo Brain.</BulletLine>
+          <BulletLine>Local fallback for core features.</BulletLine>
+          <BulletLine>AI Online uses Supabase Edge Function.</BulletLine>
+          <BulletLine>OpenAI key is not stored in the app.</BulletLine>
+          <BulletLine>Task changes require confirmation.</BulletLine>
         </SectionCard>
 
         <SectionCard title="Tech note">
-          <BulletLine>Built with React Native and Expo.</BulletLine>
-          <BulletLine>Supabase is used for authentication and data.</BulletLine>
+          <BulletLine>Built with React Native + Expo.</BulletLine>
+          <BulletLine>Supabase for authentication and data.</BulletLine>
         </SectionCard>
       </ModalSheet>
 
