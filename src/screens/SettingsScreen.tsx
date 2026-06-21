@@ -3,7 +3,6 @@ import React, { useCallback, useMemo, useState } from 'react';
 import {
   Image,
   KeyboardAvoidingView,
-  Linking,
   Modal,
   Platform,
   Pressable,
@@ -69,6 +68,7 @@ type SettingsModal =
 type AppearancePreference = 'system' | 'light' | 'dark';
 type LanguagePreference = 'english' | 'ms';
 type TextSizePreference = 'small' | 'default' | 'large';
+type FeedbackType = 'bug' | 'suggestion' | 'aiIssue' | 'other';
 
 type DialogTone = 'info' | 'confirm' | 'danger';
 
@@ -89,6 +89,17 @@ type LocalPreferences = {
   reminderSoundEnabled: boolean;
 };
 
+type FeedbackDraft = {
+  type: FeedbackType;
+  message: string;
+  contactEmail: string;
+};
+
+type LocalFeedbackEntry = FeedbackDraft & {
+  id: string;
+  createdAt: string;
+};
+
 type SettingsDialog = {
   title: string;
   message: string;
@@ -105,6 +116,7 @@ const miloAvatarImage = require('../../assets/mascot/milo_avatar.png');
 const APP_VERSION = '1.0.0';
 const LOCAL_PROFILE_STORAGE_KEY = '@focusmate/settings/local-profile';
 const LOCAL_PREFERENCES_STORAGE_KEY = '@focusmate/settings/preferences';
+const LOCAL_FEEDBACK_STORAGE_KEY = '@focusmate/settings/feedback';
 
 const DEFAULT_LOCAL_PROFILE: LocalProfile = {
   displayName: '',
@@ -121,6 +133,12 @@ const DEFAULT_LOCAL_PREFERENCES: LocalPreferences = {
   highContrast: false,
   vibrationEnabled: false,
   reminderSoundEnabled: true,
+};
+
+const DEFAULT_FEEDBACK_DRAFT: FeedbackDraft = {
+  type: 'bug',
+  message: '',
+  contactEmail: '',
 };
 
 const mainGreen = theme.colors.primaryDark;
@@ -215,6 +233,23 @@ async function saveLocalPreferences(preferences: LocalPreferences) {
   );
 }
 
+async function saveLocalFeedback(entry: LocalFeedbackEntry) {
+  const stored = await AsyncStorage.getItem(LOCAL_FEEDBACK_STORAGE_KEY);
+  let existingFeedback: LocalFeedbackEntry[] = [];
+
+  try {
+    const parsed = stored ? JSON.parse(stored) : [];
+    existingFeedback = Array.isArray(parsed) ? parsed : [];
+  } catch (error) {
+    console.log('Failed to load local feedback:', error);
+  }
+
+  await AsyncStorage.setItem(
+    LOCAL_FEEDBACK_STORAGE_KEY,
+    JSON.stringify([entry, ...existingFeedback].slice(0, 25))
+  );
+}
+
 function getAppearanceLabel(value: AppearancePreference) {
   if (value === 'light') return 'Light';
   if (value === 'dark') return 'Dark';
@@ -229,6 +264,13 @@ function getTextSizeLabel(value: TextSizePreference) {
   if (value === 'small') return 'Small';
   if (value === 'large') return 'Large';
   return 'Default';
+}
+
+function getFeedbackTypeLabel(value: FeedbackType) {
+  if (value === 'suggestion') return 'Suggestion';
+  if (value === 'aiIssue') return 'AI issue';
+  if (value === 'other') return 'Other';
+  return 'Bug';
 }
 
 function formatMinutes(minutes: number) {
@@ -653,6 +695,10 @@ export default function SettingsScreen() {
   const [focusHistory, setFocusHistory] = useState<FocusSessionHistoryItem[]>(
     []
   );
+  const [feedbackDraft, setFeedbackDraft] = useState<FeedbackDraft>(
+    DEFAULT_FEEDBACK_DRAFT
+  );
+  const [isSavingFeedback, setIsSavingFeedback] = useState(false);
   const [isMiloAiSettingsVisible, setIsMiloAiSettingsVisible] = useState(false);
   const [isResetting, setIsResetting] = useState(false);
 
@@ -758,6 +804,13 @@ export default function SettingsScreen() {
     }));
   };
 
+  const updateFeedbackDraft = (partial: Partial<FeedbackDraft>) => {
+    setFeedbackDraft((current) => ({
+      ...current,
+      ...partial,
+    }));
+  };
+
   const handleSaveProfileDraft = async () => {
     const nextProfile: LocalProfile = {
       displayName: profileDraft.displayName.trim() || authDisplayName,
@@ -800,6 +853,66 @@ export default function SettingsScreen() {
   const handleSelectLanguage = async (language: LanguagePreference) => {
     await handleSavePreferences({ language });
     setActiveModal(null);
+  };
+
+  const handleOpenFeedback = () => {
+    setFeedbackDraft({
+      ...DEFAULT_FEEDBACK_DRAFT,
+      contactEmail: accountEmail,
+    });
+    setActiveModal('feedback');
+  };
+
+  const handleSubmitFeedback = async () => {
+    const message = feedbackDraft.message.trim();
+    const contactEmail = feedbackDraft.contactEmail.trim();
+
+    if (!message) {
+      showDialog({
+        title: 'Add a message',
+        message: 'Please describe the bug, suggestion, AI issue, or other feedback before saving.',
+        icon: 'chatbox-ellipses',
+        tone: 'info',
+        primaryLabel: 'Got it',
+      });
+      return;
+    }
+
+    setIsSavingFeedback(true);
+
+    try {
+      await saveLocalFeedback({
+        id: `${Date.now()}`,
+        createdAt: new Date().toISOString(),
+        type: feedbackDraft.type,
+        message,
+        contactEmail,
+      });
+
+      setFeedbackDraft({
+        ...DEFAULT_FEEDBACK_DRAFT,
+        contactEmail: accountEmail,
+      });
+      setActiveModal(null);
+      showDialog({
+        title: 'Feedback saved locally',
+        message: 'Feedback saved locally for this prototype phase.',
+        icon: 'checkmark-circle',
+        tone: 'info',
+        primaryLabel: 'Done',
+      });
+    } catch (error) {
+      showDialog({
+        title: 'Could not save feedback',
+        message:
+          'FocusMate could not save this feedback locally. Please try again.',
+        icon: 'alert-circle',
+        tone: 'info',
+        primaryLabel: 'Got it',
+      });
+    } finally {
+      setIsSavingFeedback(false);
+    }
   };
 
   const handleOpenInAppNotifications = () => {
@@ -912,37 +1025,6 @@ export default function SettingsScreen() {
     });
   };
 
-  const handleOpenFeedbackEmail = async () => {
-    const url =
-      'mailto:?subject=FocusMate%20feedback&body=Hi%20Isaac%2C%0A%0AI%20want%20to%20share%20feedback%20about%20FocusMate%3A%0A';
-
-    try {
-      const canOpen = await Linking.canOpenURL(url);
-
-      if (!canOpen) {
-        showDialog({
-          title: 'Email app not found',
-          message: 'You can still collect feedback in your FYP notes for now.',
-          icon: 'mail',
-          tone: 'info',
-          primaryLabel: 'Got it',
-        });
-        return;
-      }
-
-      await Linking.openURL(url);
-    } catch (error) {
-      showDialog({
-        title: 'Could not open email',
-        message:
-          'The feedback placeholder is ready, but the email app did not open.',
-        icon: 'mail',
-        tone: 'info',
-        primaryLabel: 'Got it',
-      });
-    }
-  };
-
   const handleSignOut = () => {
     showDialog({
       title: 'Sign out?',
@@ -971,7 +1053,7 @@ export default function SettingsScreen() {
     showDialog({
       title: 'Reset local FocusMate data?',
       message:
-        'This clears local planner cache, focus history, Milo chat history, Milo AI preferences, and settings preferences on this device. Your Supabase account and remote user data are not deleted.',
+        'This clears local profile settings, app preferences, prototype feedback, Milo chat history, Milo AI settings, focus history, and local planner/demo data on this device. It will not delete your Supabase account, authentication account, remote user data, or remove the app from your device.',
       icon: 'refresh-circle',
       tone: 'danger',
       primaryLabel: 'Reset local data',
@@ -988,15 +1070,21 @@ export default function SettingsScreen() {
           const nextAiSettings = await resetMiloAiSettings();
           await AsyncStorage.removeItem(LOCAL_PROFILE_STORAGE_KEY);
           await AsyncStorage.removeItem(LOCAL_PREFERENCES_STORAGE_KEY);
+          await AsyncStorage.removeItem(LOCAL_FEEDBACK_STORAGE_KEY);
 
           setLocalProfile(DEFAULT_LOCAL_PROFILE);
           setProfileDraft(DEFAULT_LOCAL_PROFILE);
           setLocalPreferences(DEFAULT_LOCAL_PREFERENCES);
+          setFeedbackDraft({
+            ...DEFAULT_FEEDBACK_DRAFT,
+            contactEmail: accountEmail,
+          });
           setMiloAiSettings(nextAiSettings);
           setFocusHistory([]);
           showDialog({
             title: 'Local reset complete',
-            message: 'FocusMate cleared local demo data and kept your account safe.',
+            message:
+              'FocusMate cleared local prototype data on this device and kept your account safe.',
             icon: 'checkmark-circle',
             tone: 'info',
             primaryLabel: 'Done',
@@ -1181,7 +1269,7 @@ export default function SettingsScreen() {
           icon="chatbox-ellipses"
           iconColor="#FF7A1A"
           iconBackground="#FFF1E6"
-          onPress={() => setActiveModal('feedback')}
+          onPress={handleOpenFeedback}
         />
         <SettingsRow
           title="About FocusMate"
@@ -1529,14 +1617,23 @@ export default function SettingsScreen() {
                 value={`${wellbeingSummary.sessions}`}
               />
               <StatPill
-                label="Pending items"
-                value={`${plannerSummary.pending}`}
+                label="Completed tasks"
+                value={`${plannerSummary.completed}`}
               />
               <StatPill
-                label="Reminders"
-                value={`${plannerSummary.reminders}`}
+                label="Pending tasks"
+                value={`${plannerSummary.pending}`}
               />
             </View>
+            <InfoText>
+              You have logged {formatMinutes(wellbeingSummary.minutes)} across{' '}
+              {wellbeingSummary.sessions} focus session
+              {wellbeingSummary.sessions === 1 ? '' : 's'}, completed{' '}
+              {plannerSummary.completed} task
+              {plannerSummary.completed === 1 ? '' : 's'}, and still have{' '}
+              {plannerSummary.pending} pending planner item
+              {plannerSummary.pending === 1 ? '' : 's'}.
+            </InfoText>
             <InfoText>
               This summary uses saved focus sessions and planner items already in
               FocusMate. No fake streaks or placeholder numbers are added.
@@ -1547,11 +1644,18 @@ export default function SettingsScreen() {
             <Ionicons name="leaf-outline" size={28} color={mainGreen} />
             <Text style={styles.emptyInfoTitle}>No activity yet</Text>
             <Text style={styles.emptyInfoText}>
-              Start Focus Mode or create planner items and Milo will summarize
-              real activity here.
+              Start focus sessions and complete tasks to build your wellbeing
+              summary.
             </Text>
           </View>
         )}
+
+        <SectionCard title="Wellbeing tips">
+          <BulletLine>Take short breaks between deep work blocks.</BulletLine>
+          <BulletLine>Avoid overloading your day with too many priorities.</BulletLine>
+          <BulletLine>Use Focus Mode when you need distraction-free work time.</BulletLine>
+          <BulletLine>Let Milo help prepare tasks before starting.</BulletLine>
+        </SectionCard>
       </ModalSheet>
 
       <ModalSheet
@@ -1770,28 +1874,99 @@ export default function SettingsScreen() {
         subtitle="A quick FocusMate walkthrough."
         onClose={() => setActiveModal(null)}
       >
-        <BulletLine>Create tasks, dates, or meetings from the center plus button.</BulletLine>
-        <BulletLine>Use Calendar to review upcoming planner items by date.</BulletLine>
-        <BulletLine>Talk with Milo for planning help, task updates, and gentle guidance.</BulletLine>
-        <BulletLine>Open Plan Prep from task details when a task needs a smart plan.</BulletLine>
-        <BulletLine>Start Focus Mode when you want Milo to help you stay locked in.</BulletLine>
+        <SectionCard title="Getting started">
+          <BulletLine>Create a task from the plus button.</BulletLine>
+          <BulletLine>Add date, time, reminder, priority, and location if needed.</BulletLine>
+        </SectionCard>
+
+        <SectionCard title="Smart planning">
+          <BulletLine>Open a task and use Plan Prep to generate a Milo Smart Plan.</BulletLine>
+          <BulletLine>Start Focus remains separate from Plan Prep.</BulletLine>
+        </SectionCard>
+
+        <SectionCard title="Talk with Milo">
+          <BulletLine>Ask Milo about tasks, planning, focus, and reminders.</BulletLine>
+          <BulletLine>Milo may use AI Online or Local Milo Brain depending on settings.</BulletLine>
+        </SectionCard>
+
+        <SectionCard title="Focus Mode">
+          <BulletLine>Choose a task, start a focus session, and review focus history.</BulletLine>
+        </SectionCard>
+
+        <SectionCard title="Reminders">
+          <BulletLine>Use Reminder Center to view active and upcoming reminders.</BulletLine>
+        </SectionCard>
+
+        <SectionCard title="Safety">
+          <BulletLine>Milo task changes require confirmation before being applied.</BulletLine>
+        </SectionCard>
       </ModalSheet>
 
       <ModalSheet
         visible={activeModal === 'feedback'}
         title="Report / feedback"
-        subtitle="Prototype-friendly feedback capture."
+        subtitle="Saved locally for this prototype phase."
         onClose={() => setActiveModal(null)}
       >
         <InfoText>
-          A backend feedback inbox is not connected yet. For now, FocusMate can
-          open an email draft or you can record feedback in your FYP notes.
+          A backend feedback inbox is not connected yet. This form stores
+          feedback locally on this device for FYP demo review.
         </InfoText>
+
+        <Text style={styles.modalSectionLabel}>Feedback type</Text>
+        <View style={styles.optionStack}>
+          <OptionButton
+            label="Bug"
+            selected={feedbackDraft.type === 'bug'}
+            onPress={() => updateFeedbackDraft({ type: 'bug' })}
+          />
+          <OptionButton
+            label="Suggestion"
+            selected={feedbackDraft.type === 'suggestion'}
+            onPress={() => updateFeedbackDraft({ type: 'suggestion' })}
+          />
+          <OptionButton
+            label="AI issue"
+            selected={feedbackDraft.type === 'aiIssue'}
+            onPress={() => updateFeedbackDraft({ type: 'aiIssue' })}
+          />
+          <OptionButton
+            label="Other"
+            selected={feedbackDraft.type === 'other'}
+            onPress={() => updateFeedbackDraft({ type: 'other' })}
+          />
+        </View>
+
+        <Text style={styles.fieldLabel}>Message</Text>
+        <TextInput
+          style={[styles.textInput, styles.textAreaInput]}
+          value={feedbackDraft.message}
+          onChangeText={(value) => updateFeedbackDraft({ message: value })}
+          placeholder={`Describe the ${getFeedbackTypeLabel(
+            feedbackDraft.type
+          ).toLowerCase()}...`}
+          placeholderTextColor={theme.colors.muted}
+          multiline
+          textAlignVertical="top"
+        />
+
+        <Text style={styles.fieldLabel}>Contact email optional</Text>
+        <TextInput
+          style={styles.textInput}
+          value={feedbackDraft.contactEmail}
+          onChangeText={(value) => updateFeedbackDraft({ contactEmail: value })}
+          placeholder="you@example.com"
+          placeholderTextColor={theme.colors.muted}
+          autoCapitalize="none"
+          keyboardType="email-address"
+        />
+
         <AppButton
-          title="Open email draft"
-          variant="secondary"
-          onPress={() => void handleOpenFeedbackEmail()}
-          icon={<Ionicons name="mail-outline" size={17} color={mainGreen} />}
+          title="Submit feedback"
+          disabled={isSavingFeedback}
+          loading={isSavingFeedback}
+          onPress={() => void handleSubmitFeedback()}
+          icon={<Ionicons name="save-outline" size={17} color="#FFFFFF" />}
         />
       </ModalSheet>
 
@@ -1805,18 +1980,25 @@ export default function SettingsScreen() {
           <Image source={miloAvatarImage} style={styles.aboutMilo} />
           <View style={styles.aboutCopy}>
             <Text style={styles.aboutTitle}>FocusMate</Text>
-            <Text style={styles.aboutText}>FYP prototype - v{APP_VERSION}</Text>
+            <Text style={styles.aboutText}>Version {APP_VERSION}</Text>
             <Text style={styles.aboutText}>Made by Isaac Ryan</Text>
+            <Text style={styles.aboutText}>Final Year Project prototype</Text>
           </View>
         </View>
-        <BulletLine>Milo Brain uses hybrid AI.</BulletLine>
-        <BulletLine>OpenAI key is not stored in the app.</BulletLine>
-        <BulletLine>
-          AI Online uses a Supabase Edge Function securely.
-        </BulletLine>
-        <BulletLine>
-          Local fallback keeps core FocusMate features working.
-        </BulletLine>
+
+        <SectionCard title="Milo Brain">
+          <BulletLine>Hybrid AI companion for planning, reminders, and focus.</BulletLine>
+          <BulletLine>Local Milo Brain works offline or on-device for core replies.</BulletLine>
+          <BulletLine>AI Online uses a Supabase Edge Function securely.</BulletLine>
+          <BulletLine>OpenAI key is not stored inside the mobile app.</BulletLine>
+          <BulletLine>Task create, update, and delete actions require confirmation.</BulletLine>
+          <BulletLine>Local fallback keeps core features working if AI is unavailable.</BulletLine>
+        </SectionCard>
+
+        <SectionCard title="Tech note">
+          <BulletLine>Built with React Native and Expo.</BulletLine>
+          <BulletLine>Supabase is used for authentication and data.</BulletLine>
+        </SectionCard>
       </ModalSheet>
 
       <ModalSheet
@@ -2296,6 +2478,11 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '800',
     marginBottom: 14,
+  },
+  textAreaInput: {
+    minHeight: 120,
+    paddingTop: 13,
+    lineHeight: 20,
   },
   fieldLabel: {
     marginLeft: 4,
