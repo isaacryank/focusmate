@@ -13,7 +13,6 @@ import {
 } from 'react-native';
 import * as Location from 'expo-location';
 import { Ionicons } from '@expo/vector-icons';
-import MapView, { Marker, Region } from 'react-native-maps';
 
 import { theme } from '../theme';
 import { useFocusMateTheme } from '../theme/FocusMateThemeProvider';
@@ -26,6 +25,11 @@ import {
   LocationPlace,
   searchPlaces,
 } from '../lib/locationPickerUtils';
+import LocationMapView from './LocationMapView';
+import type {
+  LocationMapPressEvent,
+  LocationMapRegion,
+} from './LocationMapView.types';
 import MiloMoodImage from './milo/MiloMoodImage';
 
 type PermissionState =
@@ -44,14 +48,16 @@ type Props = {
   onSave: (location: string, place: LocationPlace) => void;
 };
 
-const DEFAULT_REGION: Region = {
+const DEFAULT_REGION: LocationMapRegion = {
   latitude: 2.313,
   longitude: 102.318,
   latitudeDelta: 0.06,
   longitudeDelta: 0.06,
 };
 
-function regionFromCoordinates(coordinates: LocationCoordinates): Region {
+function regionFromCoordinates(
+  coordinates: LocationCoordinates
+): LocationMapRegion {
   return {
     latitude: coordinates.latitude,
     longitude: coordinates.longitude,
@@ -96,7 +102,7 @@ export default function SmartLocationPickerModal({
   const [permissionMessage, setPermissionMessage] = useState('');
   const [currentCoordinates, setCurrentCoordinates] =
     useState<LocationCoordinates | null>(null);
-  const [region, setRegion] = useState<Region>(DEFAULT_REGION);
+  const [region, setRegion] = useState<LocationMapRegion>(DEFAULT_REGION);
   const [mapReady, setMapReady] = useState(false);
   const canRenderMap = Platform.OS !== 'web';
 
@@ -330,9 +336,7 @@ export default function SmartLocationPickerModal({
     setSearchMessage('');
   };
 
-  const handleMapPress = async (event: {
-    nativeEvent: { coordinate: LocationCoordinates };
-  }) => {
+  const handleMapPress = async (event: LocationMapPressEvent) => {
     const coordinates = event.nativeEvent.coordinate;
     const pinnedPlace = await buildCoordinatePlace(coordinates, 'map');
 
@@ -474,27 +478,16 @@ export default function SmartLocationPickerModal({
 
             {canRenderMap ? (
               <View style={styles.mapWrap}>
-                <MapView
+                <LocationMapView
                   style={styles.map}
                   region={region}
                   onMapReady={() => setMapReady(true)}
                   onPress={handleMapPress}
-                >
-                  {currentCoordinates ? (
-                    <Marker
-                      coordinate={currentCoordinates}
-                      title="Current location"
-                      pinColor={theme.colors.blue}
-                    />
-                  ) : null}
-                  {selectedCoordinates ? (
-                    <Marker
-                      coordinate={selectedCoordinates}
-                      title={selectedPlace?.name || 'Selected place'}
-                      description={selectedPlace?.address}
-                    />
-                  ) : null}
-                </MapView>
+                  currentCoordinates={currentCoordinates}
+                  selectedCoordinates={selectedCoordinates}
+                  selectedTitle={selectedPlace?.name || 'Selected place'}
+                  selectedDescription={selectedPlace?.address}
+                />
                 {!mapReady ? (
                   <View style={styles.mapLoading}>
                     <ActivityIndicator

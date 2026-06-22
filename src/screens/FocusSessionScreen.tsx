@@ -36,7 +36,6 @@ import { useFocusMateTheme } from '../theme/FocusMateThemeProvider';
 import { useTasks } from '../lib/TaskContext';
 import { useFocus } from '../lib/FocusContext';
 import {
-  appendFocusSessionHistory,
   type FocusSessionHistoryItem,
   type FocusSessionStatus,
 } from '../lib/focusSessionHistory';
@@ -1494,21 +1493,27 @@ export default function FocusSessionScreen() {
       startedAt: number | null;
       wasDistracted: boolean;
     }) => {
-      const roundedDurationMinutes =
-        status === 'completed'
-          ? Math.max(1, Math.round(durationMinutes))
-          : Math.max(0, Math.round(durationMinutes));
+      const sessionStartedAt = startedAt ?? startedAtRef.current;
 
-      const sessionStartedAt = startedAt ?? startedAtRef.current ?? Date.now();
-      const historyKey = `${sessionStartedAt}:${status}`;
+      if (!sessionStartedAt) return;
+
+      const roundedDurationMinutes = Math.max(1, Math.round(durationMinutes));
+      const sessionEndedAt = Date.now();
+      const selectedTaskId = selectedFocusTaskIdRef.current;
+      const historyKey = `focus-${sessionStartedAt}-${
+        selectedTaskId || 'no-task'
+      }-${status}`;
 
       if (recordedFocusHistoryKeysRef.current.has(historyKey)) return;
 
       recordedFocusHistoryKeysRef.current.add(historyKey);
 
-      const selectedTaskId = selectedFocusTaskIdRef.current;
       const selectedTaskTitle =
-        selectedFocusTaskTitleRef.current?.trim() || null;
+        selectedFocusTaskTitleRef.current?.trim() || 'Focus session';
+      const presetName = getPresetDisplayName(
+        selectedPresetRef.current,
+        savedPresets
+      );
       const focusScore = deriveFocusScore({
         durationMinutes: roundedDurationMinutes,
         focusMinutes: timerSettingsRef.current.focusMinutes,
@@ -1517,19 +1522,35 @@ export default function FocusSessionScreen() {
       });
       const session: FocusSessionHistoryItem = {
         id: historyKey,
-        date: new Date().toISOString(),
+        date: new Date(sessionEndedAt).toISOString(),
+        startedAt: new Date(sessionStartedAt).toISOString(),
+        endedAt: new Date(sessionEndedAt).toISOString(),
+        createdAt: new Date(sessionEndedAt).toISOString(),
         durationMinutes: roundedDurationMinutes,
         selectedTaskTitle,
-        ...(selectedTaskId ? { selectedTaskId } : {}),
+        ...(selectedTaskId ? { selectedTaskId, taskId: selectedTaskId } : {}),
+        taskTitle: selectedTaskTitle,
         focusQuality: sessionWasDistracted ? 'distracted' : 'clean',
-        presetName: getPresetDisplayName(selectedPresetRef.current, savedPresets),
+        presetName,
         status,
         focusScore,
       };
 
-      await appendFocusSessionHistory(session);
+      await addFocusSession({
+        id: session.id,
+        taskId: selectedTaskId,
+        taskTitle: selectedTaskTitle,
+        startedAt: session.startedAt,
+        endedAt: session.endedAt,
+        durationMinutes: session.durationMinutes,
+        status,
+        preset: presetName,
+        focusQuality: session.focusQuality,
+        focusScore,
+        createdAt: session.createdAt,
+      });
     },
-    [savedPresets]
+    [addFocusSession, savedPresets]
   );
 
   const appendSessionBlockSummary = useCallback(
@@ -1637,12 +1658,11 @@ export default function FocusSessionScreen() {
           POMODORO_LOGGED_FOCUS_STORAGE_KEY,
           JSON.stringify([logKey, ...storedKeys].slice(0, MAX_LOGGED_FOCUS_KEYS))
         );
-        await addFocusSession(minutes);
       } catch (error) {
         console.log('Failed to log Pomodoro focus session:', error);
       }
     },
-    [addFocusSession]
+    []
   );
 
   const cancelTimerCompletionAlert = useCallback(async () => {

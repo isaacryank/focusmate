@@ -683,7 +683,7 @@ export default function HomeScreen() {
           <View style={styles.headerActions}>
             <TouchableOpacity
               activeOpacity={0.85}
-              style={styles.iconButton}
+              style={[styles.iconButton, !isDark && styles.lightSurfaceDepthSmall]}
               onPress={() => navigation.navigate('ReminderCenter')}
               accessibilityRole="button"
               accessibilityLabel="Open reminders"
@@ -700,7 +700,7 @@ export default function HomeScreen() {
 
             <TouchableOpacity
               activeOpacity={0.85}
-              style={styles.iconButton}
+              style={[styles.iconButton, !isDark && styles.lightSurfaceDepthSmall]}
               onPress={() => navigation.navigate('Tasks')}
               accessibilityRole="button"
               accessibilityLabel="Search planner items"
@@ -719,6 +719,7 @@ export default function HomeScreen() {
             backgroundColor: isDark ? '#12362E' : hero.heroTint,
           },
           isDark && styles.heroCardDark,
+          !isDark && styles.lightSurfaceDepthLarge,
         ]}
       >
         <View style={[styles.heroCircleLarge, isDark && styles.heroCircleLargeDark]} />
@@ -800,7 +801,7 @@ export default function HomeScreen() {
         />
       </View>
 
-      <View style={styles.glanceCard}>
+      <View style={[styles.glanceCard, !isDark && styles.lightSurfaceDepthMedium]}>
         <View style={styles.sectionTitleRow}>
           <Text style={styles.glanceTitle}>Today at a glance</Text>
           <TouchableOpacity
@@ -869,7 +870,7 @@ export default function HomeScreen() {
         </View>
       </View>
 
-      <View style={styles.actionCard}>
+      <View style={[styles.actionCard, !isDark && styles.lightSurfaceDepthMedium]}>
         <View style={styles.actionHeader}>
           <View style={styles.actionHeaderTitle}>
             <View style={styles.headerSparkle}>
@@ -975,6 +976,36 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.11,
     shadowRadius: 16,
     elevation: 5,
+  },
+  lightSurfaceDepthSmall: {
+    shadowColor: '#1F8A4C',
+    shadowOffset: {
+      width: 0,
+      height: 8,
+    },
+    shadowOpacity: 0.12,
+    shadowRadius: 14,
+    elevation: 4,
+  },
+  lightSurfaceDepthMedium: {
+    shadowColor: '#1F8A4C',
+    shadowOffset: {
+      width: 0,
+      height: 12,
+    },
+    shadowOpacity: 0.11,
+    shadowRadius: 18,
+    elevation: 6,
+  },
+  lightSurfaceDepthLarge: {
+    shadowColor: '#1F8A4C',
+    shadowOffset: {
+      width: 0,
+      height: 16,
+    },
+    shadowOpacity: 0.13,
+    shadowRadius: 22,
+    elevation: 7,
   },
   badge: {
     position: 'absolute',

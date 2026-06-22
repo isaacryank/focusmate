@@ -31,6 +31,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { theme } from '../theme';
 import { useFocusMateTheme } from '../theme/FocusMateThemeProvider';
+import { useAuth } from '../lib/AuthContext';
 import { useTasks } from '../lib/TaskContext';
 import { useFocus } from '../lib/FocusContext';
 import { openLocationInMaps } from '../lib/mapUtils';
@@ -66,6 +67,7 @@ import {
 import {
   archiveCurrentMiloChat,
   clearCurrentMiloChat,
+  loadCurrentMiloChat,
   loadMiloChatSession,
   saveCurrentMiloChat,
   type MiloChatStorageMessage,
@@ -1476,6 +1478,7 @@ export default function MiloChatScreen() {
   const navigation = useNavigation<any>();
   const route = useRoute<RouteProp<RootStackParamList, 'MiloChat'>>();
   const insets = useSafeAreaInsets();
+  const { user } = useAuth();
   const { tasks, addTask, updateTask, toggleTask, deleteTask } = useTasks();
   const { focusSessions } = useFocus();
   const talkScrollRef = useRef<ScrollView | null>(null);
@@ -1569,7 +1572,7 @@ export default function MiloChatScreen() {
     );
 
     if (!hasStoredUserMessage) {
-      await clearCurrentMiloChat();
+      await clearCurrentMiloChat(user?.id);
       return;
     }
 
@@ -1579,7 +1582,7 @@ export default function MiloChatScreen() {
       activeSessionIdRef.current &&
       storageSignature === loadedStoredSignatureRef.current
     ) {
-      await clearCurrentMiloChat();
+      await clearCurrentMiloChat(user?.id);
       return;
     }
 
@@ -1587,7 +1590,8 @@ export default function MiloChatScreen() {
 
     const archivedSession = await archiveCurrentMiloChat(
       storedMessages,
-      activeSessionIdRef.current
+      activeSessionIdRef.current,
+      user?.id
     );
 
     if (archivedSession) {
@@ -1597,8 +1601,8 @@ export default function MiloChatScreen() {
       );
     }
 
-    await clearCurrentMiloChat();
-  }, []);
+    await clearCurrentMiloChat(user?.id);
+  }, [user?.id]);
 
   useEffect(() => {
     let isCancelled = false;
@@ -1613,11 +1617,11 @@ export default function MiloChatScreen() {
         let loadedSessionId: string | null = null;
 
         if (sessionId) {
-          const selectedSession = await loadMiloChatSession(sessionId);
+          const selectedSession = await loadMiloChatSession(sessionId, user?.id);
           storedMessages = selectedSession?.messages || [];
           loadedSessionId = selectedSession?.id || null;
         } else {
-          await clearCurrentMiloChat();
+          storedMessages = await loadCurrentMiloChat(user?.id);
         }
 
         if (isCancelled || !mountedRef.current) {
@@ -1658,7 +1662,7 @@ export default function MiloChatScreen() {
     return () => {
       isCancelled = true;
     };
-  }, [route.params?.sessionId]);
+  }, [route.params?.sessionId, user?.id]);
 
   useEffect(() => {
     latestMessagesRef.current = chatMessages;
@@ -1675,9 +1679,9 @@ export default function MiloChatScreen() {
         );
 
         if (hasStoredUserMessage) {
-          await saveCurrentMiloChat(storedMessages);
+          await saveCurrentMiloChat(storedMessages, user?.id);
         } else {
-          await clearCurrentMiloChat();
+          await clearCurrentMiloChat(user?.id);
         }
       } catch (error) {
         console.log('Failed to save Milo chat:', error);
@@ -1685,7 +1689,7 @@ export default function MiloChatScreen() {
     };
 
     void saveStoredChat();
-  }, [chatMessages]);
+  }, [chatMessages, user?.id]);
 
   useFocusEffect(
     useCallback(() => {
@@ -1979,12 +1983,13 @@ export default function MiloChatScreen() {
       if (hasUserMessages) {
         await archiveCurrentMiloChat(
           serializeMiloTalkMessages(chatMessages),
-          activeSessionIdRef.current
+          activeSessionIdRef.current,
+          user?.id
         );
       }
 
       const nextMessages = createInitialMiloTalkMessages();
-      await clearCurrentMiloChat();
+      await clearCurrentMiloChat(user?.id);
       activeSessionIdRef.current = null;
       loadedStoredSignatureRef.current = null;
       latestMessagesRef.current = nextMessages;
@@ -3275,7 +3280,14 @@ export default function MiloChatScreen() {
       return (
         <View key={message.id} style={styles.miloTalkMessageRowUser}>
           <View style={styles.miloTalkUserBubble}>
-            <Text style={styles.miloTalkUserText}>{message.text}</Text>
+            <Text
+              style={[
+                styles.miloTalkUserText,
+                !isDark && styles.miloTalkUserTextLight,
+              ]}
+            >
+              {message.text}
+            </Text>
           </View>
         </View>
       );
@@ -3364,6 +3376,15 @@ export default function MiloChatScreen() {
     );
   };
 
+  const canSendMiloTalkMessage = Boolean(miloTalkInput.trim());
+  const headerBackIconColor = isDark ? theme.colors.text : theme.colors.primaryDark;
+  const headerActionIconColor = theme.colors.primaryDark;
+  const sendIconColor = canSendMiloTalkMessage
+    ? theme.colors.white
+    : isDark
+    ? theme.colors.white
+    : theme.colors.primaryDark;
+
   return (
     <KeyboardAvoidingView
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
@@ -3374,12 +3395,12 @@ export default function MiloChatScreen() {
         <View style={styles.headerSideArea}>
           <TouchableOpacity
             activeOpacity={0.82}
-            style={styles.headerButton}
+            style={[styles.headerButton, !isDark && styles.headerButtonLight]}
             onPress={() => navigation.goBack()}
             accessibilityRole="button"
             accessibilityLabel="Go back"
           >
-            <Ionicons name="chevron-back" size={22} color={theme.colors.text} />
+            <Ionicons name="chevron-back" size={22} color={headerBackIconColor} />
           </TouchableOpacity>
         </View>
 
@@ -3406,6 +3427,7 @@ export default function MiloChatScreen() {
             activeOpacity={0.82}
             style={[
               styles.headerAiSettingsButton,
+              !isDark && styles.headerButtonLight,
               miloAiSettings.aiMode === 'local' &&
                 styles.headerAiSettingsButtonLocal,
             ]}
@@ -3416,13 +3438,16 @@ export default function MiloChatScreen() {
             <Ionicons
               name="options-outline"
               size={17}
-              color={theme.colors.primaryDark}
+              color={headerActionIconColor}
             />
           </TouchableOpacity>
 
           <TouchableOpacity
             activeOpacity={0.82}
-            style={styles.headerNewChatButton}
+            style={[
+              styles.headerNewChatButton,
+              !isDark && styles.headerNewChatButtonLight,
+            ]}
             onPress={() => void handleStartNewChat()}
             accessibilityRole="button"
             accessibilityLabel="Start a new Milo chat"
@@ -3430,26 +3455,100 @@ export default function MiloChatScreen() {
             <Ionicons
               name="add-circle-outline"
               size={17}
-              color={theme.colors.primaryDark}
+              color={headerActionIconColor}
             />
-            <Text style={styles.headerNewChatText}>New</Text>
+            <Text
+              style={[
+                styles.headerNewChatText,
+                !isDark && styles.headerNewChatTextLight,
+              ]}
+            >
+              New
+            </Text>
           </TouchableOpacity>
         </View>
       </View>
 
-      <ScrollView
-        ref={talkScrollRef}
-        style={styles.miloTalkMessageList}
-        contentContainerStyle={[
-          styles.miloTalkMessageListContent,
-          !showMiloTalkSuggestions && styles.miloTalkMessageListContentCompact,
-        ]}
-        keyboardShouldPersistTaps="handled"
-        showsVerticalScrollIndicator={false}
-        onContentSizeChange={scrollTalkToBottom}
-      >
-        {chatMessages.map(renderTalkMessage)}
-      </ScrollView>
+      <View style={styles.miloTalkConversationPane}>
+        <View pointerEvents="none" style={styles.miloTalkWallpaperPattern}>
+          <Ionicons
+            name="leaf-outline"
+            size={54}
+            color={
+              isDark ? 'rgba(255, 255, 255, 0.035)' : 'rgba(35, 107, 53, 0.07)'
+            }
+            style={[styles.wallpaperIcon, styles.wallpaperIconTopLeft]}
+          />
+          <Ionicons
+            name="chatbubble-ellipses-outline"
+            size={48}
+            color={
+              isDark ? 'rgba(0, 168, 132, 0.08)' : 'rgba(47, 143, 70, 0.09)'
+            }
+            style={[styles.wallpaperIcon, styles.wallpaperIconTopRight]}
+          />
+          <Ionicons
+            name="sparkles-outline"
+            size={42}
+            color={
+              isDark ? 'rgba(255, 255, 255, 0.03)' : 'rgba(35, 107, 53, 0.06)'
+            }
+            style={[styles.wallpaperIcon, styles.wallpaperIconMiddleLeft]}
+          />
+          <Ionicons
+            name="timer-outline"
+            size={50}
+            color={
+              isDark ? 'rgba(0, 168, 132, 0.07)' : 'rgba(47, 143, 70, 0.075)'
+            }
+            style={[styles.wallpaperIcon, styles.wallpaperIconMiddleRight]}
+          />
+          <Ionicons
+            name="checkbox-outline"
+            size={46}
+            color={
+              isDark ? 'rgba(255, 255, 255, 0.03)' : 'rgba(35, 107, 53, 0.055)'
+            }
+            style={[styles.wallpaperIcon, styles.wallpaperIconBottomLeft]}
+          />
+          <View
+            style={[
+              styles.wallpaperDot,
+              styles.wallpaperDotOne,
+              {
+                backgroundColor: isDark
+                  ? 'rgba(0, 168, 132, 0.08)'
+                  : 'rgba(47, 143, 70, 0.09)',
+              },
+            ]}
+          />
+          <View
+            style={[
+              styles.wallpaperDot,
+              styles.wallpaperDotTwo,
+              {
+                backgroundColor: isDark
+                  ? 'rgba(255, 255, 255, 0.035)'
+                  : 'rgba(35, 107, 53, 0.065)',
+              },
+            ]}
+          />
+        </View>
+
+        <ScrollView
+          ref={talkScrollRef}
+          style={styles.miloTalkMessageList}
+          contentContainerStyle={[
+            styles.miloTalkMessageListContent,
+            !showMiloTalkSuggestions && styles.miloTalkMessageListContentCompact,
+          ]}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+          onContentSizeChange={scrollTalkToBottom}
+        >
+          {chatMessages.map(renderTalkMessage)}
+        </ScrollView>
+      </View>
 
       <View
         style={[
@@ -3503,16 +3602,20 @@ export default function MiloChatScreen() {
           />
           <TouchableOpacity
             activeOpacity={0.84}
-            disabled={!miloTalkInput.trim()}
+            disabled={!canSendMiloTalkMessage}
             style={[
               styles.miloTalkSendButton,
-              !miloTalkInput.trim() && styles.miloTalkSendButtonDisabled,
+              !isDark && styles.miloTalkSendButtonLightActive,
+              !canSendMiloTalkMessage && styles.miloTalkSendButtonDisabled,
+              !canSendMiloTalkMessage &&
+                !isDark &&
+                styles.miloTalkSendButtonLightDisabled,
             ]}
             onPress={() => void handleSend()}
             accessibilityRole="button"
             accessibilityLabel="Send message to Milo"
           >
-            <Ionicons name="send" size={17} color={theme.colors.white} />
+            <Ionicons name="send" size={17} color={sendIconColor} />
           </TouchableOpacity>
         </View>
 
@@ -3738,7 +3841,7 @@ const styles = StyleSheet.create({
   },
   header: {
     minHeight: 74,
-    backgroundColor: theme.colors.surface,
+    backgroundColor: theme.colors.card,
     borderBottomWidth: 1,
     borderBottomColor: theme.colors.divider,
     flexDirection: 'row',
@@ -3760,22 +3863,33 @@ const styles = StyleSheet.create({
     width: 38,
     height: 38,
     borderRadius: 19,
-    backgroundColor: theme.colors.card,
+    backgroundColor: theme.colors.cardSoft,
     borderWidth: 1,
     borderColor: theme.colors.border,
     alignItems: 'center',
     justifyContent: 'center',
   },
+  headerButtonLight: {
+    backgroundColor: theme.colors.primarySoft,
+    borderColor: theme.colors.inputBorder,
+    shadowColor: theme.colors.primaryDark,
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
+    elevation: 2,
+  },
   headerAiSettingsButton: {
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: theme.colors.card,
+    backgroundColor: theme.colors.cardSoft,
     borderWidth: 1,
     borderColor: theme.colors.border,
     alignItems: 'center',
     justifyContent: 'center',
-    ...theme.shadowSoft,
   },
   headerAiSettingsButtonLocal: {
     backgroundColor: theme.colors.warningSoft,
@@ -3794,10 +3908,17 @@ const styles = StyleSheet.create({
     paddingHorizontal: 9,
     gap: 4,
   },
+  headerNewChatButtonLight: {
+    backgroundColor: theme.colors.primarySoft,
+    borderColor: theme.colors.inputBorder,
+  },
   headerNewChatText: {
     color: theme.colors.primaryDark,
     fontSize: 10,
     fontWeight: '900',
+  },
+  headerNewChatTextLight: {
+    color: theme.colors.primary,
   },
   headerCopy: {
     flex: 1,
@@ -4057,11 +4178,67 @@ const styles = StyleSheet.create({
   miloTalkMessageList: {
     flex: 1,
     minHeight: 0,
+    zIndex: 1,
+  },
+  miloTalkConversationPane: {
+    flex: 1,
+    minHeight: 0,
+    backgroundColor: theme.colors.chatBackground,
+    position: 'relative',
+    overflow: 'hidden',
+  },
+  miloTalkWallpaperPattern: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 0,
+  },
+  wallpaperIcon: {
+    position: 'absolute',
+  },
+  wallpaperIconTopLeft: {
+    top: 22,
+    left: 22,
+    transform: [{ rotate: '-12deg' }],
+  },
+  wallpaperIconTopRight: {
+    top: 88,
+    right: 28,
+    transform: [{ rotate: '14deg' }],
+  },
+  wallpaperIconMiddleLeft: {
+    top: '42%',
+    left: 38,
+    transform: [{ rotate: '18deg' }],
+  },
+  wallpaperIconMiddleRight: {
+    top: '54%',
+    right: 34,
+    transform: [{ rotate: '-10deg' }],
+  },
+  wallpaperIconBottomLeft: {
+    bottom: 86,
+    left: 86,
+    transform: [{ rotate: '-8deg' }],
+  },
+  wallpaperDot: {
+    position: 'absolute',
+    borderRadius: 999,
+  },
+  wallpaperDotOne: {
+    width: 78,
+    height: 78,
+    top: '28%',
+    right: -26,
+  },
+  wallpaperDotTwo: {
+    width: 58,
+    height: 58,
+    bottom: '18%',
+    left: -18,
   },
   miloTalkMessageListContent: {
-    paddingHorizontal: 14,
-    paddingTop: 20,
-    paddingBottom: 28,
+    paddingHorizontal: 12,
+    paddingTop: 18,
+    paddingBottom: 30,
   },
   miloTalkMessageListContentCompact: {
     paddingBottom: 10,
@@ -4069,17 +4246,25 @@ const styles = StyleSheet.create({
   miloTalkMessageRowUser: {
     flexDirection: 'row',
     justifyContent: 'flex-end',
-    marginBottom: 13,
+    marginBottom: 12,
   },
   miloTalkUserBubble: {
-    maxWidth: '84%',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    borderBottomLeftRadius: 20,
-    borderBottomRightRadius: 8,
+    maxWidth: '78%',
+    borderTopLeftRadius: 18,
+    borderTopRightRadius: 18,
+    borderBottomLeftRadius: 18,
+    borderBottomRightRadius: 6,
     backgroundColor: theme.colors.outgoingBubble,
     paddingHorizontal: 13,
-    paddingVertical: 10,
+    paddingVertical: 9,
+    shadowColor: theme.colors.shadow,
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.06,
+    shadowRadius: 4,
+    elevation: 1,
   },
   miloTalkUserText: {
     color: theme.colors.white,
@@ -4087,16 +4272,19 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     lineHeight: 20,
   },
+  miloTalkUserTextLight: {
+    color: theme.colors.primaryDark,
+  },
   miloTalkMessageRowMilo: {
     flexDirection: 'row',
     alignItems: 'flex-start',
-    marginBottom: 13,
-    paddingRight: 18,
+    marginBottom: 12,
+    paddingRight: 16,
   },
   miloTalkMessageAvatar: {
-    width: 40,
-    height: 40,
-    borderRadius: 15,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
     backgroundColor: theme.colors.primarySoft,
     alignItems: 'center',
     justifyContent: 'center',
@@ -4117,15 +4305,23 @@ const styles = StyleSheet.create({
   },
   miloTalkMiloBubble: {
     maxWidth: '100%',
-    borderTopLeftRadius: 8,
-    borderTopRightRadius: 20,
-    borderBottomLeftRadius: 20,
-    borderBottomRightRadius: 20,
+    borderTopLeftRadius: 6,
+    borderTopRightRadius: 18,
+    borderBottomLeftRadius: 18,
+    borderBottomRightRadius: 18,
     backgroundColor: theme.colors.incomingBubble,
     borderWidth: 1,
-    borderColor: theme.colors.border,
+    borderColor: theme.colors.divider,
     paddingHorizontal: 13,
-    paddingVertical: 11,
+    paddingVertical: 10,
+    shadowColor: theme.colors.shadow,
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.045,
+    shadowRadius: 4,
+    elevation: 1,
   },
   miloTalkMiloText: {
     color: theme.colors.text,
@@ -4636,9 +4832,17 @@ const styles = StyleSheet.create({
   miloTalkComposer: {
     borderTopWidth: 1,
     borderTopColor: theme.colors.divider,
-    backgroundColor: theme.colors.surface,
+    backgroundColor: theme.colors.card,
     paddingHorizontal: 12,
-    paddingTop: 12,
+    paddingTop: 10,
+    shadowColor: theme.colors.shadow,
+    shadowOffset: {
+      width: 0,
+      height: -4,
+    },
+    shadowOpacity: 0.06,
+    shadowRadius: 10,
+    elevation: 6,
   },
   miloTalkComposerCompact: {
     paddingTop: 7,
@@ -4651,7 +4855,7 @@ const styles = StyleSheet.create({
   miloTalkSuggestionChip: {
     maxWidth: '100%',
     borderRadius: 999,
-    backgroundColor: theme.colors.card,
+    backgroundColor: theme.colors.input,
     borderWidth: 1,
     borderColor: `${theme.colors.primary}35`,
     flexDirection: 'row',
@@ -4667,10 +4871,10 @@ const styles = StyleSheet.create({
   },
   miloTalkInputRow: {
     marginTop: 10,
-    minHeight: 48,
+    minHeight: 46,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 9,
+    gap: 8,
   },
   miloTalkInputRowCompact: {
     marginTop: 0,
@@ -4678,21 +4882,21 @@ const styles = StyleSheet.create({
   miloTalkInput: {
     flex: 1,
     minWidth: 0,
-    minHeight: 48,
-    borderRadius: 22,
+    minHeight: 46,
+    borderRadius: 23,
     backgroundColor: theme.colors.input,
     borderWidth: 1,
     borderColor: theme.colors.inputBorder,
     color: theme.colors.text,
     fontSize: 13,
     fontWeight: '800',
-    paddingHorizontal: 13,
+    paddingHorizontal: 14,
     paddingVertical: 9,
   },
   miloTalkSendButton: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
+    width: 46,
+    height: 46,
+    borderRadius: 23,
     backgroundColor: theme.colors.primaryDark,
     alignItems: 'center',
     justifyContent: 'center',
@@ -4705,10 +4909,36 @@ const styles = StyleSheet.create({
     shadowRadius: 12,
     elevation: 3,
   },
+  miloTalkSendButtonLightActive: {
+    backgroundColor: theme.colors.primary,
+    borderWidth: 1,
+    borderColor: theme.colors.primary,
+    shadowColor: theme.colors.primaryDark,
+    shadowOffset: {
+      width: 0,
+      height: 3,
+    },
+    shadowOpacity: 0.16,
+    shadowRadius: 9,
+    elevation: 3,
+  },
   miloTalkSendButtonDisabled: {
     backgroundColor: theme.colors.inputBorder,
     shadowOpacity: 0,
     elevation: 0,
+  },
+  miloTalkSendButtonLightDisabled: {
+    backgroundColor: theme.colors.primarySoft,
+    borderWidth: 1,
+    borderColor: theme.colors.inputBorder,
+    shadowColor: theme.colors.primaryDark,
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
+    elevation: 1,
   },
   miloTalkPrototypeFooter: {
     marginTop: 8,

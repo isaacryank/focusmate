@@ -6,20 +6,47 @@ export type FocusSessionQuality = 'clean' | 'distracted';
 export type FocusSessionHistoryItem = {
   id: string;
   date: string;
+  startedAt: string;
+  endedAt: string;
+  createdAt: string;
   durationMinutes: number;
   selectedTaskTitle: string | null;
   selectedTaskId?: string;
+  localTaskId?: string | null;
+  taskTitle: string | null;
+  taskId?: string;
   focusQuality: FocusSessionQuality;
   presetName: string;
   status: FocusSessionStatus;
   focusScore?: number;
 };
 
-const FOCUS_SESSION_HISTORY_STORAGE_KEY = '@focusmate/focus_session_history';
-const MAX_FOCUS_SESSION_HISTORY_ITEMS = 120;
+export type FocusSessionRecord = FocusSessionHistoryItem;
+
+export const FOCUS_SESSION_HISTORY_KEY = '@focusmate/focusSessionHistory/v1';
+const MAX_FOCUS_SESSION_HISTORY_RECORDS = 100;
+const ANONYMOUS_FOCUS_SESSION_HISTORY_STORAGE_KEY = FOCUS_SESSION_HISTORY_KEY;
+const LEGACY_FOCUS_SESSION_HISTORY_STORAGE_KEY =
+  '@focusmate/focus_session_history';
+const LEGACY_FOCUS_SESSIONS_STORAGE_KEY = '@focusmate/focus_sessions';
+
+const getFocusSessionHistoryStorageKey = (userId?: string | null) =>
+  userId
+    ? `${FOCUS_SESSION_HISTORY_KEY}/user:${userId}`
+    : ANONYMOUS_FOCUS_SESSION_HISTORY_STORAGE_KEY;
+
+const getLegacyFocusSessionHistoryStorageKey = (userId?: string | null) =>
+  userId
+    ? `${LEGACY_FOCUS_SESSION_HISTORY_STORAGE_KEY}/user:${userId}`
+    : LEGACY_FOCUS_SESSION_HISTORY_STORAGE_KEY;
+
+const getLegacyFocusSessionsStorageKey = (userId?: string | null) =>
+  userId
+    ? `@focusmate/focus_sessions/user:${userId}`
+    : LEGACY_FOCUS_SESSIONS_STORAGE_KEY;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function isFocusSessionStatus(value: unknown): value is FocusSessionStatus {
@@ -34,44 +61,103 @@ function getCleanString(value: unknown) {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+function getDateText(value: unknown) {
+  const text = getCleanString(value);
+
+  return text && !Number.isNaN(new Date(text).getTime()) ? text : '';
+}
+
+function getNumber(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
 function normalizeFocusSessionHistoryItem(
   value: unknown
 ): FocusSessionHistoryItem | null {
   if (!isRecord(value)) return null;
 
-  const id = getCleanString(value.id);
-  const date = getCleanString(value.date);
-  const presetName = getCleanString(value.presetName) || 'Focus';
-  const durationMinutes =
-    typeof value.durationMinutes === 'number' &&
-    Number.isFinite(value.durationMinutes)
-      ? Math.max(0, Math.round(value.durationMinutes))
-      : 0;
-  const selectedTaskTitle = getCleanString(value.selectedTaskTitle) || null;
-  const selectedTaskId = getCleanString(value.selectedTaskId);
+  const endedAt =
+    getDateText(value.endedAt) ||
+    getDateText(value.date) ||
+    getDateText(value.completedAt) ||
+    getDateText(value.createdAt);
+  const startedAt =
+    getDateText(value.startedAt) || getDateText(value.createdAt) || endedAt;
+  const createdAt = getDateText(value.createdAt) || endedAt || startedAt;
+  const date = getDateText(value.date) || endedAt || startedAt || createdAt;
+
+  if (!date) return null;
+
+  const status = isFocusSessionStatus(value.status)
+    ? value.status
+    : value.completed === false
+    ? 'stopped'
+    : 'completed';
+  const focusQuality = isFocusSessionQuality(value.focusQuality)
+    ? value.focusQuality
+    : 'clean';
+  const durationValue =
+    getNumber(value.durationMinutes) ?? getNumber(value.minutes) ?? 0;
+  const roundedDurationMinutes = Math.round(durationValue);
+
+  if (roundedDurationMinutes <= 0) return null;
+
+  const durationMinutes = Math.max(1, roundedDurationMinutes);
+  const selectedTaskTitle =
+    getCleanString(value.selectedTaskTitle) ||
+    getCleanString(value.taskTitle) ||
+    null;
+  const selectedTaskId =
+    getCleanString(value.selectedTaskId) ||
+    getCleanString(value.taskId) ||
+    getCleanString(value.localTaskId);
+  const localTaskId = getCleanString(value.localTaskId);
+  const presetName =
+    getCleanString(value.presetName) || getCleanString(value.preset) || 'Focus';
   const focusScore =
-    typeof value.focusScore === 'number' && Number.isFinite(value.focusScore)
-      ? Math.round(Math.min(100, Math.max(0, value.focusScore)))
+    getNumber(value.focusScore) !== undefined
+      ? Math.round(Math.min(100, Math.max(0, getNumber(value.focusScore)!)))
       : undefined;
-
-  if (!id || !date || Number.isNaN(new Date(date).getTime())) {
-    return null;
-  }
-
-  if (!isFocusSessionStatus(value.status)) return null;
-  if (!isFocusSessionQuality(value.focusQuality)) return null;
+  const id =
+    getCleanString(value.id) ||
+    `${startedAt || date}:${status}:${durationMinutes}:${selectedTaskId}`;
 
   return {
     id,
     date,
+    startedAt: startedAt || date,
+    endedAt: endedAt || date,
+    createdAt: createdAt || date,
     durationMinutes,
     selectedTaskTitle,
-    ...(selectedTaskId ? { selectedTaskId } : {}),
-    focusQuality: value.focusQuality,
+    ...(selectedTaskId ? { selectedTaskId, taskId: selectedTaskId } : {}),
+    ...(localTaskId ? { localTaskId } : {}),
+    taskTitle: selectedTaskTitle,
+    focusQuality,
     presetName,
-    status: value.status,
+    status,
     ...(focusScore !== undefined ? { focusScore } : {}),
   };
+}
+
+function parseStoredSessions(value: string | null) {
+  if (!value) return [];
+
+  try {
+    const parsed = JSON.parse(value);
+    const rawSessions = Array.isArray(parsed)
+      ? parsed
+      : isRecord(parsed) && Array.isArray(parsed.sessions)
+      ? parsed.sessions
+      : [];
+
+    return rawSessions
+      .map(normalizeFocusSessionHistoryItem)
+      .filter((item): item is FocusSessionHistoryItem => Boolean(item));
+  } catch (error) {
+    console.log('Failed to parse focus session history:', error);
+    return [];
+  }
 }
 
 function sortFocusSessionHistory(
@@ -79,27 +165,130 @@ function sortFocusSessionHistory(
 ): FocusSessionHistoryItem[] {
   return [...sessions].sort(
     (first, second) =>
-      new Date(second.date).getTime() - new Date(first.date).getTime()
+      new Date(second.endedAt || second.date).getTime() -
+      new Date(first.endedAt || first.date).getTime()
   );
 }
 
-export async function getFocusSessionHistory() {
+function areLikelySameSession(
+  first: FocusSessionHistoryItem,
+  second: FocusSessionHistoryItem
+) {
+  const firstEndedAt = new Date(first.endedAt || first.date).getTime();
+  const secondEndedAt = new Date(second.endedAt || second.date).getTime();
+
+  return (
+    first.status === second.status &&
+    first.durationMinutes === second.durationMinutes &&
+    Math.abs(firstEndedAt - secondEndedAt) <= 60 * 1000
+  );
+}
+
+function getSessionRichness(session: FocusSessionHistoryItem) {
+  return [
+    session.startedAt,
+    session.endedAt,
+    session.createdAt,
+    session.taskId,
+    session.taskTitle,
+    session.selectedTaskId,
+    session.selectedTaskTitle,
+    session.presetName !== 'Focus' ? session.presetName : '',
+    session.focusScore,
+  ].filter(Boolean).length;
+}
+
+function mergeSession(
+  current: FocusSessionHistoryItem,
+  incoming: FocusSessionHistoryItem
+): FocusSessionHistoryItem {
+  const richer =
+    getSessionRichness(incoming) > getSessionRichness(current)
+      ? incoming
+      : current;
+  const other = richer === incoming ? current : incoming;
+  const taskId = richer.taskId || richer.selectedTaskId || other.taskId;
+  const localTaskId = richer.localTaskId || other.localTaskId;
+  const taskTitle =
+    richer.taskTitle || richer.selectedTaskTitle || other.taskTitle || null;
+
+  return {
+    ...other,
+    ...richer,
+    ...(taskId ? { taskId, selectedTaskId: taskId } : {}),
+    ...(localTaskId ? { localTaskId } : {}),
+    taskTitle,
+    selectedTaskTitle: taskTitle,
+  };
+}
+
+function mergeFocusSessionHistory(
+  sessions: FocusSessionHistoryItem[]
+): FocusSessionHistoryItem[] {
+  const merged: FocusSessionHistoryItem[] = [];
+
+  sessions.forEach((session) => {
+    const exactIndex = merged.findIndex((item) => item.id === session.id);
+
+    if (exactIndex >= 0) {
+      merged[exactIndex] = mergeSession(merged[exactIndex], session);
+      return;
+    }
+
+    const nearbyIndex = merged.findIndex((item) =>
+      areLikelySameSession(item, session)
+    );
+
+    if (nearbyIndex >= 0) {
+      merged[nearbyIndex] = mergeSession(merged[nearbyIndex], session);
+      return;
+    }
+
+    merged.push(session);
+  });
+
+  return sortFocusSessionHistory(merged);
+}
+
+async function loadSessionsForKey(storageKey: string) {
+  return parseStoredSessions(await AsyncStorage.getItem(storageKey));
+}
+
+export async function getFocusSessionHistory(userId?: string | null) {
   try {
-    const storedHistory = await AsyncStorage.getItem(
-      FOCUS_SESSION_HISTORY_STORAGE_KEY
+    const storageKey = getFocusSessionHistoryStorageKey(userId);
+    const legacyHistoryKey = getLegacyFocusSessionHistoryStorageKey(userId);
+    const legacySimpleKey = getLegacyFocusSessionsStorageKey(userId);
+    const keys = [
+      storageKey,
+      legacyHistoryKey,
+      legacySimpleKey,
+      ...(userId
+        ? [
+            ANONYMOUS_FOCUS_SESSION_HISTORY_STORAGE_KEY,
+            LEGACY_FOCUS_SESSION_HISTORY_STORAGE_KEY,
+            LEGACY_FOCUS_SESSIONS_STORAGE_KEY,
+          ]
+        : []),
+    ];
+    const [primarySessions, ...migrationSources] = await Promise.all(
+      keys.map(loadSessionsForKey)
     );
+    const mergedSessions = mergeFocusSessionHistory([
+      ...primarySessions,
+      ...migrationSources.flat(),
+    ]);
 
-    if (!storedHistory) return [];
+    if (mergedSessions.length > primarySessions.length) {
+      await saveFocusSessionHistory(mergedSessions, userId);
+      console.log(
+        'Migrated focus session count:',
+        mergedSessions.length - primarySessions.length
+      );
+    }
 
-    const parsed = JSON.parse(storedHistory);
-
-    if (!Array.isArray(parsed)) return [];
-
-    return sortFocusSessionHistory(
-      parsed
-        .map(normalizeFocusSessionHistoryItem)
-        .filter((item): item is FocusSessionHistoryItem => Boolean(item))
-    );
+    console.log('Loaded focus session count:', mergedSessions.length);
+    return mergedSessions;
   } catch (error) {
     console.log('Failed to load focus session history:', error);
     return [];
@@ -107,38 +296,76 @@ export async function getFocusSessionHistory() {
 }
 
 export async function saveFocusSessionHistory(
-  sessions: FocusSessionHistoryItem[]
+  sessions: FocusSessionHistoryItem[],
+  userId?: string | null
 ) {
-  const nextSessions = sortFocusSessionHistory(sessions).slice(
+  const nextSessions = mergeFocusSessionHistory(sessions).slice(
     0,
-    MAX_FOCUS_SESSION_HISTORY_ITEMS
+    MAX_FOCUS_SESSION_HISTORY_RECORDS
   );
 
   await AsyncStorage.setItem(
-    FOCUS_SESSION_HISTORY_STORAGE_KEY,
+    getFocusSessionHistoryStorageKey(userId),
     JSON.stringify(nextSessions)
   );
 
+  console.log('Stored focus session count:', nextSessions.length);
   return nextSessions;
 }
 
-export async function appendFocusSessionHistory(
-  session: FocusSessionHistoryItem
+export async function upsertFocusSessionRecord(
+  session: FocusSessionHistoryItem,
+  userId?: string | null
 ) {
   try {
-    const currentSessions = await getFocusSessionHistory();
+    const normalizedSession = normalizeFocusSessionHistoryItem(session);
+    if (!normalizedSession) return await getFocusSessionHistory(userId);
 
-    if (currentSessions.some((item) => item.id === session.id)) {
-      return currentSessions;
-    }
+    const currentSessions = await getFocusSessionHistory(userId);
+    const withoutExisting = currentSessions.filter(
+      (item) => item.id !== normalizedSession.id
+    );
 
-    return await saveFocusSessionHistory([session, ...currentSessions]);
+    return await saveFocusSessionHistory(
+      [normalizedSession, ...withoutExisting],
+      userId
+    );
   } catch (error) {
-    console.log('Failed to save focus session history:', error);
+    console.log('Failed to upsert focus session history:', error);
     return [];
   }
 }
 
-export async function clearFocusSessionHistory() {
-  await AsyncStorage.removeItem(FOCUS_SESSION_HISTORY_STORAGE_KEY);
+export async function saveFocusSessionRecord(
+  session: FocusSessionHistoryItem,
+  userId?: string | null
+) {
+  return upsertFocusSessionRecord(session, userId);
+}
+
+export async function appendFocusSessionHistory(
+  session: FocusSessionHistoryItem,
+  userId?: string | null
+) {
+  return saveFocusSessionRecord(session, userId);
+}
+
+export async function clearFocusSessionHistory(
+  userId?: string | null,
+  includeAnonymous = false
+) {
+  const keys = [
+    getFocusSessionHistoryStorageKey(userId),
+    getLegacyFocusSessionHistoryStorageKey(userId),
+    getLegacyFocusSessionsStorageKey(userId),
+    ...(includeAnonymous || !userId
+      ? [
+          ANONYMOUS_FOCUS_SESSION_HISTORY_STORAGE_KEY,
+          LEGACY_FOCUS_SESSION_HISTORY_STORAGE_KEY,
+          LEGACY_FOCUS_SESSIONS_STORAGE_KEY,
+        ]
+      : []),
+  ];
+
+  await Promise.all(Array.from(new Set(keys)).map((key) => AsyncStorage.removeItem(key)));
 }

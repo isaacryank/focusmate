@@ -296,7 +296,7 @@ function SectionCard({
   return (
     <View style={styles.sectionWrap}>
       <Text style={styles.sectionTitle}>{title}</Text>
-      <View style={styles.sectionCard}>
+      <View style={[styles.sectionCard, !isDark && styles.lightSectionCardDepth]}>
         <LinearGradient
           pointerEvents="none"
           colors={sheenColors}
@@ -743,7 +743,7 @@ export default function SettingsScreen() {
             loadStoredJson(LOCAL_PROFILE_STORAGE_KEY, sanitizeLocalProfile),
             loadStoredJson(LOCAL_PREFERENCES_STORAGE_KEY, sanitizePreferences),
             loadMiloAiSettings(),
-            getFocusSessionHistory(),
+            getFocusSessionHistory(user?.id),
           ]);
 
         if (!isActive) return;
@@ -759,7 +759,7 @@ export default function SettingsScreen() {
       return () => {
         isActive = false;
       };
-    }, [])
+    }, [user?.id])
   );
 
   const authDisplayName = userName.trim() || 'Student';
@@ -1100,9 +1100,9 @@ export default function SettingsScreen() {
         try {
           await clearAllTasks();
           await clearFocusSessions();
-          await clearFocusSessionHistory();
-          await clearCurrentMiloChat();
-          await clearMiloChatSessions();
+          await clearFocusSessionHistory(user?.id, true);
+          await clearCurrentMiloChat(user?.id, true);
+          await clearMiloChatSessions(user?.id, true);
           const nextAiSettings = await resetMiloAiSettings();
           await AsyncStorage.removeItem(LOCAL_PROFILE_STORAGE_KEY);
           await AsyncStorage.removeItem(LOCAL_PREFERENCES_STORAGE_KEY);
@@ -1152,7 +1152,7 @@ export default function SettingsScreen() {
 
       <TouchableOpacity
         activeOpacity={0.86}
-        style={styles.profileCard}
+        style={[styles.profileCard, !isDark && styles.lightProfileCardDepth]}
         onPress={() => setActiveModal('account')}
         accessibilityRole="button"
         accessibilityLabel="Open Account and Security"
@@ -2072,6 +2072,16 @@ const styles = StyleSheet.create({
     elevation: 5,
     overflow: 'hidden',
   },
+  lightProfileCardDepth: {
+    shadowColor: '#1F8A4C',
+    shadowOffset: {
+      width: 0,
+      height: 12,
+    },
+    shadowOpacity: 0.11,
+    shadowRadius: 18,
+    elevation: 6,
+  },
   profileCopy: {
     flex: 1,
     minWidth: 0,
@@ -2138,6 +2148,16 @@ const styles = StyleSheet.create({
       height: 8,
     },
     shadowOpacity: 0.12,
+    shadowRadius: 16,
+    elevation: 5,
+  },
+  lightSectionCardDepth: {
+    shadowColor: '#1F8A4C',
+    shadowOffset: {
+      width: 0,
+      height: 10,
+    },
+    shadowOpacity: 0.1,
     shadowRadius: 16,
     elevation: 5,
   },

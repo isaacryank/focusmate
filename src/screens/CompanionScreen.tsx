@@ -1,4 +1,3 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import React, {
   useCallback,
   useEffect,
@@ -22,6 +21,7 @@ import {
   View,
   type ViewStyle,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Haptics from 'expo-haptics';
 import * as Speech from 'expo-speech';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -78,6 +78,7 @@ type MiloVideoKey =
 type CompanionDetailModal =
   | 'analytics'
   | 'sessions'
+  | 'sessionDetail'
   | 'reaction'
   | 'resources';
 type ResourceFinderMode = 'finder' | 'save' | 'saved';
@@ -90,18 +91,15 @@ const TREND_DOT_SIZE = 10;
 const TREND_CHART_VERTICAL_PADDING = 12;
 const TREND_AXIS_LABEL_COUNT = 6;
 const LOCAL_PREFERENCES_STORAGE_KEY = '@focusmate/settings/preferences';
-const COMPANION_TAP_HINT_STORAGE_KEY_PREFIX =
-  '@focusmate/companion/tapHintSeen:';
 const miloIdleScene = require('../../assets/images/companion/milo_idle_scene.png');
-const miloVideos: Record<MiloVideoKey, number> = {
-  greeting: require('../../assets/videos/milo/milo_greeting_final.mp4'),
-  idle: require('../../assets/videos/milo/milo_idle_final.mp4'),
-  proud: require('../../assets/videos/milo/milo_proud_final.mp4'),
-  sleepy: require('../../assets/videos/milo/milo_sleepy_final.mp4'),
-  thinking: require('../../assets/videos/milo/milo_thinking_final.mp4'),
-  worried: require('../../assets/videos/milo/milo_worried_final.mp4'),
-};
-const MILO_VIDEO_KEYS: readonly MiloVideoKey[] = [
+const miloGreetingVideo = require('../../assets/videos/milo/milo_greeting_final.mp4');
+const miloIdleVideo = require('../../assets/videos/milo/milo_idle_final.mp4');
+const miloProudVideo = require('../../assets/videos/milo/milo_proud_final.mp4');
+const miloSleepyVideo = require('../../assets/videos/milo/milo_sleepy_final.mp4');
+const miloThinkingVideo = require('../../assets/videos/milo/milo_thinking_final.mp4');
+const miloWorriedVideo = require('../../assets/videos/milo/milo_worried_final.mp4');
+
+const MILO_TAP_VIDEO_KEYS: readonly MiloVideoKey[] = [
   'greeting',
   'idle',
   'proud',
@@ -109,53 +107,18 @@ const MILO_VIDEO_KEYS: readonly MiloVideoKey[] = [
   'thinking',
   'worried',
 ];
-const MILO_TAP_VIDEO_KEYS: readonly MiloVideoKey[] = MILO_VIDEO_KEYS;
 const MILO_IDLE_AUTOPLAY_VIDEO_KEYS: readonly MiloVideoKey[] = [
   'greeting',
   'idle',
   'thinking',
 ];
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function getCompanionTapHintStorageKey(userId?: string | null) {
-  return `${COMPANION_TAP_HINT_STORAGE_KEY_PREFIX}${userId || 'anonymous'}`;
-}
-
-function getStoredReduceMotionPreference(value: unknown) {
-  if (!isRecord(value)) {
-    return false;
-  }
-
-  const reduceMotion = value.reduceMotion ?? value.reducedMotion;
-  return typeof reduceMotion === 'boolean' ? reduceMotion : false;
-}
-
-async function loadStoredReduceMotionPreference() {
-  try {
-    const storedPreferences = await AsyncStorage.getItem(
-      LOCAL_PREFERENCES_STORAGE_KEY
-    );
-    return getStoredReduceMotionPreference(
-      storedPreferences ? JSON.parse(storedPreferences) : null
-    );
-  } catch (error) {
-    console.log('Failed to load reduce motion preference:', error);
-    return false;
-  }
-}
-
-function pickRandomMiloVideo(videoKeys: readonly MiloVideoKey[]) {
-  return videoKeys[Math.floor(Math.random() * videoKeys.length)];
-}
-
 type MoodStatusItem = {
   label: string;
   value: string;
   icon: IconName;
   color: string;
+  backgroundColor: string;
 };
 
 type TaskWindow = {
@@ -194,6 +157,7 @@ type WeeklyFocusTrendItem = {
 
 type FocusAnalyticsSummary = {
   todayFocusMinutes: number;
+  weekFocusMinutes: number;
   cleanSessions: number;
   distractedSessions: number;
   mostFocusedTask: string;
@@ -330,6 +294,50 @@ function countDirectOverlaps(tasks: Task[]) {
 
 function countSituations(items: SituationItem[], kinds: MiloSituationKind[]) {
   return items.filter((item) => kinds.includes(item.situation.kind)).length;
+}
+
+function pickRandomItem<T>(items: readonly T[]) {
+  return items[Math.floor(Math.random() * items.length)] as T;
+}
+
+function getTapHintStorageKey(userId?: string | null) {
+  return `@focusmate/companion/tapHintSeen:${userId || 'anonymous'}`;
+}
+
+async function loadCompanionTapHintSeen(storageKey: string) {
+  try {
+    return (await AsyncStorage.getItem(storageKey)) === 'true';
+  } catch (error) {
+    console.log('Failed to load companion tap hint state:', error);
+    return false;
+  }
+}
+
+async function saveCompanionTapHintSeen(storageKey: string) {
+  try {
+    await AsyncStorage.setItem(storageKey, 'true');
+  } catch (error) {
+    console.log('Failed to save companion tap hint state:', error);
+  }
+}
+
+async function loadReduceMotionPreference() {
+  try {
+    const stored = await AsyncStorage.getItem(LOCAL_PREFERENCES_STORAGE_KEY);
+    const parsed = stored ? JSON.parse(stored) : null;
+
+    if (typeof parsed === 'object' && parsed !== null) {
+      const reduceMotion =
+        (parsed as Record<string, unknown>).reduceMotion ??
+        (parsed as Record<string, unknown>).reducedMotion;
+
+      return typeof reduceMotion === 'boolean' ? reduceMotion : false;
+    }
+  } catch (error) {
+    console.log('Failed to load reduce motion preference:', error);
+  }
+
+  return false;
 }
 
 function getDefaultMiloMessage(
@@ -472,11 +480,19 @@ function getDateFromKey(dateKey: string) {
 }
 
 function getSessionDateKey(session: FocusSessionHistoryItem) {
-  return getLocalDateKey(new Date(session.date));
+  return getLocalDateKey(new Date(session.endedAt || session.date));
 }
 
 function getSessionTitle(session: FocusSessionHistoryItem) {
-  return session.selectedTaskTitle?.trim() || 'Focus without task';
+  return (
+    session.taskTitle?.trim() ||
+    session.selectedTaskTitle?.trim() ||
+    'Focus session'
+  );
+}
+
+function isRealFocusSession(session: FocusSessionHistoryItem) {
+  return session.status !== 'skipped' && session.durationMinutes > 0;
 }
 
 function formatMinutesLabel(minutes: number) {
@@ -656,38 +672,67 @@ function createPlaceholderRecentSessions(todayDate: string): FocusSessionHistory
 
     return date.toISOString();
   };
+  const createPlaceholderSession = (
+    id: string,
+    endedAt: string,
+    durationMinutes: number,
+    taskTitle: string,
+    focusQuality: FocusSessionHistoryItem['focusQuality'],
+    presetName: string,
+    status: FocusSessionHistoryItem['status'],
+    focusScore: number
+  ): FocusSessionHistoryItem => {
+    const startedAt = new Date(
+      new Date(endedAt).getTime() - durationMinutes * 60 * 1000
+    ).toISOString();
+
+    return {
+      id,
+      date: endedAt,
+      startedAt,
+      endedAt,
+      createdAt: endedAt,
+      durationMinutes,
+      taskTitle,
+      selectedTaskTitle: taskTitle,
+      focusQuality,
+      presetName,
+      status,
+      focusScore,
+    };
+  };
 
   return [
-    {
-      id: 'placeholder-focus-1',
-      date: makeDate(0, 10, 42),
-      durationMinutes: 25,
-      selectedTaskTitle: 'Overdue Assignment',
-      focusQuality: 'clean',
-      presetName: 'Classic Pomodoro',
-      status: 'completed',
-      focusScore: 96,
-    },
-    {
-      id: 'placeholder-focus-2',
-      date: makeDate(1, 15, 10),
-      durationMinutes: 15,
-      selectedTaskTitle: 'Review notes',
-      focusQuality: 'distracted',
-      presetName: 'Quick Focus',
-      status: 'completed',
-      focusScore: 78,
-    },
-    {
-      id: 'placeholder-focus-3',
-      date: makeDate(2, 9, 25),
-      durationMinutes: 8,
-      selectedTaskTitle: 'Plan tiny steps',
-      focusQuality: 'clean',
-      presetName: 'Custom Rhythm',
-      status: 'stopped',
-      focusScore: 55,
-    },
+    createPlaceholderSession(
+      'placeholder-focus-1',
+      makeDate(0, 10, 42),
+      25,
+      'Overdue Assignment',
+      'clean',
+      'Classic Pomodoro',
+      'completed',
+      96
+    ),
+    createPlaceholderSession(
+      'placeholder-focus-2',
+      makeDate(1, 15, 10),
+      15,
+      'Review notes',
+      'distracted',
+      'Quick Focus',
+      'completed',
+      78
+    ),
+    createPlaceholderSession(
+      'placeholder-focus-3',
+      makeDate(2, 9, 25),
+      8,
+      'Plan tiny steps',
+      'clean',
+      'Custom Rhythm',
+      'stopped',
+      55
+    ),
   ];
 }
 
@@ -695,14 +740,15 @@ function createFocusAnalytics(
   history: FocusSessionHistoryItem[],
   todayDate: string
 ): FocusAnalyticsSummary {
-  const sortedHistory = [...history].sort(
+  const sortedHistory = history.filter(isRealFocusSession).sort(
     (first, second) =>
-      new Date(second.date).getTime() - new Date(first.date).getTime()
+      new Date(second.endedAt || second.date).getTime() -
+      new Date(first.endedAt || first.date).getTime()
   );
   const completedSessions = sortedHistory.filter(
     (session) => session.status === 'completed'
   );
-  const todayCompletedSessions = completedSessions.filter(
+  const todayFocusSessions = sortedHistory.filter(
     (session) => getSessionDateKey(session) === todayDate
   );
   const today = getDateFromKey(todayDate);
@@ -716,12 +762,9 @@ function createFocusAnalytics(
   const sessionsThisWeek = sortedHistory.filter((session) =>
     weekDateKeySet.has(getSessionDateKey(session))
   );
-  const completedSessionsThisWeek = completedSessions.filter((session) =>
-    weekDateKeySet.has(getSessionDateKey(session))
-  );
   const taskTotals = new Map<string, number>();
 
-  completedSessions.forEach((session) => {
+  sortedHistory.forEach((session) => {
     const title = getSessionTitle(session);
     taskTotals.set(title, (taskTotals.get(title) ?? 0) + session.durationMinutes);
   });
@@ -738,7 +781,7 @@ function createFocusAnalytics(
   const weeklyTrend = weekDateKeys.map((dateKey) => {
     const date = getDateFromKey(dateKey);
     const label = date.toLocaleDateString('en-US', { weekday: 'short' }).slice(0, 3);
-    const minutes = completedSessions
+    const minutes = sessionsThisWeek
       .filter((session) => getSessionDateKey(session) === dateKey)
       .reduce((total, session) => total + session.durationMinutes, 0);
 
@@ -749,7 +792,7 @@ function createFocusAnalytics(
     };
   });
   const scoredSessions =
-    completedSessionsThisWeek.length > 0 ? completedSessionsThisWeek : completedSessions;
+    sessionsThisWeek.length > 0 ? sessionsThisWeek : sortedHistory;
   const focusScore =
     scoredSessions.length > 0
       ? Math.round(
@@ -759,16 +802,21 @@ function createFocusAnalytics(
           ) / scoredSessions.length
         )
       : null;
+  const weekFocusMinutes = sessionsThisWeek.reduce(
+    (total, session) => total + session.durationMinutes,
+    0
+  );
 
   return {
-    todayFocusMinutes: todayCompletedSessions.reduce(
+    todayFocusMinutes: todayFocusSessions.reduce(
       (total, session) => total + session.durationMinutes,
       0
     ),
-    cleanSessions: completedSessions.filter(
+    weekFocusMinutes,
+    cleanSessions: sortedHistory.filter(
       (session) => session.focusQuality === 'clean'
     ).length,
-    distractedSessions: completedSessions.filter(
+    distractedSessions: sortedHistory.filter(
       (session) => session.focusQuality === 'distracted'
     ).length,
     mostFocusedTask,
@@ -776,9 +824,9 @@ function createFocusAnalytics(
     recentSessions: sortedHistory.slice(0, 3),
     latestSession: sortedHistory[0] ?? null,
     latestCompletedSession: completedSessions[0] ?? null,
-    completedSessionCount: completedSessions.length,
+    completedSessionCount: sortedHistory.length,
     sessionsThisWeek: sessionsThisWeek.length,
-    dayStreak: getFocusDayStreak(completedSessions, todayDate),
+    dayStreak: getFocusDayStreak(sortedHistory, todayDate),
     focusScore,
   };
 }
@@ -1104,44 +1152,17 @@ function getTalkPreviewText(analytics: FocusAnalyticsSummary) {
   return 'You skipped the last block. Want to try a smaller focus step next?';
 }
 
-function HeroGlassLayers() {
+function MoodStatusCard({ item }: { item: MoodStatusItem }) {
   return (
-    <>
-      <LinearGradient
-        pointerEvents="none"
-        colors={['#FFFFFF9A', '#FFFFFF26', '#FFFFFF08']}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-        style={styles.heroGlassSheen}
-      />
-      <LinearGradient
-        pointerEvents="none"
-        colors={['#FFFFFF45', '#FFFFFF00']}
-        start={{ x: 0.05, y: 0 }}
-        end={{ x: 0.6, y: 0.55 }}
-        style={styles.heroGlassInnerGlow}
-      />
-      <View pointerEvents="none" style={styles.heroGlassEdge} />
-    </>
-  );
-}
-
-function MoodStatusCard({
-  item,
-  glassStyle,
-}: {
-  item: MoodStatusItem;
-  glassStyle?: StyleProp<ViewStyle>;
-}) {
-  return (
-    <View style={[styles.statusCard, glassStyle]}>
-      <HeroGlassLayers />
-      <Ionicons
-        name={item.icon}
-        size={15}
-        color={item.color}
-        style={styles.statusIconGlyph}
-      />
+    <View style={styles.statusCard}>
+      <View
+        style={[
+          styles.statusIcon,
+          { backgroundColor: item.backgroundColor },
+        ]}
+      >
+        <Ionicons name={item.icon} size={13} color={item.color} />
+      </View>
       <View style={styles.statusCopy}>
         <Text numberOfLines={1} style={styles.statusLabel}>
           {item.label}
@@ -1165,10 +1186,8 @@ export default function CompanionScreen() {
   const { width, height } = useWindowDimensions();
 
   const displayName = userName?.trim() || 'Student';
-  const tapHintStorageKey = useMemo(
-    () => getCompanionTapHintStorageKey(user?.id),
-    [user?.id]
-  );
+  const focusHistoryUserId = user?.id ?? null;
+  const companionUserId = user?.id || 'anonymous';
   const todayDate = getTodayDate();
   const compactWidth = width < 380;
   const narrowContent = width < 520;
@@ -1192,14 +1211,16 @@ export default function CompanionScreen() {
   const [focusHistory, setFocusHistory] = useState<FocusSessionHistoryItem[]>(
     []
   );
+  const [selectedFocusSession, setSelectedFocusSession] =
+    useState<FocusSessionHistoryItem | null>(null);
   const [speechMessageIndex, setSpeechMessageIndex] = useState(0);
   const [activeMiloVideo, setActiveMiloVideo] = useState<MiloVideoKey | null>(
     null
   );
   const [isCompanionFocused, setIsCompanionFocused] = useState(false);
-  const [isReduceMotionEnabled, setIsReduceMotionEnabled] = useState(false);
-  const [tapHintSeen, setTapHintSeen] = useState<boolean | null>(null);
   const [videoFailed, setVideoFailed] = useState(false);
+  const [reduceMotionEnabled, setReduceMotionEnabled] = useState(false);
+  const [tapHintSeen, setTapHintSeen] = useState<boolean | null>(null);
   const [activeDetailModal, setActiveDetailModal] =
     useState<CompanionDetailModal | null>(null);
   const [resourceFinderMode, setResourceFinderMode] =
@@ -1216,51 +1237,51 @@ export default function CompanionScreen() {
   const [resourceNote, setResourceNote] = useState('');
   const [resourceFinderMessage, setResourceFinderMessage] = useState('');
 
-  const greetingPlayer = useVideoPlayer(miloVideos.greeting, (player) => {
-    player.loop = false;
-    player.muted = true;
-  });
-  const idlePlayer = useVideoPlayer(miloVideos.idle, (player) => {
-    player.loop = false;
-    player.muted = true;
-  });
-  const proudPlayer = useVideoPlayer(miloVideos.proud, (player) => {
-    player.loop = false;
-    player.muted = true;
-  });
-  const sleepyPlayer = useVideoPlayer(miloVideos.sleepy, (player) => {
-    player.loop = false;
-    player.muted = true;
-  });
-  const thinkingPlayer = useVideoPlayer(miloVideos.thinking, (player) => {
-    player.loop = false;
-    player.muted = true;
-  });
-  const worriedPlayer = useVideoPlayer(miloVideos.worried, (player) => {
-    player.loop = false;
-    player.muted = true;
-  });
-  const miloPlayers = useMemo(
-    () => ({
-      greeting: greetingPlayer,
-      idle: idlePlayer,
-      proud: proudPlayer,
-      sleepy: sleepyPlayer,
-      thinking: thinkingPlayer,
-      worried: worriedPlayer,
-    }),
-    [
-      greetingPlayer,
-      idlePlayer,
-      proudPlayer,
-      sleepyPlayer,
-      thinkingPlayer,
-      worriedPlayer,
-    ]
+  const tapHintStorageKey = useMemo(
+    () => getTapHintStorageKey(companionUserId),
+    [companionUserId]
   );
+  const greetingPlayer = useVideoPlayer(miloGreetingVideo, (player) => {
+    player.loop = false;
+    player.muted = true;
+  });
+  const idlePlayer = useVideoPlayer(miloIdleVideo, (player) => {
+    player.loop = false;
+    player.muted = true;
+  });
+  const proudPlayer = useVideoPlayer(miloProudVideo, (player) => {
+    player.loop = false;
+    player.muted = true;
+  });
+  const sleepyPlayer = useVideoPlayer(miloSleepyVideo, (player) => {
+    player.loop = false;
+    player.muted = true;
+  });
+  const thinkingPlayer = useVideoPlayer(miloThinkingVideo, (player) => {
+    player.loop = false;
+    player.muted = true;
+  });
+  const worriedPlayer = useVideoPlayer(miloWorriedVideo, (player) => {
+    player.loop = false;
+    player.muted = true;
+  });
   const getActivePlayer = useCallback(() => {
-    return activeMiloVideo ? miloPlayers[activeMiloVideo] : null;
-  }, [activeMiloVideo, miloPlayers]);
+    if (activeMiloVideo === 'greeting') return greetingPlayer;
+    if (activeMiloVideo === 'idle') return idlePlayer;
+    if (activeMiloVideo === 'proud') return proudPlayer;
+    if (activeMiloVideo === 'sleepy') return sleepyPlayer;
+    if (activeMiloVideo === 'thinking') return thinkingPlayer;
+    if (activeMiloVideo === 'worried') return worriedPlayer;
+    return null;
+  }, [
+    activeMiloVideo,
+    greetingPlayer,
+    idlePlayer,
+    proudPlayer,
+    sleepyPlayer,
+    thinkingPlayer,
+    worriedPlayer,
+  ]);
 
   useLayoutEffect(() => {
     navigation.setOptions({
@@ -1285,13 +1306,36 @@ export default function CompanionScreen() {
     };
   }, []);
 
+  useEffect(() => {
+    let isActive = true;
+
+    setTapHintSeen(null);
+    void loadCompanionTapHintSeen(tapHintStorageKey).then((seen) => {
+      if (isActive && mountedRef.current) {
+        setTapHintSeen(seen);
+      }
+    });
+
+    return () => {
+      isActive = false;
+    };
+  }, [tapHintStorageKey]);
+
+  const refreshReduceMotionPreference = useCallback(async () => {
+    const nextReduceMotion = await loadReduceMotionPreference();
+
+    if (mountedRef.current) {
+      setReduceMotionEnabled(nextReduceMotion);
+    }
+  }, []);
+
   const loadFocusHistory = useCallback(async () => {
-    const nextHistory = await getFocusSessionHistory();
+    const nextHistory = await getFocusSessionHistory(focusHistoryUserId);
 
     if (mountedRef.current) {
       setFocusHistory(nextHistory);
     }
-  }, []);
+  }, [focusHistoryUserId]);
 
   const refreshSavedResources = useCallback(async () => {
     const nextResources = await loadSavedResources();
@@ -1300,55 +1344,6 @@ export default function CompanionScreen() {
       setSavedResources(nextResources);
     }
   }, []);
-
-  const refreshReduceMotionPreference = useCallback(async () => {
-    const nextReduceMotion = await loadStoredReduceMotionPreference();
-
-    if (mountedRef.current) {
-      setIsReduceMotionEnabled(nextReduceMotion);
-    }
-  }, []);
-
-  useEffect(() => {
-    let isActive = true;
-    setTapHintSeen(null);
-
-    const loadTapHintSeen = async () => {
-      try {
-        const storedTapHintSeen = await AsyncStorage.getItem(tapHintStorageKey);
-
-        if (isActive && mountedRef.current) {
-          setTapHintSeen(storedTapHintSeen === 'true');
-        }
-      } catch (error) {
-        console.log('Failed to load companion tap hint state:', error);
-
-        if (isActive && mountedRef.current) {
-          setTapHintSeen(false);
-        }
-      }
-    };
-
-    void loadTapHintSeen();
-
-    return () => {
-      isActive = false;
-    };
-  }, [tapHintStorageKey]);
-
-  const markTapHintSeen = useCallback(async () => {
-    if (tapHintSeen === true) {
-      return;
-    }
-
-    setTapHintSeen(true);
-
-    try {
-      await AsyncStorage.setItem(tapHintStorageKey, 'true');
-    } catch (error) {
-      console.log('Failed to save companion tap hint state:', error);
-    }
-  }, [tapHintSeen, tapHintStorageKey]);
 
   const openDetailModal = useCallback(
     async (modal: CompanionDetailModal) => {
@@ -1375,8 +1370,45 @@ export default function CompanionScreen() {
 
     if (mountedRef.current) {
       setActiveDetailModal(null);
+      setSelectedFocusSession(null);
     }
   }, []);
+
+  const getLinkedTaskForSession = useCallback(
+    (session: FocusSessionHistoryItem) => {
+      const linkedTaskId =
+        session.taskId || session.selectedTaskId || session.localTaskId || null;
+
+      if (!linkedTaskId) return undefined;
+
+      return tasks.find((task) => task.id === linkedTaskId);
+    },
+    [tasks]
+  );
+
+  const handleOpenFocusSession = useCallback(
+    async (session: FocusSessionHistoryItem) => {
+      const linkedTask = getLinkedTaskForSession(session);
+
+      try {
+        await Haptics.selectionAsync();
+      } catch {
+        // Row presses should still work on devices where haptics are unavailable.
+      }
+
+      if (linkedTask) {
+        setActiveDetailModal(null);
+        setSelectedFocusSession(null);
+        navigation.navigate('TaskDetails', { taskId: linkedTask.id });
+        return;
+      }
+
+      setSelectedFocusSession(session);
+      setActiveDetailModal('sessionDetail');
+      void loadFocusHistory();
+    },
+    [getLinkedTaskForSession, loadFocusHistory, navigation]
+  );
 
   useEffect(() => {
     if (activeDetailModal === 'resources') {
@@ -1562,12 +1594,7 @@ export default function CompanionScreen() {
     miloMessage ||
     rotatingMessages[speechMessageIndex % Math.max(rotatingMessages.length, 1)] ||
     companionData.defaultMessage;
-  const moodPanelWidth = compactWidth ? 98 : narrowContent ? 118 : 126;
-  const speechBubbleMaxWidth = compactWidth ? 196 : narrowContent ? 210 : 232;
-  const speechBubbleLeft = compactWidth ? 14 : 18;
-  const speechBubbleTop = compactWidth ? 16 : 18;
-  const moodPanelRight = compactWidth ? 10 : 12;
-  const tapMiloCardLeft = compactWidth ? 14 : 16;
+  const moodPanelWidth = compactWidth ? 98 : 118;
   const roomCardHeight = shortScreen ? 414 : compactWidth ? 430 : 456;
   const bottomContentPadding = tabBarHeight + (shortScreen ? 54 : 66);
   const stressSignals =
@@ -1580,12 +1607,15 @@ export default function CompanionScreen() {
       value: companionData.completedTodayCount > 0 ? 'Bright' : 'Gentle',
       icon: 'battery-half',
       color: theme.colors.primaryDark,
+      backgroundColor: theme.colors.primarySoft,
     },
     {
       label: 'Stress',
       value: stressSignals > 0 ? 'Needs care' : 'Low',
       icon: 'heart',
       color: stressSignals > 0 ? theme.colors.danger : theme.colors.primaryDark,
+      backgroundColor:
+        stressSignals > 0 ? theme.colors.dangerSoft : theme.colors.primarySoft,
     },
     {
       label: 'Focus',
@@ -1595,12 +1625,14 @@ export default function CompanionScreen() {
           : 'Open',
       icon: 'sparkles',
       color: theme.colors.purple,
+      backgroundColor: theme.colors.purpleSoft,
     },
     {
       label: 'About Milo',
       value: 'Kind planner',
       icon: 'leaf',
       color: theme.colors.blue,
+      backgroundColor: theme.colors.blueSoft,
     },
   ];
   const latestChatPreview = getTalkPreviewText(focusAnalytics);
@@ -1619,66 +1651,15 @@ export default function CompanionScreen() {
     latestReactionSession?.focusQuality === 'distracted'
       ? 'Distracted'
       : 'Clean';
-  const recentSessionRows =
-    focusAnalytics.recentSessions.length > 0
-      ? focusAnalytics.recentSessions
-      : createPlaceholderRecentSessions(todayDate);
+  const recentSessionRows = focusAnalytics.recentSessions;
   const focusScoreLabel =
     focusAnalytics.focusScore === null ? '--' : `${focusAnalytics.focusScore}%`;
-  const shouldShowTapHint = tapHintSeen === false;
-  const heroGlassCardStyle = useMemo<StyleProp<ViewStyle>>(
-    () => ({
-      backgroundColor: isDark
-        ? '#202C33BD'
-        : '#FFF4D966',
-      borderColor: isDark
-        ? '#FFFFFF29'
-        : '#FFF8E6AB',
-      ...(isDark
-        ? {
-            shadowColor: '#000000',
-            shadowOpacity: 0.34,
-          }
-        : {
-            shadowColor: '#734B16',
-            shadowOpacity: 0.16,
-          }),
-    }),
-    [isDark]
-  );
-  const heroGlassPillStyle = useMemo<StyleProp<ViewStyle>>(
-    () => ({
-      backgroundColor: isDark
-        ? '#202C33C7'
-        : '#FFF4D975',
-      borderColor: isDark
-        ? '#FFFFFF2E'
-        : '#FFF8E6B8',
-      ...(isDark
-        ? {
-            shadowColor: '#000000',
-            shadowOpacity: 0.32,
-          }
-        : {
-            shadowColor: '#734B16',
-            shadowOpacity: 0.16,
-          }),
-    }),
-    [isDark]
-  );
-  const heroGlassTailStyle = useMemo<StyleProp<ViewStyle>>(
-    () => ({
-      backgroundColor: isDark ? '#202C33BD' : '#FFF4D966',
-      borderColor: isDark ? '#FFFFFF29' : '#FFF8E6AB',
-    }),
-    [isDark]
-  );
 
-  const speechBubbleMotionStyle = isReduceMotionEnabled
-    ? undefined
-    : {
-        opacity: speechBubbleMotion,
-        transform: [
+  const speechBubbleMotionStyle = {
+    opacity: speechBubbleMotion,
+    transform: reduceMotionEnabled
+      ? undefined
+      : [
           {
             scale: speechBubbleMotion.interpolate({
               inputRange: [0, 1],
@@ -1692,7 +1673,7 @@ export default function CompanionScreen() {
             }),
           },
         ],
-      };
+  };
 
   const clearInactivityTimer = useCallback(() => {
     if (inactivityTimerRef.current) {
@@ -1703,27 +1684,35 @@ export default function CompanionScreen() {
 
   const stopMiloVideos = useCallback(() => {
     try {
-      MILO_VIDEO_KEYS.forEach((videoKey) => {
-        const player = miloPlayers[videoKey];
-        player.pause();
-        player.currentTime = 0;
-      });
+      greetingPlayer.pause();
+      idlePlayer.pause();
+      proudPlayer.pause();
+      sleepyPlayer.pause();
+      thinkingPlayer.pause();
+      worriedPlayer.pause();
     } catch (error) {
       console.warn('Unable to pause Milo videos:', error);
     }
 
     isMiloVideoPlayingRef.current = false;
     setActiveMiloVideo(null);
-  }, [miloPlayers]);
+  }, [
+    greetingPlayer,
+    idlePlayer,
+    proudPlayer,
+    sleepyPlayer,
+    thinkingPlayer,
+    worriedPlayer,
+  ]);
 
   const resetInactivityTimer = useCallback(() => {
     clearInactivityTimer();
 
     if (
       !isCompanionFocusedRef.current ||
-      isReduceMotionEnabled ||
-      videoFailed ||
-      isMiloVideoPlayingRef.current
+      reduceMotionEnabled ||
+      isMiloVideoPlayingRef.current ||
+      videoFailed
     ) {
       return;
     }
@@ -1738,7 +1727,7 @@ export default function CompanionScreen() {
 
       playIdleMiloVideoRef.current();
     }, MILO_INACTIVITY_AUTOPLAY_MS);
-  }, [clearInactivityTimer, isReduceMotionEnabled, videoFailed]);
+  }, [clearInactivityTimer, reduceMotionEnabled, videoFailed]);
 
   const finishMiloVideo = useCallback(() => {
     if (!isMiloVideoPlayingRef.current) {
@@ -1770,7 +1759,7 @@ export default function CompanionScreen() {
         return;
       }
 
-      if (isReduceMotionEnabled) {
+      if (reduceMotionEnabled) {
         console.log('Skipped Milo video because reduce motion is enabled');
         return;
       }
@@ -1783,10 +1772,21 @@ export default function CompanionScreen() {
 
       clearInactivityTimer();
 
-      const player = miloPlayers[videoKey];
+      const player =
+        videoKey === 'greeting'
+          ? greetingPlayer
+          : videoKey === 'idle'
+          ? idlePlayer
+          : videoKey === 'proud'
+          ? proudPlayer
+          : videoKey === 'sleepy'
+          ? sleepyPlayer
+          : videoKey === 'thinking'
+          ? thinkingPlayer
+          : worriedPlayer;
 
       try {
-        console.log(`Playing ${videoKey} video`);
+        console.log(`Playing Milo ${videoKey} video`);
         isMiloVideoPlayingRef.current = true;
         setActiveMiloVideo(videoKey);
 
@@ -1804,16 +1804,40 @@ export default function CompanionScreen() {
     },
     [
       clearInactivityTimer,
+      greetingPlayer,
       handleMiloVideoError,
-      isReduceMotionEnabled,
-      miloPlayers,
+      idlePlayer,
+      proudPlayer,
+      reduceMotionEnabled,
+      sleepyPlayer,
+      thinkingPlayer,
       videoFailed,
+      worriedPlayer,
     ]
   );
 
   const playIdleMiloVideo = useCallback(() => {
-    playMiloVideo(pickRandomMiloVideo(MILO_IDLE_AUTOPLAY_VIDEO_KEYS));
+    playMiloVideo(pickRandomItem(MILO_IDLE_AUTOPLAY_VIDEO_KEYS));
   }, [playMiloVideo]);
+
+  const playTapMiloVideo = useCallback(() => {
+    playMiloVideo(pickRandomItem(MILO_TAP_VIDEO_KEYS));
+  }, [playMiloVideo]);
+
+  useEffect(() => {
+    if (!reduceMotionEnabled) {
+      return;
+    }
+
+    clearInactivityTimer();
+    stopMiloVideos();
+    speechBubbleMotion.setValue(1);
+  }, [
+    clearInactivityTimer,
+    reduceMotionEnabled,
+    speechBubbleMotion,
+    stopMiloVideos,
+  ]);
 
   const tapMessages = useMemo(
     () => [
@@ -1857,36 +1881,12 @@ export default function CompanionScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      void refreshReduceMotionPreference();
-      return undefined;
-    }, [refreshReduceMotionPreference])
-  );
-
-  useEffect(() => {
-    if (isReduceMotionEnabled) {
-      clearInactivityTimer();
-      stopMiloVideos();
-      return;
-    }
-
-    if (isCompanionFocused) {
-      resetInactivityTimer();
-    }
-  }, [
-    clearInactivityTimer,
-    isCompanionFocused,
-    isReduceMotionEnabled,
-    resetInactivityTimer,
-    stopMiloVideos,
-  ]);
-
-  useFocusEffect(
-    useCallback(() => {
       console.log('Companion focused');
       isCompanionFocusedRef.current = true;
       setIsCompanionFocused(true);
       setActiveMiloVideo(null);
       isMiloVideoPlayingRef.current = false;
+      void refreshReduceMotionPreference();
       void loadFocusHistory();
       resetInactivityTimer();
 
@@ -1900,30 +1900,47 @@ export default function CompanionScreen() {
     }, [
       clearInactivityTimer,
       loadFocusHistory,
+      refreshReduceMotionPreference,
       resetInactivityTimer,
       stopMiloVideos,
     ])
   );
 
   useEffect(() => {
-    const subscriptions = MILO_VIDEO_KEYS.flatMap((videoKey) => {
-      const player = miloPlayers[videoKey];
+    const miloVideoPlayers = [
+      { key: 'greeting' as const, player: greetingPlayer },
+      { key: 'idle' as const, player: idlePlayer },
+      { key: 'proud' as const, player: proudPlayer },
+      { key: 'sleepy' as const, player: sleepyPlayer },
+      { key: 'thinking' as const, player: thinkingPlayer },
+      { key: 'worried' as const, player: worriedPlayer },
+    ];
 
-      return [
-        player.addListener('playToEnd', finishMiloVideo),
-        player.addListener('statusChange', ({ status, error }) => {
-          if (status === 'error') {
-            handleMiloVideoError(videoKey, error);
-          }
-        }),
-      ];
-    });
+    const subscriptions = miloVideoPlayers.flatMap(({ key, player }) => [
+      player.addListener('playToEnd', finishMiloVideo),
+      player.addListener('statusChange', ({ status, error }) => {
+        if (status === 'error') {
+          handleMiloVideoError(key, error);
+        }
+      }),
+    ]);
 
-    return () => subscriptions.forEach((subscription) => subscription.remove());
-  }, [finishMiloVideo, handleMiloVideoError, miloPlayers]);
+    return () => {
+      subscriptions.forEach((subscription) => subscription.remove());
+    };
+  }, [
+    finishMiloVideo,
+    greetingPlayer,
+    handleMiloVideoError,
+    idlePlayer,
+    proudPlayer,
+    sleepyPlayer,
+    thinkingPlayer,
+    worriedPlayer,
+  ]);
 
   useEffect(() => {
-    if (isReduceMotionEnabled) {
+    if (reduceMotionEnabled) {
       speechBubbleMotion.setValue(1);
       return undefined;
     }
@@ -1940,7 +1957,7 @@ export default function CompanionScreen() {
     animation.start();
 
     return () => animation.stop();
-  }, [activeMessage, isReduceMotionEnabled, speechBubbleMotion]);
+  }, [activeMessage, reduceMotionEnabled, speechBubbleMotion]);
 
   const clearReactionTimeout = () => {
     if (reactionTimeoutRef.current) {
@@ -1993,6 +2010,15 @@ export default function CompanionScreen() {
     await updateMiloSpeech(tapMessages[currentIndex], companionData.mood);
   };
 
+  const markTapHintSeen = useCallback(() => {
+    if (tapHintSeen === true) {
+      return;
+    }
+
+    setTapHintSeen(true);
+    void saveCompanionTapHintSeen(tapHintStorageKey);
+  }, [tapHintSeen, tapHintStorageKey]);
+
   const handleMiloPress = () => {
     console.log('Milo tapped');
 
@@ -2001,9 +2027,9 @@ export default function CompanionScreen() {
     }
 
     resetInactivityTimer();
-    playMiloVideo(pickRandomMiloVideo(MILO_TAP_VIDEO_KEYS));
+    playTapMiloVideo();
+    markTapHintSeen();
     void handleMiloTap();
-    void markTapHintSeen();
   };
 
   const handleSpeak = async () => {
@@ -2147,6 +2173,8 @@ export default function CompanionScreen() {
       ? 'Focus Analytics'
       : activeDetailModal === 'sessions'
       ? 'Recent Sessions'
+      : activeDetailModal === 'sessionDetail'
+      ? 'Session Details'
       : activeDetailModal === 'reaction'
       ? "Milo's Focus Reaction"
       : activeDetailModal === 'resources'
@@ -2188,29 +2216,31 @@ export default function CompanionScreen() {
     onSecondaryPress,
     closeLabel,
   }: {
-    primaryLabel: string;
-    onPrimaryPress: () => void;
+    primaryLabel?: string;
+    onPrimaryPress?: () => void;
     secondaryLabel?: string;
     onSecondaryPress?: () => void;
     closeLabel?: string;
   }) => (
     <View style={styles.modalButtonRow}>
-      <TouchableOpacity
-        activeOpacity={0.84}
-        style={[styles.modalActionButton, styles.modalPrimaryButton]}
-        onPress={onPrimaryPress}
-        accessibilityRole="button"
-        accessibilityLabel={primaryLabel}
-      >
-        <Text
-          numberOfLines={1}
-          adjustsFontSizeToFit
-          minimumFontScale={0.82}
-          style={styles.modalPrimaryButtonText}
+      {primaryLabel && onPrimaryPress ? (
+        <TouchableOpacity
+          activeOpacity={0.84}
+          style={[styles.modalActionButton, styles.modalPrimaryButton]}
+          onPress={onPrimaryPress}
+          accessibilityRole="button"
+          accessibilityLabel={primaryLabel}
         >
-          {primaryLabel}
-        </Text>
-      </TouchableOpacity>
+          <Text
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.82}
+            style={styles.modalPrimaryButtonText}
+          >
+            {primaryLabel}
+          </Text>
+        </TouchableOpacity>
+      ) : null}
 
       {secondaryLabel && onSecondaryPress ? (
         <TouchableOpacity
@@ -2263,7 +2293,7 @@ export default function CompanionScreen() {
   );
 
   const renderAnalyticsModalContent = () => {
-    if (focusHistory.length === 0) {
+    if (focusAnalytics.completedSessionCount === 0) {
       return (
         <>
           {renderEmptyState(
@@ -2282,8 +2312,8 @@ export default function CompanionScreen() {
       <>
         <View style={styles.modalMetricGrid}>
           {renderModalMetric(
-            'Focus minutes today',
-            formatMinutesLabel(focusAnalytics.todayFocusMinutes),
+            'Focus minutes this week',
+            formatMinutesLabel(focusAnalytics.weekFocusMinutes),
             'time-outline'
           )}
           {renderModalMetric(
@@ -2363,7 +2393,9 @@ export default function CompanionScreen() {
   };
 
   const renderRecentSessionsModalContent = () => {
-    if (focusHistory.length === 0) {
+    const focusSessions = focusHistory.filter(isRealFocusSession);
+
+    if (focusSessions.length === 0) {
       return (
         <>
           {renderEmptyState(
@@ -2381,12 +2413,19 @@ export default function CompanionScreen() {
     return (
       <>
         <View style={styles.modalSessionList}>
-          {focusHistory.map((session) => {
+          {focusSessions.map((session) => {
             const statusMeta = focusSessionStatusMeta[session.status];
             const isClean = session.focusQuality === 'clean';
 
             return (
-              <View key={session.id} style={styles.modalSessionCard}>
+              <TouchableOpacity
+                key={session.id}
+                activeOpacity={0.86}
+                style={styles.modalSessionCard}
+                onPress={() => void handleOpenFocusSession(session)}
+                accessibilityRole="button"
+                accessibilityLabel={`Open focus session ${getSessionTitle(session)}`}
+              >
                 <View style={styles.modalSessionHeader}>
                   <View style={styles.modalSessionTitleWrap}>
                     <Text numberOfLines={1} style={styles.modalSessionTitle}>
@@ -2430,7 +2469,7 @@ export default function CompanionScreen() {
                     {formatFocusQuality(session.focusQuality)}
                   </Text>
                 </View>
-              </View>
+              </TouchableOpacity>
             );
           })}
         </View>
@@ -2438,6 +2477,90 @@ export default function CompanionScreen() {
         {renderModalActions({
           primaryLabel: 'Start new focus',
           onPrimaryPress: () => void handleStartFocus(),
+        })}
+      </>
+    );
+  };
+
+  const renderSessionDetailModalContent = () => {
+    const session = selectedFocusSession;
+
+    if (!session) {
+      return renderEmptyState(
+        'Session not found',
+        'Milo could not find the focus session details right now.'
+      );
+    }
+
+    const statusMeta = focusSessionStatusMeta[session.status];
+    const linkedTask = getLinkedTaskForSession(session);
+
+    return (
+      <>
+        <View style={styles.modalSummaryCard}>
+          <View style={styles.modalSummaryTopRow}>
+            <View style={styles.modalSessionTitleWrap}>
+              <Text numberOfLines={2} style={styles.modalSessionTitle}>
+                {getSessionTitle(session)}
+              </Text>
+              <Text numberOfLines={1} style={styles.modalSessionDate}>
+                {formatSessionDateTime(session.endedAt || session.date, todayDate)}
+              </Text>
+            </View>
+            <View
+              style={[
+                styles.modalStatusBadge,
+                { backgroundColor: statusMeta.backgroundColor },
+              ]}
+            >
+              <Text
+                numberOfLines={1}
+                style={[styles.modalStatusText, { color: statusMeta.color }]}
+              >
+                {statusMeta.label}
+              </Text>
+            </View>
+          </View>
+
+          <View style={styles.modalMetricGrid}>
+            {renderModalMetric(
+              'Focus duration',
+              formatMinutesLabel(session.durationMinutes),
+              'time-outline'
+            )}
+            {renderModalMetric(
+              'Preset',
+              session.presetName,
+              'options-outline',
+              theme.colors.purple,
+              theme.colors.purpleSoft
+            )}
+            {renderModalMetric(
+              'Started',
+              formatSessionDateTime(session.startedAt, todayDate),
+              'play-circle-outline',
+              theme.colors.blue,
+              theme.colors.blueSoft
+            )}
+            {renderModalMetric(
+              'Ended',
+              formatSessionDateTime(session.endedAt || session.date, todayDate),
+              'stop-circle-outline',
+              '#B7791F',
+              theme.colors.yellowSoft
+            )}
+            {renderModalMetric(
+              'Linked task',
+              linkedTask?.title || 'No linked task',
+              linkedTask ? 'document-text-outline' : 'unlink-outline',
+              theme.colors.primaryDark,
+              linkedTask ? theme.colors.successSoft : theme.colors.input
+            )}
+          </View>
+        </View>
+
+        {renderModalActions({
+          closeLabel: 'Close',
         })}
       </>
     );
@@ -2864,6 +2987,9 @@ export default function CompanionScreen() {
   const renderDetailModalContent = () => {
     if (activeDetailModal === 'analytics') return renderAnalyticsModalContent();
     if (activeDetailModal === 'sessions') return renderRecentSessionsModalContent();
+    if (activeDetailModal === 'sessionDetail') {
+      return renderSessionDetailModalContent();
+    }
     if (activeDetailModal === 'reaction') return renderReactionModalContent();
     if (activeDetailModal === 'resources') return renderResourceFinderModalContent();
 
@@ -2871,13 +2997,6 @@ export default function CompanionScreen() {
   };
 
   const activePlayer = getActivePlayer();
-  const shouldRenderMiloVideo = Boolean(
-    isCompanionFocused &&
-      !isReduceMotionEnabled &&
-      activeMiloVideo &&
-      activePlayer &&
-      !videoFailed
-  );
 
   return (
     <ScreenContainer
@@ -2892,7 +3011,11 @@ export default function CompanionScreen() {
             numberOfLines={1}
             adjustsFontSizeToFit
             minimumFontScale={0.82}
-            style={[styles.headerTitle, compactWidth && styles.headerTitleCompact]}
+            style={[
+              styles.headerTitle,
+              isDark && styles.headerTitleDark,
+              compactWidth && styles.headerTitleCompact,
+            ]}
           >
             Companion
           </Text>
@@ -2902,6 +3025,7 @@ export default function CompanionScreen() {
             minimumFontScale={0.82}
             style={[
               styles.headerSubtitle,
+              isDark && styles.headerSubtitleDark,
               compactWidth && styles.headerSubtitleCompact,
             ]}
           >
@@ -2914,6 +3038,8 @@ export default function CompanionScreen() {
             activeOpacity={0.82}
             style={[
               styles.headerIconButton,
+              isDark && styles.headerIconButtonDark,
+              !isDark && styles.lightSurfaceDepthSmall,
               compactWidth && styles.headerIconButtonCompact,
             ]}
             onPress={() => navigation.navigate('ReminderCenter')}
@@ -2934,6 +3060,8 @@ export default function CompanionScreen() {
             activeOpacity={0.82}
             style={[
               styles.headerIconButton,
+              isDark && styles.headerIconButtonDark,
+              !isDark && styles.lightSurfaceDepthSmall,
               compactWidth && styles.headerIconButtonCompact,
             ]}
             onPress={() => navigation.navigate('Settings')}
@@ -2949,7 +3077,15 @@ export default function CompanionScreen() {
         </View>
       </View>
 
-      <View style={[styles.roomCard, styles.miloStage, { height: roomCardHeight }]}>
+      <View
+        style={[
+          styles.roomCard,
+          isDark && styles.roomCardDark,
+          !isDark && styles.lightSurfaceDepthLarge,
+          styles.miloStage,
+          { height: roomCardHeight },
+        ]}
+      >
         <TouchableOpacity
           activeOpacity={0.95}
           onPress={handleMiloPress}
@@ -2959,24 +3095,24 @@ export default function CompanionScreen() {
         >
           <Image
             source={miloIdleScene}
-            style={[styles.miloStageMedia, styles.miloStageMediaFraming]}
+            style={styles.miloStageMedia}
             resizeMode="cover"
           />
 
-          {shouldRenderMiloVideo && activePlayer ? (
-            <VideoView
-              player={activePlayer}
-              style={[
-                styles.miloStageMedia,
-                styles.miloStageMediaFraming,
-                styles.miloStageVideo,
-              ]}
-              nativeControls={false}
-              contentFit="cover"
-              surfaceType="textureView"
-              useExoShutter={false}
-            />
-          ) : null}
+          {!reduceMotionEnabled &&
+            isCompanionFocused &&
+            activeMiloVideo &&
+            activePlayer &&
+            !videoFailed && (
+              <VideoView
+                player={activePlayer}
+                style={[styles.miloStageMedia, styles.miloStageVideo]}
+                nativeControls={false}
+                contentFit="cover"
+                surfaceType="textureView"
+                useExoShutter={false}
+              />
+            )}
 
           <View pointerEvents="none" style={styles.miloStageSoftOverlay} />
           {isDark ? (
@@ -2985,18 +3121,8 @@ export default function CompanionScreen() {
         </TouchableOpacity>
 
         <Animated.View
-          style={[
-            styles.speechBubble,
-            heroGlassCardStyle,
-            {
-              left: speechBubbleLeft,
-              top: speechBubbleTop,
-              maxWidth: speechBubbleMaxWidth,
-            },
-            speechBubbleMotionStyle,
-          ]}
+          style={[styles.speechBubble, speechBubbleMotionStyle]}
         >
-          <HeroGlassLayers />
           <Text numberOfLines={1} style={styles.speechGreeting}>
             Hi {displayName}! 👋
           </Text>
@@ -3008,17 +3134,11 @@ export default function CompanionScreen() {
           >
             {activeMessage}
           </Text>
-          <View style={[styles.speechTail, heroGlassTailStyle]} />
+          <View style={styles.speechTail} />
         </Animated.View>
 
-        <View
-          style={[
-            styles.moodPanel,
-            { right: moodPanelRight, width: moodPanelWidth },
-          ]}
-        >
-          <View style={[styles.moodCard, heroGlassCardStyle]}>
-            <HeroGlassLayers />
+        <View style={[styles.moodPanel, { width: moodPanelWidth }]}>
+          <View style={styles.moodCard}>
             <View style={styles.moodCardTopRow}>
               <Text style={styles.moodCardTitle}>Milo's Mood</Text>
               <MiloMoodImage
@@ -3036,40 +3156,25 @@ export default function CompanionScreen() {
           </View>
 
           {statusItems.map((item) => (
-            <MoodStatusCard
-              key={item.label}
-              item={item}
-              glassStyle={heroGlassCardStyle}
-            />
+            <MoodStatusCard key={item.label} item={item} />
           ))}
         </View>
 
-        <View
-          style={[
-            styles.tapMiloCard,
-            { left: tapMiloCardLeft },
-            heroGlassPillStyle,
-            !shouldShowTapHint && styles.tapMiloCardIconOnly,
-          ]}
-        >
-          <HeroGlassLayers />
-          <TouchableOpacity
-            activeOpacity={0.82}
-            style={[
-              styles.tapSpeakerButton,
-              !shouldShowTapHint && styles.tapSpeakerButtonSolo,
-            ]}
-            onPress={handleSpeak}
-            accessibilityRole="button"
-            accessibilityLabel="Hear Milo"
-          >
-            <Ionicons
-              name="volume-medium"
-              size={15}
-              color={theme.colors.primaryDark}
-            />
-          </TouchableOpacity>
-          {shouldShowTapHint ? (
+        {tapHintSeen === false ? (
+          <View style={styles.tapMiloCard}>
+            <TouchableOpacity
+              activeOpacity={0.82}
+              style={styles.tapSpeakerButton}
+              onPress={handleSpeak}
+              accessibilityRole="button"
+              accessibilityLabel="Hear Milo"
+            >
+              <Ionicons
+                name="volume-medium"
+                size={15}
+                color={theme.colors.primaryDark}
+              />
+            </TouchableOpacity>
             <TouchableOpacity
               activeOpacity={0.86}
               onPress={handleMiloPress}
@@ -3078,14 +3183,14 @@ export default function CompanionScreen() {
             >
               <Text style={styles.tapHint}>Tap me!</Text>
             </TouchableOpacity>
-          ) : null}
-        </View>
+          </View>
+        ) : null}
 
       </View>
 
       <TouchableOpacity
         activeOpacity={0.9}
-        style={styles.talkCard}
+        style={[styles.talkCard, !isDark && styles.lightSurfaceDepthMedium]}
         onPress={handleContinueChat}
         accessibilityRole="button"
         accessibilityLabel="Open Talk with Milo"
@@ -3179,7 +3284,7 @@ export default function CompanionScreen() {
 
       <TouchableOpacity
         activeOpacity={0.9}
-        style={styles.focusGuardCard}
+        style={[styles.focusGuardCard, !isDark && styles.lightSurfaceDepthMedium]}
         onPress={() => void handleStartFocus()}
         accessibilityRole="button"
         accessibilityLabel="Start FocusGuard Pomodoro"
@@ -3226,7 +3331,11 @@ export default function CompanionScreen() {
 
       <TouchableOpacity
         activeOpacity={0.9}
-        style={[styles.focusGuardCard, styles.resourceFinderCard]}
+        style={[
+          styles.focusGuardCard,
+          styles.resourceFinderCard,
+          !isDark && styles.lightSurfaceDepthMedium,
+        ]}
         onPress={() => {
           setResourceFinderMode('finder');
           setResourceFinderMessage('');
@@ -3319,7 +3428,7 @@ export default function CompanionScreen() {
                 minimumFontScale={0.78}
                 style={styles.analyticsStatValue}
               >
-                {formatMinutesLabel(focusAnalytics.todayFocusMinutes)}
+                {formatMinutesLabel(focusAnalytics.weekFocusMinutes)}
               </Text>
               <Text numberOfLines={1} style={styles.analyticsStatLabel}>
                 Focus time
@@ -3375,13 +3484,7 @@ export default function CompanionScreen() {
           <WeeklyFocusChart data={focusAnalytics.weeklyTrend} />
         </TouchableOpacity>
 
-        <TouchableOpacity
-          activeOpacity={0.9}
-          style={styles.recentSessionsCard}
-          onPress={() => void openDetailModal('sessions')}
-          accessibilityRole="button"
-          accessibilityLabel="Open Recent Sessions details"
-        >
+        <View style={styles.recentSessionsCard}>
           <View style={styles.analyticsHeader}>
             <Text style={styles.dashboardCardTitle}>Recent Sessions</Text>
             <TouchableOpacity
@@ -3394,66 +3497,91 @@ export default function CompanionScreen() {
             </TouchableOpacity>
           </View>
 
-          {recentSessionRows.map((session) => {
-            const statusMeta = focusSessionStatusMeta[session.status];
+          {recentSessionRows.length > 0 ? (
+            recentSessionRows.map((session) => {
+              const statusMeta = focusSessionStatusMeta[session.status];
 
-            return (
-              <View key={session.id} style={styles.sessionRow}>
-                <View
-                  style={[
-                    styles.sessionIcon,
-                    { backgroundColor: statusMeta.backgroundColor },
-                  ]}
+              return (
+                <TouchableOpacity
+                  key={session.id}
+                  activeOpacity={0.86}
+                  style={styles.sessionRow}
+                  onPress={() => void handleOpenFocusSession(session)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Open focus session ${getSessionTitle(session)}`}
                 >
-                  <Ionicons
-                    name={statusMeta.icon}
-                    size={22}
-                    color={statusMeta.color}
-                  />
-                </View>
-                <View style={styles.sessionCopy}>
-                  <Text numberOfLines={1} style={styles.sessionTitle}>
-                    {getSessionTitle(session)}
-                  </Text>
-                  <Text numberOfLines={1} style={styles.sessionMeta}>
-                    {formatSessionDate(session.date, todayDate)} -{' '}
-                    {formatMinutesLabel(session.durationMinutes)}
-                  </Text>
-                </View>
-                <View style={styles.sessionStatusWrap}>
                   <View
                     style={[
-                      styles.sessionStatusPill,
+                      styles.sessionIcon,
                       { backgroundColor: statusMeta.backgroundColor },
                     ]}
                   >
-                    <Text
-                      numberOfLines={1}
-                      adjustsFontSizeToFit
-                      minimumFontScale={0.82}
-                      style={[
-                        styles.sessionStatusText,
-                        { color: statusMeta.color },
-                      ]}
-                    >
-                      {statusMeta.label}
-                    </Text>
-                  </View>
-                  <View style={styles.sessionTimeRow}>
-                    <Text numberOfLines={1} style={styles.sessionTime}>
-                      {formatSessionTime(session.date)}
-                    </Text>
                     <Ionicons
-                      name="chevron-forward"
-                      size={12}
-                      color={theme.colors.muted}
+                      name={statusMeta.icon}
+                      size={22}
+                      color={statusMeta.color}
                     />
                   </View>
-                </View>
+                  <View style={styles.sessionCopy}>
+                    <Text numberOfLines={1} style={styles.sessionTitle}>
+                      {getSessionTitle(session)}
+                    </Text>
+                    <Text numberOfLines={1} style={styles.sessionMeta}>
+                      {formatSessionDate(session.endedAt || session.date, todayDate)} -{' '}
+                      {formatMinutesLabel(session.durationMinutes)}
+                    </Text>
+                  </View>
+                  <View style={styles.sessionStatusWrap}>
+                    <View
+                      style={[
+                        styles.sessionStatusPill,
+                        { backgroundColor: statusMeta.backgroundColor },
+                      ]}
+                    >
+                      <Text
+                        numberOfLines={1}
+                        adjustsFontSizeToFit
+                        minimumFontScale={0.82}
+                        style={[
+                          styles.sessionStatusText,
+                          { color: statusMeta.color },
+                        ]}
+                      >
+                        {statusMeta.label}
+                      </Text>
+                    </View>
+                    <View style={styles.sessionTimeRow}>
+                      <Text numberOfLines={1} style={styles.sessionTime}>
+                        {formatSessionTime(session.endedAt || session.date)}
+                      </Text>
+                      <Ionicons
+                        name="chevron-forward"
+                        size={12}
+                        color={theme.colors.muted}
+                      />
+                    </View>
+                  </View>
+                </TouchableOpacity>
+              );
+            })
+          ) : (
+            <View style={styles.sessionEmptyState}>
+              <View style={styles.sessionEmptyIcon}>
+                <Ionicons
+                  name="timer-outline"
+                  size={20}
+                  color={theme.colors.primaryDark}
+                />
               </View>
-            );
-          })}
-        </TouchableOpacity>
+              <View style={styles.sessionCopy}>
+                <Text style={styles.sessionTitle}>No sessions yet</Text>
+                <Text style={styles.sessionMeta}>
+                  Start a Pomodoro and Milo will save it here.
+                </Text>
+              </View>
+            </View>
+          )}
+        </View>
       </View>
 
       <TouchableOpacity
@@ -3489,11 +3617,19 @@ export default function CompanionScreen() {
               compactReactsStrip && styles.reactsCopyPhone,
             ]}
           >
-            <Text style={styles.reactsTitle}>Milo reacts</Text>
+            <Text numberOfLines={1} style={styles.reactsTitle}>
+              Milo reacts
+            </Text>
             <Text numberOfLines={3} style={styles.reactsText}>
               {latestReaction}
             </Text>
           </View>
+
+          {!narrowContent ? (
+            <View style={styles.reactsCelebration}>
+              <MiloMoodImage mood="celebrating" size={64} />
+            </View>
+          ) : null}
         </View>
 
         <View
@@ -3575,17 +3711,6 @@ export default function CompanionScreen() {
             <Text style={styles.reactChipLabel}>Preset</Text>
           </View>
         </View>
-
-        {!compactReactsStrip ? (
-          <View
-            style={[
-              styles.reactsCelebration,
-              stackReactsStrip && styles.reactsCelebrationCompact,
-            ]}
-          >
-            <MiloMoodImage mood="celebrating" size={64} />
-          </View>
-        ) : null}
       </TouchableOpacity>
 
       <Modal
@@ -3655,6 +3780,9 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     letterSpacing: 0,
   },
+  headerTitleDark: {
+    color: '#F4FFF7',
+  },
   headerTitleCompact: {
     fontSize: 34,
   },
@@ -3665,6 +3793,9 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     flexShrink: 1,
     lineHeight: 20,
+  },
+  headerSubtitleDark: {
+    color: '#B9D1C5',
   },
   headerSubtitleCompact: {
     fontSize: 13,
@@ -3686,6 +3817,10 @@ const styles = StyleSheet.create({
     borderColor: theme.colors.border,
     marginLeft: 10,
     ...theme.shadowSoft,
+  },
+  headerIconButtonDark: {
+    backgroundColor: '#182A26',
+    borderColor: '#33574C',
   },
   headerIconButtonCompact: {
     width: 42,
@@ -3718,17 +3853,51 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     borderWidth: 1,
     borderColor: theme.colors.border,
-    borderTopColor: '#FDF7E978',
-    borderBottomColor: 'rgba(46, 125, 75, 0.08)',
     marginBottom: 18,
     shadowColor: theme.colors.shadow,
     shadowOffset: {
       width: 0,
       height: 16,
     },
-    shadowOpacity: 0.13,
+    shadowOpacity: 0.1,
+    shadowRadius: 22,
+    elevation: 5,
+  },
+  lightSurfaceDepthSmall: {
+    shadowColor: '#1F8A4C',
+    shadowOffset: {
+      width: 0,
+      height: 8,
+    },
+    shadowOpacity: 0.12,
+    shadowRadius: 14,
+    elevation: 4,
+  },
+  lightSurfaceDepthMedium: {
+    shadowColor: '#1F8A4C',
+    shadowOffset: {
+      width: 0,
+      height: 12,
+    },
+    shadowOpacity: 0.11,
     shadowRadius: 18,
     elevation: 6,
+  },
+  lightSurfaceDepthLarge: {
+    shadowColor: '#1F8A4C',
+    shadowOffset: {
+      width: 0,
+      height: 16,
+    },
+    shadowOpacity: 0.13,
+    shadowRadius: 22,
+    elevation: 7,
+  },
+  roomCardDark: {
+    backgroundColor: '#0B3328',
+    borderColor: '#33574C',
+    shadowColor: '#000',
+    shadowOpacity: 0.28,
   },
   roomBackWall: {
     position: 'absolute',
@@ -3910,6 +4079,8 @@ const styles = StyleSheet.create({
   },
   speechBubble: {
     position: 'absolute',
+    top: 18,
+    left: 18,
     width: '52%',
     minWidth: 156,
     maxWidth: 210,
@@ -3919,37 +4090,15 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     borderWidth: 1,
     borderColor: theme.colors.border,
-    borderTopColor: '#FDF7E978',
-    borderBottomColor: 'rgba(46, 125, 75, 0.08)',
     zIndex: 10,
     shadowColor: theme.colors.shadow,
     shadowOffset: {
       width: 0,
       height: 10,
     },
-    shadowOpacity: 0.12,
+    shadowOpacity: 0.08,
     shadowRadius: 16,
-    elevation: 5,
-  },
-  heroGlassSheen: {
-    ...StyleSheet.absoluteFillObject,
-    borderRadius: 26,
-    opacity: 0.84,
-    zIndex: 0,
-  },
-  heroGlassInnerGlow: {
-    ...StyleSheet.absoluteFillObject,
-    borderRadius: 26,
-    opacity: 0.78,
-    zIndex: 0,
-  },
-  heroGlassEdge: {
-    ...StyleSheet.absoluteFillObject,
-    borderRadius: 26,
-    borderTopWidth: 1,
-    borderLeftWidth: 1,
-    borderColor: '#FDF7E978',
-    zIndex: 1,
+    elevation: 4,
   },
   speechGreeting: {
     color: theme.colors.text,
@@ -3981,31 +4130,29 @@ const styles = StyleSheet.create({
   moodPanel: {
     position: 'absolute',
     top: 18,
+    right: 12,
     zIndex: 10,
   },
   moodCard: {
     minHeight: 108,
     borderRadius: 22,
-    backgroundColor: theme.colors.card,
+    backgroundColor: 'rgba(255, 255, 255, 0.72)',
     padding: 10,
     borderWidth: 1,
-    borderColor: theme.colors.border,
-    borderTopColor: '#FDF7E978',
+    borderColor: 'rgba(255, 255, 255, 0.52)',
     shadowColor: theme.colors.shadow,
     shadowOffset: {
       width: 0,
       height: 8,
     },
-    shadowOpacity: 0.15,
-    shadowRadius: 18,
-    elevation: 6,
-    overflow: 'hidden',
+    shadowOpacity: 0.07,
+    shadowRadius: 12,
+    elevation: 3,
   },
   moodCardTopRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    zIndex: 2,
   },
   moodCardTitle: {
     flex: 1,
@@ -4024,7 +4171,6 @@ const styles = StyleSheet.create({
     color: theme.colors.text,
     fontSize: 15,
     fontWeight: '900',
-    zIndex: 2,
   },
   moodSubtext: {
     marginTop: 4,
@@ -4032,17 +4178,15 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '700',
     lineHeight: 13,
-    zIndex: 2,
   },
   statusCard: {
     minHeight: 49,
     borderRadius: 18,
-    backgroundColor: theme.colors.card,
+    backgroundColor: 'rgba(255, 255, 255, 0.68)',
     paddingHorizontal: 8,
     paddingVertical: 7,
     borderWidth: 1,
-    borderColor: theme.colors.border,
-    borderTopColor: '#FDF7E978',
+    borderColor: 'rgba(255, 255, 255, 0.48)',
     flexDirection: 'row',
     alignItems: 'center',
     marginTop: 7,
@@ -4051,21 +4195,21 @@ const styles = StyleSheet.create({
       width: 0,
       height: 6,
     },
-    shadowOpacity: 0.13,
-    shadowRadius: 15,
-    elevation: 5,
-    overflow: 'hidden',
+    shadowOpacity: 0.055,
+    shadowRadius: 10,
+    elevation: 2,
   },
-  statusIconGlyph: {
+  statusIcon: {
     width: 25,
+    height: 25,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
     marginRight: 7,
-    textAlign: 'center',
-    zIndex: 2,
   },
   statusCopy: {
     flex: 1,
     minWidth: 0,
-    zIndex: 2,
   },
   statusLabel: {
     color: theme.colors.subtleText,
@@ -4247,10 +4391,11 @@ const styles = StyleSheet.create({
   },
   tapMiloCard: {
     position: 'absolute',
+    left: 16,
     bottom: 18,
     minHeight: 40,
     borderRadius: 999,
-    backgroundColor: theme.colors.card,
+    backgroundColor: 'rgba(255, 255, 255, 0.72)',
     paddingVertical: 6,
     paddingLeft: 7,
     paddingRight: 12,
@@ -4258,20 +4403,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     zIndex: 10,
     borderWidth: 1,
-    borderColor: theme.colors.border,
-    borderTopColor: '#FDF7E978',
+    borderColor: 'rgba(255, 255, 255, 0.52)',
     shadowColor: theme.colors.shadow,
     shadowOffset: {
       width: 0,
       height: 7,
     },
-    shadowOpacity: 0.15,
-    shadowRadius: 17,
-    elevation: 6,
-    overflow: 'hidden',
-  },
-  tapMiloCardIconOnly: {
-    paddingRight: 7,
+    shadowOpacity: 0.07,
+    shadowRadius: 12,
+    elevation: 3,
   },
   tapSpeakerButton: {
     width: 28,
@@ -4281,16 +4421,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 7,
-    zIndex: 2,
-  },
-  tapSpeakerButtonSolo: {
-    marginRight: 0,
   },
   tapHint: {
     color: theme.colors.primary,
     fontSize: 11,
     fontWeight: '900',
-    zIndex: 2,
   },
   miloStage: {
     width: '100%',
@@ -4305,39 +4440,34 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     borderRadius: 28,
     overflow: 'hidden',
-    zIndex: 1,
-    elevation: 1,
+    zIndex: 0,
+    elevation: 0,
   },
   miloStageMedia: {
     ...StyleSheet.absoluteFillObject,
     width: '100%',
     height: '100%',
-    zIndex: 0,
-  },
-  miloStageMediaFraming: {
-    transform: [{ translateX: -14 }, { translateY: -2 }, { scale: 1.06 }],
+    zIndex: 1,
   },
   miloStageVideo: {
-    zIndex: 1,
+    zIndex: 2,
     elevation: 2,
   },
   miloStageSoftOverlay: {
     ...StyleSheet.absoluteFillObject,
-    zIndex: 2,
+    zIndex: 3,
     backgroundColor: 'rgba(255, 255, 255, 0.08)',
   },
   miloStageDarkOverlay: {
     ...StyleSheet.absoluteFillObject,
-    zIndex: 3,
-    backgroundColor: '#00000017',
+    zIndex: 4,
+    backgroundColor: 'rgba(0, 0, 0, 0.18)',
   },
   talkCard: {
     backgroundColor: theme.colors.card,
     borderRadius: 28,
     borderWidth: 1,
     borderColor: theme.colors.border,
-    borderTopColor: '#FDF7E978',
-    borderBottomColor: 'rgba(46, 125, 75, 0.08)',
     padding: 16,
     marginBottom: 16,
     shadowColor: theme.colors.shadow,
@@ -4345,9 +4475,9 @@ const styles = StyleSheet.create({
       width: 0,
       height: 12,
     },
-    shadowOpacity: 0.12,
-    shadowRadius: 16,
-    elevation: 5,
+    shadowOpacity: 0.07,
+    shadowRadius: 18,
+    elevation: 4,
   },
   talkTitleRow: {
     flexDirection: 'row',
@@ -4361,9 +4491,6 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.primarySoft,
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: theme.colors.inputBorder,
-    borderTopColor: '#FDF7E978',
   },
   talkTitle: {
     marginLeft: 10,
@@ -4396,9 +4523,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginRight: 10,
     overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: theme.colors.inputBorder,
-    borderTopColor: '#FDF7E978',
   },
   talkPreviewBubble: {
     flex: 1,
@@ -4409,7 +4533,6 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.input,
     borderWidth: 1,
     borderColor: theme.colors.inputBorder,
-    borderTopColor: '#FDF7E978',
     paddingHorizontal: 12,
     paddingVertical: 10,
   },
@@ -4465,18 +4588,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 14,
-    borderWidth: 1,
-    borderColor: '#4DBA62',
-    borderTopColor: '#7CE38D',
-    borderBottomColor: '#1E6C34',
     shadowColor: theme.colors.primaryDark,
     shadowOffset: {
       width: 0,
       height: 8,
     },
     shadowOpacity: 0.16,
-    shadowRadius: 17,
-    elevation: 5,
+    shadowRadius: 14,
+    elevation: 4,
   },
   continueChatText: {
     color: theme.colors.white,
@@ -4492,19 +4611,10 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.card,
     borderWidth: 1,
     borderColor: theme.colors.border,
-    borderTopColor: '#FDF7E978',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 12,
-    shadowColor: theme.colors.shadow,
-    shadowOffset: {
-      width: 0,
-      height: 5,
-    },
-    shadowOpacity: 0.09,
-    shadowRadius: 10,
-    elevation: 3,
   },
   oldMessagesButtonDisabled: {
     backgroundColor: theme.colors.input,
@@ -4528,8 +4638,6 @@ const styles = StyleSheet.create({
     borderRadius: 24,
     borderWidth: 1,
     borderColor: theme.colors.border,
-    borderTopColor: '#FDF7E978',
-    borderBottomColor: 'rgba(46, 125, 75, 0.08)',
     padding: 13,
     marginBottom: 16,
     flexDirection: 'row',
@@ -4539,9 +4647,9 @@ const styles = StyleSheet.create({
       width: 0,
       height: 10,
     },
-    shadowOpacity: 0.15,
+    shadowOpacity: 0.065,
     shadowRadius: 16,
-    elevation: 5,
+    elevation: 3,
   },
   focusGuardIconWrap: {
     width: 48,
@@ -4550,7 +4658,6 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.primarySoft,
     borderWidth: 1,
     borderColor: theme.colors.inputBorder,
-    borderTopColor: '#FDF7E978',
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 11,
@@ -4581,7 +4688,6 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.primarySoft,
     borderWidth: 1,
     borderColor: theme.colors.inputBorder,
-    borderTopColor: '#FDF7E978',
     paddingHorizontal: 8,
     alignItems: 'center',
     justifyContent: 'center',
@@ -4606,18 +4712,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingHorizontal: 13,
     flexShrink: 0,
-    borderWidth: 1,
-    borderColor: '#4DBA62',
-    borderTopColor: '#7CE38D',
-    borderBottomColor: '#1E6C34',
-    shadowColor: theme.colors.primaryDark,
-    shadowOffset: {
-      width: 0,
-      height: 5,
-    },
-    shadowOpacity: 0.12,
-    shadowRadius: 10,
-    elevation: 3,
   },
   focusGuardButtonText: {
     color: theme.colors.white,
@@ -4882,6 +4976,26 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     elevation: 1,
   },
+  sessionEmptyState: {
+    minHeight: 68,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surface,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 11,
+    paddingVertical: 9,
+  },
+  sessionEmptyIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: theme.colors.primarySoft,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 10,
+  },
   sessionIcon: {
     width: 42,
     height: 42,
@@ -4941,8 +5055,8 @@ const styles = StyleSheet.create({
     borderColor: theme.colors.border,
     padding: 12,
     marginBottom: 16,
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: 'column',
+    alignItems: 'stretch',
     gap: 10,
     shadowColor: theme.colors.shadow,
     shadowOffset: {
@@ -4954,16 +5068,14 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
   reactsStripCompact: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    alignItems: 'center',
+    alignItems: 'stretch',
   },
   reactsStripPhone: {
     padding: 10,
     gap: 8,
   },
   reactsIntro: {
-    flex: 1,
+    width: '100%',
     minWidth: 0,
     flexDirection: 'row',
     alignItems: 'center',
@@ -4976,6 +5088,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     overflow: 'hidden',
+    flexShrink: 0,
   },
   reactsAvatarPhone: {
     width: 48,
@@ -4986,17 +5099,17 @@ const styles = StyleSheet.create({
     flex: 1,
     minWidth: 0,
     marginLeft: 11,
-    paddingRight: 8,
+    paddingRight: 0,
   },
   reactsCopyPhone: {
     marginLeft: 8,
-    paddingRight: 4,
   },
   reactsTitle: {
     color: theme.colors.primaryDark,
     fontSize: 14,
     fontWeight: '900',
     marginBottom: 4,
+    flexShrink: 1,
   },
   reactsText: {
     color: theme.colors.text,
@@ -5006,21 +5119,25 @@ const styles = StyleSheet.create({
     flexShrink: 1,
   },
   reactsChips: {
+    width: '100%',
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 8,
-    justifyContent: 'flex-end',
+    justifyContent: 'flex-start',
+    alignItems: 'stretch',
   },
   reactsChipsCompact: {
-    width: '100%',
-    justifyContent: 'space-between',
+    justifyContent: 'flex-start',
   },
   reactsChipsPhone: {
-    flexShrink: 0,
     gap: 6,
   },
   reactChip: {
-    width: 68,
+    flexGrow: 1,
+    flexShrink: 1,
+    flexBasis: 84,
+    minWidth: 74,
+    maxWidth: 128,
     minHeight: 76,
     borderRadius: 18,
     backgroundColor: theme.colors.input,
@@ -5031,7 +5148,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 6,
   },
   reactChipPhone: {
-    width: 54,
+    flexBasis: 82,
+    minWidth: 72,
     minHeight: 66,
     paddingHorizontal: 4,
   },
@@ -5058,9 +5176,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     overflow: 'hidden',
-  },
-  reactsCelebrationCompact: {
-    alignSelf: 'center',
+    flexShrink: 0,
+    marginLeft: 10,
   },
   modalBackdrop: {
     flex: 1,

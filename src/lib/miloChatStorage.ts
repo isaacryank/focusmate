@@ -77,13 +77,22 @@ export type MiloChatSession = {
   messages: MiloChatStorageMessage[];
 };
 
-const CURRENT_CHAT_STORAGE_KEY = '@focusmate/milo-chat/current';
-const CHAT_SESSIONS_STORAGE_KEY = '@focusmate/milo-chat/sessions';
-const MAX_STORED_MESSAGES = 80;
-const MAX_STORED_SESSIONS = 10;
+const ANONYMOUS_CURRENT_CHAT_STORAGE_KEY = '@focusmate/milo-chat/current';
+const ANONYMOUS_CHAT_SESSIONS_STORAGE_KEY = '@focusmate/milo-chat/sessions';
+const MAX_STORED_MESSAGES = 200;
 const MAX_MESSAGE_TEXT_LENGTH = 1400;
 const MAX_TITLE_LENGTH = 48;
 const MAX_PREVIEW_LENGTH = 110;
+
+const getCurrentChatStorageKey = (userId?: string | null) =>
+  userId
+    ? `@focusmate/milo-chat/current/user:${userId}`
+    : ANONYMOUS_CURRENT_CHAT_STORAGE_KEY;
+
+const getChatSessionsStorageKey = (userId?: string | null) =>
+  userId
+    ? `@focusmate/milo-chat/sessions/user:${userId}`
+    : ANONYMOUS_CHAT_SESSIONS_STORAGE_KEY;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -290,6 +299,51 @@ function sortSessions(sessions: MiloChatSession[]) {
   );
 }
 
+function mergeChatSessions(sessions: MiloChatSession[]) {
+  const sessionsById = new Map<string, MiloChatSession>();
+
+  sessions.forEach((session) => {
+    const current = sessionsById.get(session.id);
+
+    if (
+      !current ||
+      new Date(session.updatedAt).getTime() > new Date(current.updatedAt).getTime()
+    ) {
+      sessionsById.set(session.id, session);
+    }
+  });
+
+  return sortSessions(Array.from(sessionsById.values()));
+}
+
+function getStoredMessagesSignature(messages: MiloChatStorageMessage[]) {
+  return JSON.stringify(messages);
+}
+
+async function loadCurrentMessagesForKey(storageKey: string) {
+  const stored = await AsyncStorage.getItem(storageKey);
+  if (!stored) return [];
+
+  const parsed = JSON.parse(stored);
+  return sanitizeStoredMessages(
+    Array.isArray(parsed) ? parsed : isRecord(parsed) ? parsed.messages : []
+  );
+}
+
+async function loadSessionsForKey(storageKey: string) {
+  const stored = await AsyncStorage.getItem(storageKey);
+  if (!stored) return [];
+
+  const parsed = JSON.parse(stored);
+  const sessions = Array.isArray(parsed)
+    ? parsed
+        .map(sanitizeStoredSession)
+        .filter((session): session is MiloChatSession => Boolean(session))
+    : [];
+
+  return sortSessions(sessions);
+}
+
 function getSessionTitle(messages: MiloChatStorageMessage[]) {
   const firstUserMessage = messages.find((message) => message.role === 'user');
   return trimText(firstUserMessage?.text, MAX_TITLE_LENGTH) || 'Milo chat';
@@ -322,15 +376,43 @@ function buildChatSession(
   };
 }
 
-export async function loadCurrentMiloChat() {
+export async function loadCurrentMiloChat(userId?: string | null) {
   try {
-    const stored = await AsyncStorage.getItem(CURRENT_CHAT_STORAGE_KEY);
-    if (!stored) return [];
+    const storageKey = getCurrentChatStorageKey(userId);
+    const scopedMessages = await loadCurrentMessagesForKey(storageKey);
 
-    const parsed = JSON.parse(stored);
-    return sanitizeStoredMessages(
-      Array.isArray(parsed) ? parsed : isRecord(parsed) ? parsed.messages : []
+    if (scopedMessages.length > 0 || !userId) {
+      console.log('Loaded Milo chat message count:', scopedMessages.length);
+      return scopedMessages;
+    }
+
+    const anonymousMessages = await loadCurrentMessagesForKey(
+      ANONYMOUS_CURRENT_CHAT_STORAGE_KEY
     );
+
+    if (anonymousMessages.length > 0) {
+      const anonymousSignature = getStoredMessagesSignature(anonymousMessages);
+      const sessionsStorageKey = getChatSessionsStorageKey(userId);
+      const archivedSessions = mergeChatSessions([
+        ...(await loadSessionsForKey(sessionsStorageKey)),
+        ...(await loadSessionsForKey(ANONYMOUS_CHAT_SESSIONS_STORAGE_KEY)),
+      ]);
+      const isAlreadyArchived = archivedSessions.some(
+        (session) =>
+          getStoredMessagesSignature(session.messages) === anonymousSignature
+      );
+
+      if (isAlreadyArchived) {
+        console.log('Loaded Milo chat message count:', 0);
+        return [];
+      }
+
+      await saveCurrentMiloChat(anonymousMessages, userId);
+      console.log('Migrated Milo chat message count:', anonymousMessages.length);
+    }
+
+    console.log('Loaded Milo chat message count:', anonymousMessages.length);
+    return anonymousMessages;
   } catch (error) {
     console.log('Failed to load current Milo chat:', error);
     return [];
@@ -338,78 +420,101 @@ export async function loadCurrentMiloChat() {
 }
 
 export async function saveCurrentMiloChat(
-  messages: MiloChatStorageMessage[]
+  messages: MiloChatStorageMessage[],
+  userId?: string | null
 ) {
   const nextMessages = sanitizeStoredMessages(messages);
   await AsyncStorage.setItem(
-    CURRENT_CHAT_STORAGE_KEY,
+    getCurrentChatStorageKey(userId),
     JSON.stringify(nextMessages)
   );
 }
 
-export async function loadMiloChatSessions() {
+export async function loadMiloChatSessions(userId?: string | null) {
   try {
-    const stored = await AsyncStorage.getItem(CHAT_SESSIONS_STORAGE_KEY);
-    if (!stored) return [];
-
-    const parsed = JSON.parse(stored);
-    const sessions = Array.isArray(parsed)
-      ? parsed
-          .map(sanitizeStoredSession)
-          .filter((session): session is MiloChatSession => Boolean(session))
+    const storageKey = getChatSessionsStorageKey(userId);
+    const scopedSessions = await loadSessionsForKey(storageKey);
+    const anonymousSessions = userId
+      ? await loadSessionsForKey(ANONYMOUS_CHAT_SESSIONS_STORAGE_KEY)
       : [];
+    const mergedSessions = mergeChatSessions([
+      ...scopedSessions,
+      ...anonymousSessions,
+    ]);
 
-    return sortSessions(sessions).slice(0, MAX_STORED_SESSIONS);
+    if (userId && mergedSessions.length > scopedSessions.length) {
+      await saveMiloChatSessions(mergedSessions, userId);
+      console.log(
+        'Migrated Milo chat session count:',
+        mergedSessions.length - scopedSessions.length
+      );
+    }
+
+    console.log('Loaded Milo chat session count:', mergedSessions.length);
+    return mergedSessions;
   } catch (error) {
     console.log('Failed to load Milo chat sessions:', error);
     return [];
   }
 }
 
-export async function saveMiloChatSessions(sessions: MiloChatSession[]) {
-  const nextSessions = sortSessions(
+export async function saveMiloChatSessions(
+  sessions: MiloChatSession[],
+  userId?: string | null
+) {
+  const nextSessions = mergeChatSessions(
     sessions
       .map(sanitizeStoredSession)
       .filter((session): session is MiloChatSession => Boolean(session))
-  ).slice(0, MAX_STORED_SESSIONS);
+  );
 
   await AsyncStorage.setItem(
-    CHAT_SESSIONS_STORAGE_KEY,
+    getChatSessionsStorageKey(userId),
     JSON.stringify(nextSessions)
   );
 
   return nextSessions;
 }
 
-export async function loadMiloChatSession(sessionId: string) {
-  const sessions = await loadMiloChatSessions();
+export async function loadMiloChatSession(
+  sessionId: string,
+  userId?: string | null
+) {
+  const sessions = await loadMiloChatSessions(userId);
   return sessions.find((session) => session.id === sessionId) || null;
 }
 
-export async function upsertMiloChatSession(session: MiloChatSession) {
+export async function upsertMiloChatSession(
+  session: MiloChatSession,
+  userId?: string | null
+) {
   const sanitizedSession = sanitizeStoredSession(session);
 
   if (!sanitizedSession) {
     return null;
   }
 
-  const sessions = await loadMiloChatSessions();
+  const sessions = await loadMiloChatSessions(userId);
   const nextSessions = [
     sanitizedSession,
     ...sessions.filter((item) => item.id !== sanitizedSession.id),
   ];
 
-  await saveMiloChatSessions(nextSessions);
+  await saveMiloChatSessions(nextSessions, userId);
   return sanitizedSession;
 }
 
-export async function saveMiloChatSession(session: MiloChatSession) {
-  return upsertMiloChatSession(session);
+export async function saveMiloChatSession(
+  session: MiloChatSession,
+  userId?: string | null
+) {
+  return upsertMiloChatSession(session, userId);
 }
 
 export async function archiveCurrentMiloChat(
   messages: MiloChatStorageMessage[],
-  sessionId?: string | null
+  sessionId?: string | null,
+  userId?: string | null
 ) {
   const storableMessages = sanitizeStoredMessages(messages);
 
@@ -417,26 +522,56 @@ export async function archiveCurrentMiloChat(
     return null;
   }
 
-  const sessions = await loadMiloChatSessions();
+  const sessions = await loadMiloChatSessions(userId);
   const existingSession = sessionId
     ? sessions.find((session) => session.id === sessionId)
     : undefined;
   const archivedSession = buildChatSession(storableMessages, existingSession);
 
-  return upsertMiloChatSession(archivedSession);
+  return upsertMiloChatSession(archivedSession, userId);
 }
 
-export async function clearCurrentMiloChat() {
-  await AsyncStorage.removeItem(CURRENT_CHAT_STORAGE_KEY);
+export async function clearCurrentMiloChat(
+  userId?: string | null,
+  includeAnonymous = false
+) {
+  const keys = [
+    getCurrentChatStorageKey(userId),
+    ...(includeAnonymous || !userId ? [ANONYMOUS_CURRENT_CHAT_STORAGE_KEY] : []),
+  ];
+
+  await Promise.all(Array.from(new Set(keys)).map((key) => AsyncStorage.removeItem(key)));
 }
 
-export async function deleteMiloChatSession(sessionId: string) {
-  const sessions = await loadMiloChatSessions();
+export async function deleteMiloChatSession(
+  sessionId: string,
+  userId?: string | null
+) {
+  const sessions = await loadMiloChatSessions(userId);
   await saveMiloChatSessions(
-    sessions.filter((session) => session.id !== sessionId)
+    sessions.filter((session) => session.id !== sessionId),
+    userId
   );
+
+  if (userId) {
+    const anonymousSessions = await loadSessionsForKey(
+      ANONYMOUS_CHAT_SESSIONS_STORAGE_KEY
+    );
+
+    await saveMiloChatSessions(
+      anonymousSessions.filter((session) => session.id !== sessionId)
+    );
+  }
 }
 
-export async function clearMiloChatSessions() {
-  await AsyncStorage.removeItem(CHAT_SESSIONS_STORAGE_KEY);
+export async function clearMiloChatSessions(
+  userId?: string | null,
+  includeAnonymous = false
+) {
+  const keys = [
+    getChatSessionsStorageKey(userId),
+    ...(includeAnonymous || !userId ? [ANONYMOUS_CHAT_SESSIONS_STORAGE_KEY] : []),
+  ];
+
+  await Promise.all(Array.from(new Set(keys)).map((key) => AsyncStorage.removeItem(key)));
 }

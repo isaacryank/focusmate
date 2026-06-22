@@ -857,7 +857,7 @@ export default function CalendarScreen() {
   }, [dateCardWidth, dateStrip, dateStripViewportWidth, selectedDate]);
 
   return (
-    <ScreenContainer topPadding={0} bottomPadding={176}>
+    <ScreenContainer topPadding={12} bottomPadding={176}>
       <MonthCalendarModal
         visible={monthModalVisible}
         selectedDate={selectedDate}
@@ -888,7 +888,13 @@ export default function CalendarScreen() {
         </View>
       </View>
 
-      <View style={[styles.heroCard, isDark && styles.heroCardDark]}>
+      <View
+        style={[
+          styles.heroCard,
+          isDark && styles.heroCardDark,
+          !isDark && styles.lightSurfaceDepthLarge,
+        ]}
+      >
         <View style={[styles.heroGlowLarge, isDark && styles.heroGlowLargeDark]} />
         <View style={[styles.heroGlowSmall, isDark && styles.heroGlowSmallDark]} />
         <View style={[styles.heroCopy, { maxWidth: compactWidth ? 170 : 194 }]}>
@@ -916,7 +922,7 @@ export default function CalendarScreen() {
         />
       </View>
 
-      <View style={styles.weekCard}>
+      <View style={[styles.weekCard, !isDark && styles.lightSurfaceDepthMedium]}>
         <ScrollView
           ref={dateStripRef}
           horizontal
@@ -947,7 +953,7 @@ export default function CalendarScreen() {
         </TouchableOpacity>
       </View>
 
-      <View style={styles.timelineCard}>
+      <View style={[styles.timelineCard, !isDark && styles.lightSurfaceDepthMedium]}>
         <View style={styles.timelineHeader}>
           <Text style={styles.timelineCardTitle}>{timelineTitle}</Text>
 
@@ -1039,7 +1045,10 @@ export default function CalendarScreen() {
       </View>
 
       {selectedDayMiloNote ? (
-        <View key={selectedDayMiloNote.id} style={styles.noteCard}>
+        <View
+          key={selectedDayMiloNote.id}
+          style={[styles.noteCard, !isDark && styles.lightSurfaceDepthSmall]}
+        >
           <Image source={selectedDayMiloNote.miloAsset} style={styles.noteMilo} />
           <View style={styles.noteCopy}>
             <Text style={styles.noteTitle}>{selectedDayMiloNote.title}</Text>
@@ -1131,6 +1140,36 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.14,
     shadowRadius: 18,
     elevation: 6,
+  },
+  lightSurfaceDepthSmall: {
+    shadowColor: '#1F8A4C',
+    shadowOffset: {
+      width: 0,
+      height: 8,
+    },
+    shadowOpacity: 0.1,
+    shadowRadius: 14,
+    elevation: 4,
+  },
+  lightSurfaceDepthMedium: {
+    shadowColor: '#1F8A4C',
+    shadowOffset: {
+      width: 0,
+      height: 12,
+    },
+    shadowOpacity: 0.11,
+    shadowRadius: 18,
+    elevation: 6,
+  },
+  lightSurfaceDepthLarge: {
+    shadowColor: '#1F8A4C',
+    shadowOffset: {
+      width: 0,
+      height: 16,
+    },
+    shadowOpacity: 0.13,
+    shadowRadius: 22,
+    elevation: 7,
   },
   heroCardDark: {
     backgroundColor: '#12362E',

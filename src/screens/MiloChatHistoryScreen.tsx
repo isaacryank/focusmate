@@ -14,6 +14,7 @@ import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import ScreenContainer from '../components/ui/ScreenContainer';
 import { theme } from '../theme';
 import { useFocusMateTheme } from '../theme/FocusMateThemeProvider';
+import { useAuth } from '../lib/AuthContext';
 import {
   clearMiloChatSessions,
   deleteMiloChatSession,
@@ -40,15 +41,16 @@ export default function MiloChatHistoryScreen() {
   useFocusMateTheme();
 
   const navigation = useNavigation<any>();
+  const { user } = useAuth();
   const [sessions, setSessions] = useState<MiloChatSession[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
   const refreshSessions = useCallback(async () => {
     setIsLoading(true);
-    const nextSessions = await loadMiloChatSessions();
+    const nextSessions = await loadMiloChatSessions(user?.id);
     setSessions(nextSessions);
     setIsLoading(false);
-  }, []);
+  }, [user?.id]);
 
   useFocusEffect(
     useCallback(() => {
@@ -86,7 +88,7 @@ export default function MiloChatHistoryScreen() {
           style: 'destructive',
           onPress: () => {
             void runWithHaptics(async () => {
-              await deleteMiloChatSession(session.id);
+              await deleteMiloChatSession(session.id, user?.id);
               await refreshSessions();
             });
           },
@@ -113,7 +115,7 @@ export default function MiloChatHistoryScreen() {
           style: 'destructive',
           onPress: () => {
             void runWithHaptics(async () => {
-              await clearMiloChatSessions();
+              await clearMiloChatSessions(user?.id, true);
               await refreshSessions();
             });
           },
