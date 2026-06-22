@@ -295,15 +295,24 @@ function FormInput({
   invalid?: boolean;
   validationMessage?: string;
 }) {
+  const { isDark } = useFocusMateTheme();
+
   return (
     <View
       style={[
         styles.cardDepthWrap,
         styles.detailCardDepthWrap,
         invalid && styles.cardDepthWrapInvalid,
+        invalid && isDark && styles.cardDepthWrapInvalidDark,
       ]}
     >
-      <View style={[styles.detailCard, invalid && styles.detailCardInvalid]}>
+      <View
+        style={[
+          styles.detailCard,
+          invalid && styles.detailCardInvalid,
+          invalid && isDark && styles.detailCardInvalidDark,
+        ]}
+      >
         <View style={styles.detailCardHeader}>
         {icon ? (
           <View style={styles.detailIcon}>
@@ -1803,6 +1812,10 @@ const styles = StyleSheet.create({
     backgroundColor: '#F2BEBE',
     shadowColor: '#7F1D1D',
   },
+  cardDepthWrapInvalidDark: {
+    backgroundColor: theme.colors.card,
+    shadowColor: theme.colors.shadow,
+  },
   detailCardDepthWrap: {
     borderRadius: 24,
   },
@@ -2357,6 +2370,14 @@ const styles = StyleSheet.create({
     borderTopColor: '#FFFFFF',
     borderBottomColor: 'rgba(220, 38, 38, 0.28)',
     shadowColor: '#7F1D1D',
+  },
+  detailCardInvalidDark: {
+    backgroundColor: theme.colors.input,
+    borderColor: theme.colors.danger,
+    borderTopColor: theme.colors.danger,
+    borderBottomColor: theme.colors.danger,
+    shadowColor: theme.colors.shadow,
+    shadowOpacity: 0.1,
   },
   detailCardHeader: {
     flexDirection: 'row',

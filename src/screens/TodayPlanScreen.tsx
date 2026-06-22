@@ -259,7 +259,7 @@ function EmptyTodayCard({
 }
 
 export default function TodayPlanScreen() {
-  useFocusMateTheme();
+  const { isDark } = useFocusMateTheme();
 
   const navigation = useNavigation<any>();
   const { tasks } = useTasks();
@@ -331,6 +331,13 @@ export default function TodayPlanScreen() {
       : pendingTodayItems.length === 0 && todayItems.length > 0
       ? 'Great job! Everything planned for today is completed.'
       : 'Milo sees a calm day. Nothing active needs focus right now.';
+  const heroGradientColors = isDark
+    ? ([
+        theme.colors.card,
+        theme.colors.surface,
+        theme.colors.backgroundSoft,
+      ] as const)
+    : (['#FBFFFC', '#E7FBEF', '#D9F5E5'] as const);
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -366,19 +373,19 @@ export default function TodayPlanScreen() {
         </View>
 
         <LinearGradient
-          colors={['#FBFFFC', '#E7FBEF', '#D9F5E5']}
+          colors={heroGradientColors}
           start={{ x: 0, y: 0 }}
           end={{ x: 1, y: 1 }}
-          style={styles.heroCard}
+          style={[styles.heroCard, isDark && styles.heroCardDark]}
         >
-          <View style={styles.heroCircle} />
-          <View style={styles.heroGround} />
+          <View style={[styles.heroCircle, isDark && styles.heroCircleDark]} />
+          <View style={[styles.heroGround, isDark && styles.heroGroundDark]} />
           <View style={[styles.sparkleDot, styles.sparkleDotOne]} />
           <View style={[styles.sparkleDot, styles.sparkleDotTwo]} />
           <View style={[styles.sparkleDot, styles.sparkleDotThree]} />
 
           <View style={styles.heroTextArea}>
-            <View style={styles.heroLabelPill}>
+            <View style={[styles.heroLabelPill, isDark && styles.heroLabelPillDark]}>
               <Ionicons name="calendar-outline" size={14} color={theme.colors.primaryDark} />
               <Text style={styles.heroLabel}>Today's Plan</Text>
             </View>
@@ -387,7 +394,7 @@ export default function TodayPlanScreen() {
             <Text style={styles.heroSubtitle}>{miloMessage}</Text>
           </View>
 
-          <View style={styles.miloBubble}>
+          <View style={[styles.miloBubble, isDark && styles.miloBubbleDark]}>
             <Image source={miloImage} style={styles.miloImage} resizeMode="contain" />
           </View>
         </LinearGradient>
@@ -583,6 +590,18 @@ const styles = StyleSheet.create({
     shadowOpacity: 0,
     elevation: 0,
   },
+  heroCardDark: {
+    borderRadius: 28,
+    paddingHorizontal: 14,
+    marginBottom: 14,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    shadowColor: theme.colors.shadow,
+    shadowOffset: { width: 0, height: 16 },
+    shadowOpacity: 0.18,
+    shadowRadius: 26,
+    elevation: 8,
+  },
   heroCircle: {
     position: 'absolute',
     right: 8,
@@ -594,6 +613,10 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(213,238,220,0.92)',
   },
+  heroCircleDark: {
+    backgroundColor: theme.colors.primarySoft,
+    borderColor: theme.colors.border,
+  },
   heroGround: {
     position: 'absolute',
     right: -38,
@@ -602,6 +625,9 @@ const styles = StyleSheet.create({
     height: 48,
     borderRadius: 60,
     backgroundColor: 'rgba(123, 198, 115, 0.24)',
+  },
+  heroGroundDark: {
+    backgroundColor: theme.colors.cardSoft,
   },
   sparkleDot: {
     position: 'absolute',
@@ -646,6 +672,10 @@ const styles = StyleSheet.create({
     borderWidth: 1.2,
     borderColor: '#C4EBCD',
   },
+  heroLabelPillDark: {
+    backgroundColor: theme.colors.primarySoft,
+    borderColor: theme.colors.border,
+  },
   heroLabel: {
     color: theme.colors.primaryDark,
     fontWeight: '900',
@@ -675,6 +705,16 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginRight: -8,
     zIndex: 2,
+  },
+  miloBubbleDark: {
+    backgroundColor: theme.colors.cardSoft,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    shadowColor: theme.colors.shadow,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.12,
+    shadowRadius: 18,
+    elevation: 4,
   },
   miloImage: {
     width: 184,

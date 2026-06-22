@@ -821,6 +821,7 @@ function MonthCalendarModal({
   onClose: () => void;
   onSelectDate: (dateKey: string) => void;
 }) {
+  const { isDark } = useFocusMateTheme();
   const monthGrid = useMemo(() => createMonthGrid(selectedDate), [selectedDate]);
   const selectedDateParts = useMemo(
     () => getSelectedDateParts(selectedDate),
@@ -838,16 +839,19 @@ function MonthCalendarModal({
       animationType="fade"
       onRequestClose={onClose}
     >
-      <Pressable style={styles.modalBackdrop} onPress={onClose}>
+      <Pressable
+        style={[styles.modalBackdrop, isDark && styles.modalBackdropDark]}
+        onPress={onClose}
+      >
         <Pressable
-          style={styles.monthModalCard}
+          style={[styles.monthModalCard, isDark && styles.monthModalCardDark]}
           onPress={(event) => event.stopPropagation()}
         >
-          <View style={styles.monthModalTint} />
+          <View style={[styles.monthModalTint, isDark && styles.monthModalTintDark]} />
 
           <View style={styles.monthModalHeader}>
             <Pressable
-              style={styles.monthArrowButton}
+              style={[styles.monthArrowButton, isDark && styles.monthArrowButtonDark]}
               onPress={() => onSelectDate(shiftDateByMonths(selectedDate, -1))}
               accessibilityRole="button"
               accessibilityLabel="Previous month"
@@ -858,7 +862,7 @@ function MonthCalendarModal({
             <Text style={styles.monthModalTitle}>{monthGrid.title}</Text>
 
             <Pressable
-              style={styles.monthArrowButton}
+              style={[styles.monthArrowButton, isDark && styles.monthArrowButtonDark]}
               onPress={() => onSelectDate(shiftDateByMonths(selectedDate, 1))}
               accessibilityRole="button"
               accessibilityLabel="Next month"
@@ -869,7 +873,10 @@ function MonthCalendarModal({
 
           <View style={styles.monthWeekRow}>
             {weekDays.map((day, index) => (
-              <Text key={`${day}-${index}`} style={styles.monthWeekText}>
+              <Text
+                key={`${day}-${index}`}
+                style={[styles.monthWeekText, isDark && styles.monthWeekTextDark]}
+              >
                 {day}
               </Text>
             ))}
@@ -900,6 +907,7 @@ function MonthCalendarModal({
                       style={[
                         styles.monthDayText,
                         !day.isCurrentMonth && styles.monthDayTextOutside,
+                        !day.isCurrentMonth && isDark && styles.monthDayTextOutsideDark,
                         isSelected && styles.monthDayTextSelected,
                       ]}
                     >
@@ -932,7 +940,7 @@ function MonthCalendarModal({
             })}
           </View>
 
-          <View style={styles.selectedDayPreview}>
+          <View style={[styles.selectedDayPreview, isDark && styles.selectedDayPreviewDark]}>
             <View style={styles.selectedDateColumn}>
               <Text style={styles.selectedDateDayLabel}>{selectedDateParts.dayLabel}</Text>
               <Text style={styles.selectedDateNumber}>{selectedDateParts.dayNumber}</Text>
@@ -2065,6 +2073,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingVertical: 28,
   },
+  modalBackdropDark: {
+    backgroundColor: 'rgba(0, 0, 0, 0.45)',
+  },
   monthModalCard: {
     width: '100%',
     maxWidth: 366,
@@ -2086,6 +2097,12 @@ const styles = StyleSheet.create({
     shadowRadius: 28,
     elevation: 12,
   },
+  monthModalCardDark: {
+    borderColor: theme.colors.border,
+    borderTopColor: theme.colors.border,
+    borderBottomColor: theme.colors.border,
+    shadowOpacity: 0.18,
+  },
   monthModalTint: {
     position: 'absolute',
     top: 8,
@@ -2094,6 +2111,9 @@ const styles = StyleSheet.create({
     height: 88,
     borderRadius: 26,
     backgroundColor: 'rgba(229,246,233,0.36)',
+  },
+  monthModalTintDark: {
+    backgroundColor: theme.colors.cardSoft,
   },
   monthModalHeader: {
     minHeight: 38,
@@ -2120,6 +2140,11 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.09,
     shadowRadius: 10,
     elevation: 3,
+  },
+  monthArrowButtonDark: {
+    backgroundColor: theme.colors.card,
+    borderColor: theme.colors.border,
+    borderTopColor: theme.colors.border,
   },
   monthArrowText: {
     color: theme.colors.primaryDark,
@@ -2148,6 +2173,9 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     textAlign: 'center',
     letterSpacing: 0.4,
+  },
+  monthWeekTextDark: {
+    color: theme.colors.textSoft,
   },
   monthGrid: {
     flexDirection: 'row',
@@ -2193,6 +2221,9 @@ const styles = StyleSheet.create({
     color: theme.colors.muted,
     opacity: 0.45,
   },
+  monthDayTextOutsideDark: {
+    opacity: 0.78,
+  },
   monthDayTextSelected: {
     color: theme.colors.white,
   },
@@ -2231,6 +2262,18 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     paddingVertical: 11,
     paddingHorizontal: 11,
+  },
+  selectedDayPreviewDark: {
+    backgroundColor: theme.colors.cardSoft,
+    borderColor: theme.colors.border,
+    shadowColor: theme.colors.shadow,
+    shadowOffset: {
+      width: 0,
+      height: 8,
+    },
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
+    elevation: 3,
   },
   selectedDateColumn: {
     width: 62,
