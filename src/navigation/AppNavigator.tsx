@@ -449,7 +449,7 @@ export default function AppNavigator() {
             <RootStack.Screen
               name="ReminderCenter"
               component={ReminderCenterScreen}
-              options={{ title: 'Reminder Center' }}
+              options={{ headerShown: false }}
             />
 
             <RootStack.Screen

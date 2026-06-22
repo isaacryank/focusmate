@@ -37,6 +37,7 @@ import {
   getFocusSessionHistory,
   type FocusSessionHistoryItem,
 } from '../lib/focusSessionHistory';
+import { scheduleTestNotification } from '../lib/notificationUtils';
 import {
   DEFAULT_MILO_AI_SETTINGS,
   loadMiloAiSettings,
@@ -968,6 +969,53 @@ export default function SettingsScreen() {
     });
   };
 
+  const handleTestReminderNotification = async () => {
+    try {
+      const didSchedule = await scheduleTestNotification();
+
+      showDialog({
+        title: didSchedule ? 'Test reminder scheduled' : 'Permission needed',
+        message: didSchedule
+          ? 'Milo will send a test notification in a few seconds.'
+          : 'Please allow notifications so Milo can send reminder alerts.',
+        icon: didSchedule ? 'checkmark-circle' : 'alert-circle',
+        tone: 'info',
+        primaryLabel: 'Got it',
+      });
+    } catch (error) {
+      showDialog({
+        title: 'Could not send test',
+        message:
+          'FocusMate could not schedule the test reminder. Please try again.',
+        icon: 'alert-circle',
+        tone: 'info',
+        primaryLabel: 'Got it',
+      });
+    }
+  };
+
+  const handleOpenSnoozeAllComingSoon = () => {
+    showDialog({
+      title: 'Snooze All coming soon',
+      message:
+        'Temporary reminder pausing is not implemented yet, so no reminders were changed.',
+      icon: 'pause-circle',
+      tone: 'info',
+      primaryLabel: 'Got it',
+    });
+  };
+
+  const handleOpenReminderHistoryComingSoon = () => {
+    showDialog({
+      title: 'Reminder history coming soon',
+      message:
+        'Reminder history is not available yet, so no new storage was created.',
+      icon: 'time',
+      tone: 'info',
+      primaryLabel: 'Got it',
+    });
+  };
+
   const handleOpenPushSchedule = () => {
     showDialog({
       title: 'Push notification schedule',
@@ -1676,10 +1724,34 @@ export default function SettingsScreen() {
       <ModalSheet
         visible={activeModal === 'notifications'}
         title="Notifications"
-        subtitle="Reminder controls and quiet-time placeholders."
+        subtitle="Reminder controls and notification utilities."
         onClose={() => setActiveModal(null)}
       >
         <View style={styles.modalActionCard}>
+          <ModalActionRow
+            title="Test Reminder"
+            subtitle="Send a test notification."
+            icon="alarm"
+            iconColor={theme.colors.primaryDark}
+            iconBackground={theme.colors.primarySoft}
+            onPress={() => void handleTestReminderNotification()}
+          />
+          <ModalActionRow
+            title="Snooze All"
+            subtitle="Pause reminders temporarily. Coming soon."
+            icon="pause-circle"
+            iconColor="#7C3AED"
+            iconBackground="#F2EAFE"
+            onPress={handleOpenSnoozeAllComingSoon}
+          />
+          <ModalActionRow
+            title="View History"
+            subtitle="See reminder history. Coming soon."
+            icon="time"
+            iconColor="#D97706"
+            iconBackground="#FFF6DC"
+            onPress={handleOpenReminderHistoryComingSoon}
+          />
           <ModalActionRow
             title="In-app notifications"
             subtitle="Manage alerts shown inside FocusMate."

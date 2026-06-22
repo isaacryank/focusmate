@@ -4,6 +4,7 @@ import {
   ImageSourcePropType,
   Linking,
   Modal,
+  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -44,7 +45,12 @@ type DateItem = {
   isToday: boolean;
 };
 
+type MonthDateItem = DateItem & {
+  isCurrentMonth: boolean;
+};
+
 type IndicatorTone = 'task' | 'meeting' | 'date' | 'urgent';
+type MonthEventDotTone = 'normal' | 'urgent' | 'focus';
 type CalendarConflictType =
   | 'same_time'
   | 'overlap'
@@ -154,22 +160,31 @@ function createMonthGrid(selectedDate: string) {
   const daysInMonth = new Date(year, month + 1, 0).getDate();
   const firstDay = new Date(year, month, 1).getDay();
   const todayDate = getTodayDate();
-  const days: Array<DateItem | null> = Array.from({ length: firstDay }, () => null);
+  const days: MonthDateItem[] = [];
 
-  for (let day = 1; day <= daysInMonth; day += 1) {
-    const date = new Date(year, month, day);
+  const createMonthItem = (date: Date, isCurrentMonth: boolean): MonthDateItem => {
     const dateKey = formatDateKey(date);
 
-    days.push({
+    return {
       dateKey,
       dayName: date.toLocaleDateString(undefined, { weekday: 'short' }).toUpperCase(),
-      dayNumber: `${day}`,
+      dayNumber: `${date.getDate()}`,
       isToday: dateKey === todayDate,
-    });
+      isCurrentMonth,
+    };
+  };
+
+  for (let offset = firstDay; offset > 0; offset -= 1) {
+    days.push(createMonthItem(new Date(year, month, 1 - offset), false));
+  }
+
+  for (let day = 1; day <= daysInMonth; day += 1) {
+    days.push(createMonthItem(new Date(year, month, day), true));
   }
 
   while (days.length % 7 !== 0) {
-    days.push(null);
+    const nextMonthDay = days.length - firstDay - daysInMonth + 1;
+    days.push(createMonthItem(new Date(year, month + 1, nextMonthDay), false));
   }
 
   return {
@@ -178,6 +193,29 @@ function createMonthGrid(selectedDate: string) {
       year: 'numeric',
     }),
     days,
+  };
+}
+
+function shiftDateByMonths(dateKey: string, monthOffset: number) {
+  const selected = parseDateKey(dateKey) || new Date();
+  const targetYear = selected.getFullYear();
+  const targetMonth = selected.getMonth() + monthOffset;
+  const daysInTargetMonth = new Date(targetYear, targetMonth + 1, 0).getDate();
+  const targetDay = Math.min(selected.getDate(), daysInTargetMonth);
+
+  return formatDateKey(new Date(targetYear, targetMonth, targetDay));
+}
+
+function getSelectedDateParts(dateKey: string) {
+  const date = parseDateKey(dateKey) || new Date();
+
+  return {
+    dayLabel: date.toLocaleDateString(undefined, { weekday: 'short' }),
+    dayNumber: `${date.getDate()}`,
+    monthYear: date.toLocaleDateString(undefined, {
+      month: 'long',
+      year: 'numeric',
+    }),
   };
 }
 
@@ -210,6 +248,68 @@ function getDateIndicators(items: Task[]): IndicatorTone[] {
   }
 
   return indicators.slice(0, 4);
+}
+
+function isFocusStudyItem(item: Task) {
+  const searchableText = `${item.title} ${item.description || ''}`.toLowerCase();
+  const focusKeywords = [
+    'focus',
+    'study',
+    'studying',
+    'revision',
+    'revise',
+    'exam',
+    'assignment',
+    'homework',
+    'quiz',
+    'lecture',
+    'class',
+  ];
+
+  return focusKeywords.some((keyword) => searchableText.includes(keyword));
+}
+
+function isUrgentCalendarItem(item: Task) {
+  if (item.status === 'completed') return false;
+
+  return (
+    item.priority === 'high' ||
+    ['overdue', 'urgent', 'high'].includes(getTaskUrgency(item).level)
+  );
+}
+
+function getMonthEventDotTone(item: Task): MonthEventDotTone {
+  if (isUrgentCalendarItem(item)) return 'urgent';
+  if (isFocusStudyItem(item)) return 'focus';
+
+  return 'normal';
+}
+
+function getMonthEventDotColor(dotTone: MonthEventDotTone) {
+  if (dotTone === 'urgent') return theme.colors.warning;
+  if (dotTone === 'focus') return theme.colors.purple;
+
+  return theme.colors.primaryDark;
+}
+
+function getMonthEventDots(items: Task[]): MonthEventDotTone[] {
+  const tones: MonthEventDotTone[] = [];
+
+  if (items.some((item) => getMonthEventDotTone(item) === 'urgent')) {
+    tones.push('urgent');
+  }
+  if (items.some((item) => getMonthEventDotTone(item) === 'focus')) {
+    tones.push('focus');
+  }
+  if (items.some((item) => getMonthEventDotTone(item) === 'normal')) {
+    tones.push('normal');
+  }
+
+  return tones.slice(0, 3);
+}
+
+function formatPreviewTime(item: Task) {
+  return hasClockTime(item) && item.dueTime ? item.dueTime : 'All day';
 }
 
 function getSummary(selectedItems: Task[]) {
@@ -709,16 +809,27 @@ function SummaryTile({
 function MonthCalendarModal({
   visible,
   selectedDate,
+  itemsByDate,
+  selectedItems,
   onClose,
   onSelectDate,
 }: {
   visible: boolean;
   selectedDate: string;
+  itemsByDate: Record<string, Task[]>;
+  selectedItems: Task[];
   onClose: () => void;
   onSelectDate: (dateKey: string) => void;
 }) {
   const monthGrid = useMemo(() => createMonthGrid(selectedDate), [selectedDate]);
-  const weekDays = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
+  const selectedDateParts = useMemo(
+    () => getSelectedDateParts(selectedDate),
+    [selectedDate]
+  );
+  const previewItems = selectedItems.slice(0, 2);
+  const weekDays = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
+  const selectedEventLabel =
+    selectedItems.length === 1 ? '1 event' : `${selectedItems.length} events`;
 
   return (
     <Modal
@@ -727,19 +838,33 @@ function MonthCalendarModal({
       animationType="fade"
       onRequestClose={onClose}
     >
-      <View style={styles.modalBackdrop}>
-        <View style={styles.monthModalCard}>
+      <Pressable style={styles.modalBackdrop} onPress={onClose}>
+        <Pressable
+          style={styles.monthModalCard}
+          onPress={(event) => event.stopPropagation()}
+        >
+          <View style={styles.monthModalTint} />
+
           <View style={styles.monthModalHeader}>
-            <Text style={styles.monthModalTitle}>{monthGrid.title}</Text>
-            <TouchableOpacity
-              activeOpacity={0.82}
-              style={styles.monthCloseButton}
-              onPress={onClose}
+            <Pressable
+              style={styles.monthArrowButton}
+              onPress={() => onSelectDate(shiftDateByMonths(selectedDate, -1))}
               accessibilityRole="button"
-              accessibilityLabel="Close month calendar"
+              accessibilityLabel="Previous month"
             >
-              <Ionicons name="close" size={18} color={theme.colors.text} />
-            </TouchableOpacity>
+              <Text style={styles.monthArrowText}>{'<'}</Text>
+            </Pressable>
+
+            <Text style={styles.monthModalTitle}>{monthGrid.title}</Text>
+
+            <Pressable
+              style={styles.monthArrowButton}
+              onPress={() => onSelectDate(shiftDateByMonths(selectedDate, 1))}
+              accessibilityRole="button"
+              accessibilityLabel="Next month"
+            >
+              <Text style={styles.monthArrowText}>{'>'}</Text>
+            </Pressable>
           </View>
 
           <View style={styles.monthWeekRow}>
@@ -751,36 +876,119 @@ function MonthCalendarModal({
           </View>
 
           <View style={styles.monthGrid}>
-            {monthGrid.days.map((day, index) => {
-              if (!day) {
-                return <View key={`empty-${index}`} style={styles.monthDayCell} />;
-              }
-
+            {monthGrid.days.map((day) => {
               const isSelected = day.dateKey === selectedDate;
+              const dots = getMonthEventDots(itemsByDate[day.dateKey] || []);
+              const showSelectedEventDot = isSelected && dots.length > 0;
 
               return (
-                <TouchableOpacity
+                <Pressable
                   key={day.dateKey}
-                  activeOpacity={0.84}
-                  style={[
-                    styles.monthDayCell,
-                    isSelected && styles.monthDaySelected,
-                    day.isToday && !isSelected && styles.monthDayToday,
-                  ]}
+                  style={styles.monthDayCell}
                   onPress={() => onSelectDate(day.dateKey)}
                   accessibilityRole="button"
                   accessibilityLabel={`Select ${day.dayName} ${day.dayNumber}`}
                 >
-                  <Text style={[styles.monthDayText, isSelected && styles.monthDayTextSelected]}>
-                    {day.dayNumber}
-                  </Text>
-                  {day.isToday && !isSelected ? <View style={styles.monthTodayDot} /> : null}
-                </TouchableOpacity>
+                  <View
+                    style={[
+                      styles.monthDayBubble,
+                      isSelected && styles.monthDaySelected,
+                      day.isToday && !isSelected && styles.monthDayToday,
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.monthDayText,
+                        !day.isCurrentMonth && styles.monthDayTextOutside,
+                        isSelected && styles.monthDayTextSelected,
+                      ]}
+                    >
+                      {day.dayNumber}
+                    </Text>
+                    {showSelectedEventDot ? (
+                      <View style={styles.monthSelectedEventDot} />
+                    ) : dots.length > 0 ? (
+                      <View style={styles.monthEventDotRow}>
+                        {dots.map((dotTone) => (
+                          <View
+                            key={dotTone}
+                            style={[
+                              styles.monthEventDot,
+                              {
+                                backgroundColor: day.isCurrentMonth
+                                  ? getMonthEventDotColor(dotTone)
+                                  : theme.colors.muted,
+                              },
+                            ]}
+                          />
+                        ))}
+                      </View>
+                    ) : (
+                      <View style={styles.monthEventDotSpacer} />
+                    )}
+                  </View>
+                </Pressable>
               );
             })}
           </View>
-        </View>
-      </View>
+
+          <View style={styles.selectedDayPreview}>
+            <View style={styles.selectedDateColumn}>
+              <Text style={styles.selectedDateDayLabel}>{selectedDateParts.dayLabel}</Text>
+              <Text style={styles.selectedDateNumber}>{selectedDateParts.dayNumber}</Text>
+              <Text style={styles.selectedDateMonth}>{selectedDateParts.monthYear}</Text>
+            </View>
+
+            <View style={styles.selectedPreviewDivider} />
+
+            <View style={styles.selectedPreviewContent}>
+              <Text style={styles.selectedPreviewCount}>{selectedEventLabel}</Text>
+              {previewItems.length > 0 ? (
+                previewItems.map((item) => {
+                  const dotTone = getMonthEventDotTone(item);
+                  const typeTone = getTypeTone(item.plannerType);
+
+                  return (
+                    <View key={item.id} style={styles.previewEventRow}>
+                      <View
+                        style={[
+                          styles.previewEventBadge,
+                          { backgroundColor: typeTone.iconBackground },
+                        ]}
+                      >
+                        <Text style={styles.previewEventBadgeText}>
+                          {typeLabels[item.plannerType].charAt(0)}
+                        </Text>
+                      </View>
+                      <Text numberOfLines={1} style={styles.previewEventTitle}>
+                        {item.title}
+                      </Text>
+                      <Text numberOfLines={1} style={styles.previewEventTime}>
+                        {formatPreviewTime(item)}
+                      </Text>
+                      <View
+                        style={[
+                          styles.previewEventDot,
+                          { backgroundColor: getMonthEventDotColor(dotTone) },
+                        ]}
+                      />
+                    </View>
+                  );
+                })
+              ) : (
+                <View style={styles.previewEmptyState}>
+                  <Text style={styles.previewEmptyTitle}>No plans yet</Text>
+                  <Text style={styles.previewEmptyMessage}>
+                    You're clear for this day.
+                  </Text>
+                </View>
+              )}
+            </View>
+          </View>
+
+          <View style={styles.monthDragHandle} />
+        </Pressable>
+      </Pressable>
     </Modal>
   );
 }
@@ -870,10 +1078,11 @@ export default function CalendarScreen() {
       <MonthCalendarModal
         visible={monthModalVisible}
         selectedDate={selectedDate}
+        itemsByDate={itemsByDate}
+        selectedItems={selectedItems}
         onClose={() => setMonthModalVisible(false)}
         onSelectDate={(dateKey) => {
           setSelectedDate(dateKey);
-          setMonthModalVisible(false);
         }}
       />
 
@@ -1850,86 +2059,288 @@ const styles = StyleSheet.create({
   },
   modalBackdrop: {
     flex: 1,
-    backgroundColor: 'rgba(34,40,49,0.24)',
+    backgroundColor: theme.colors.overlay,
     alignItems: 'center',
     justifyContent: 'center',
-    padding: 22,
+    paddingHorizontal: 20,
+    paddingVertical: 28,
   },
   monthModalCard: {
     width: '100%',
-    maxWidth: 360,
-    borderRadius: 24,
-    backgroundColor: theme.colors.surface,
-    padding: 16,
+    maxWidth: 366,
+    borderRadius: 30,
+    backgroundColor: theme.colors.card,
+    paddingHorizontal: 15,
+    paddingTop: 16,
+    paddingBottom: 10,
     borderWidth: 1,
     borderColor: theme.colors.border,
     borderTopColor: '#FDF7E978',
-    ...theme.shadowSoft,
+    borderBottomColor: 'rgba(46, 125, 75, 0.12)',
+    shadowColor: theme.colors.shadow,
+    shadowOffset: {
+      width: 0,
+      height: 22,
+    },
+    shadowOpacity: 0.2,
+    shadowRadius: 28,
+    elevation: 12,
+  },
+  monthModalTint: {
+    position: 'absolute',
+    top: 8,
+    left: 12,
+    right: 12,
+    height: 88,
+    borderRadius: 26,
+    backgroundColor: 'rgba(229,246,233,0.36)',
   },
   monthModalHeader: {
-    minHeight: 34,
-    marginBottom: 12,
+    minHeight: 38,
+    marginBottom: 13,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
   },
-  monthModalTitle: {
-    flex: 1,
-    color: theme.colors.text,
-    fontSize: 19,
+  monthArrowButton: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: theme.colors.primarySoft,
+    borderWidth: 1,
+    borderColor: 'rgba(85,200,120,0.2)',
+    borderTopColor: '#FDF7E978',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: theme.colors.shadow,
+    shadowOffset: {
+      width: 0,
+      height: 5,
+    },
+    shadowOpacity: 0.09,
+    shadowRadius: 10,
+    elevation: 3,
+  },
+  monthArrowText: {
+    color: theme.colors.primaryDark,
+    fontSize: 22,
     lineHeight: 24,
     fontWeight: '900',
   },
-  monthCloseButton: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: theme.colors.backgroundSoft,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginLeft: 10,
+  monthModalTitle: {
+    flex: 1,
+    color: theme.colors.text,
+    fontSize: 18,
+    lineHeight: 23,
+    fontWeight: '900',
+    textAlign: 'center',
   },
   monthWeekRow: {
     flexDirection: 'row',
-    marginBottom: 6,
+    marginBottom: 8,
+    paddingHorizontal: 1,
   },
   monthWeekText: {
     flex: 1,
     color: theme.colors.muted,
-    fontSize: 11,
+    fontSize: 9,
+    lineHeight: 12,
     fontWeight: '900',
     textAlign: 'center',
+    letterSpacing: 0.4,
   },
   monthGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
+    marginHorizontal: -1,
   },
   monthDayCell: {
     width: `${100 / 7}%`,
-    aspectRatio: 1,
-    borderRadius: 14,
+    height: 39,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  monthDayBubble: {
+    width: 35,
+    height: 35,
+    borderRadius: 18,
     alignItems: 'center',
     justifyContent: 'center',
   },
   monthDaySelected: {
     backgroundColor: theme.colors.primary,
+    shadowColor: theme.colors.primaryDark,
+    shadowOffset: {
+      width: 0,
+      height: 7,
+    },
+    shadowOpacity: 0.22,
+    shadowRadius: 12,
+    elevation: 6,
   },
   monthDayToday: {
     backgroundColor: theme.colors.primarySoft,
+    borderWidth: 1,
+    borderColor: 'rgba(85,200,120,0.2)',
   },
   monthDayText: {
     color: theme.colors.text,
     fontSize: 14,
+    lineHeight: 17,
     fontWeight: '900',
+  },
+  monthDayTextOutside: {
+    color: theme.colors.muted,
+    opacity: 0.45,
   },
   monthDayTextSelected: {
     color: theme.colors.white,
   },
-  monthTodayDot: {
+  monthSelectedEventDot: {
     width: 4,
     height: 4,
     borderRadius: 2,
-    backgroundColor: theme.colors.primaryDark,
+    backgroundColor: theme.colors.white,
     marginTop: 2,
+  },
+  monthEventDotRow: {
+    minHeight: 6,
+    marginTop: 2,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  monthEventDot: {
+    width: 3.6,
+    height: 3.6,
+    borderRadius: 2,
+    marginHorizontal: 1.1,
+  },
+  monthEventDotSpacer: {
+    width: 4,
+    height: 6,
+    marginTop: 2,
+  },
+  selectedDayPreview: {
+    minHeight: 110,
+    marginTop: 15,
+    borderRadius: 18,
+    backgroundColor: 'rgba(255,255,255,0.7)',
+    borderWidth: 1,
+    borderColor: 'rgba(46, 125, 75, 0.14)',
+    flexDirection: 'row',
+    paddingVertical: 11,
+    paddingHorizontal: 11,
+  },
+  selectedDateColumn: {
+    width: 62,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  selectedDateDayLabel: {
+    color: theme.colors.text,
+    fontSize: 10,
+    lineHeight: 12,
+    fontWeight: '900',
+  },
+  selectedDateNumber: {
+    color: theme.colors.text,
+    fontSize: 29,
+    lineHeight: 32,
+    fontWeight: '900',
+  },
+  selectedDateMonth: {
+    color: theme.colors.mutedText,
+    fontSize: 10,
+    lineHeight: 13,
+    fontWeight: '800',
+    textAlign: 'center',
+  },
+  selectedPreviewDivider: {
+    width: 1,
+    marginHorizontal: 10,
+    backgroundColor: theme.colors.divider,
+  },
+  selectedPreviewContent: {
+    flex: 1,
+    minWidth: 0,
+    justifyContent: 'center',
+  },
+  selectedPreviewCount: {
+    color: theme.colors.primaryDark,
+    fontSize: 11,
+    lineHeight: 14,
+    fontWeight: '900',
+    marginBottom: 8,
+  },
+  previewEventRow: {
+    minHeight: 28,
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderBottomWidth: 1,
+    borderBottomColor: theme.colors.divider,
+  },
+  previewEventBadge: {
+    width: 17,
+    height: 17,
+    borderRadius: 9,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 7,
+  },
+  previewEventBadgeText: {
+    color: theme.colors.white,
+    fontSize: 8,
+    lineHeight: 10,
+    fontWeight: '900',
+  },
+  previewEventTitle: {
+    flex: 1,
+    minWidth: 0,
+    color: theme.colors.text,
+    fontSize: 10,
+    lineHeight: 13,
+    fontWeight: '900',
+    marginRight: 6,
+  },
+  previewEventTime: {
+    maxWidth: 54,
+    color: theme.colors.textSoft,
+    fontSize: 9,
+    lineHeight: 12,
+    fontWeight: '800',
+    textAlign: 'right',
+  },
+  previewEventDot: {
+    width: 5,
+    height: 5,
+    borderRadius: 3,
+    marginLeft: 8,
+  },
+  previewEmptyState: {
+    minHeight: 46,
+    justifyContent: 'center',
+  },
+  previewEmptyTitle: {
+    color: theme.colors.text,
+    fontSize: 13,
+    lineHeight: 17,
+    fontWeight: '900',
+  },
+  previewEmptyMessage: {
+    marginTop: 3,
+    color: theme.colors.textSoft,
+    fontSize: 11,
+    lineHeight: 15,
+    fontWeight: '700',
+  },
+  monthDragHandle: {
+    alignSelf: 'center',
+    width: 42,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: theme.colors.primary,
+    opacity: 0.42,
+    marginTop: 10,
   },
 });
