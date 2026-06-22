@@ -16,7 +16,6 @@ import { RootStackParamList } from '../types/navigation';
 import { theme } from '../theme';
 import { useFocusMateTheme } from '../theme/FocusMateThemeProvider';
 import { useTasks } from '../lib/TaskContext';
-import { getMiloReaction } from '../lib/miloReaction';
 import { openLocationInMaps } from '../lib/mapUtils';
 import {
   deleteOnlineMeetingLinkForTask,
@@ -46,7 +45,7 @@ import {
 import ScreenContainer from '../components/ui/ScreenContainer';
 import EmptyState from '../components/ui/EmptyState';
 import NoticeCard from '../components/ui/NoticeCard';
-import MiloMoodImage, { getMiloImageSource } from '../components/milo/MiloMoodImage';
+import { getMiloImageSource } from '../components/milo/MiloMoodImage';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'TaskDetails'>;
 
@@ -128,7 +127,7 @@ function getCompletedNudgeCue(index: number) {
 }
 
 function getCompletedNudgeMessage() {
-  return 'All plan steps are done. Milo thinks you are prepared.';
+  return 'All plan steps are done. You are prepared.';
 }
 
 function normalizeMatchText(value: string) {
@@ -251,11 +250,9 @@ function normalizePlanStepStatuses(
 }
 
 function Header({
-  title,
   onBack,
   onMenu,
 }: {
-  title: string;
   onBack: () => void;
   onMenu: () => void;
 }) {
@@ -269,15 +266,13 @@ function Header({
           accessibilityRole="button"
           accessibilityLabel="Go back"
         >
-          <Ionicons name="chevron-back" size={21} color={theme.colors.text} />
+          <Ionicons name="chevron-back" size={26} color={theme.colors.text} />
         </TouchableOpacity>
 
         <View style={styles.headerCenter}>
-          <Text numberOfLines={1} style={styles.headerTitle}>{title}</Text>
-          <View style={styles.suggestedPill}>
-            <Ionicons name="sparkles" size={10} color={theme.colors.primaryDark} />
-            <Text style={styles.suggestedText}>Suggested by Milo</Text>
-          </View>
+          <Text numberOfLines={1} style={styles.headerTitle}>
+            FocusMate
+          </Text>
         </View>
 
         <TouchableOpacity
@@ -287,7 +282,7 @@ function Header({
           accessibilityRole="button"
           accessibilityLabel="Open menu"
         >
-          <Ionicons name="ellipsis-horizontal" size={20} color={theme.colors.text} />
+          <Ionicons name="ellipsis-horizontal" size={22} color={theme.colors.text} />
         </TouchableOpacity>
       </View>
     </View>
@@ -308,28 +303,39 @@ function StatusSection({
   last?: boolean;
 }) {
   const lines = Array.isArray(value) ? value : [value];
+  const statusIconTint =
+    label === 'Priority'
+      ? styles.statusIconBoxWarning
+      : label === 'Urgency'
+      ? styles.statusIconBoxDanger
+      : null;
 
   return (
     <View style={[styles.statusSection, !last && styles.statusDivider]}>
       <View style={styles.statusTextBlock}>
-        <View style={styles.statusLabelRow}>
+        <View style={[styles.statusIconBox, statusIconTint]}>
           <Ionicons
             name={icon}
-            size={13}
+            size={19}
             color={color || theme.colors.primaryDark}
-            style={styles.statusIcon}
           />
-          <Text numberOfLines={1} style={styles.statusLabel}>{label}</Text>
         </View>
-        <View style={styles.statusValueWrap}>
-          {lines.slice(0, 2).map((line, index) => (
-            <Text
-              key={`${line}-${index}`}
-              style={[styles.statusValue, color ? { color } : null]}
-            >
-              {line}
-            </Text>
-          ))}
+        <View style={styles.statusCopy}>
+          <Text numberOfLines={1} style={styles.statusLabel}>{label}</Text>
+          <View style={styles.statusValueWrap}>
+            {lines.slice(0, 2).map((line, index) => (
+              <Text
+                key={`${line}-${index}`}
+                numberOfLines={1}
+                style={[
+                  styles.statusValue,
+                  color && (label !== 'Due' || index === 0) ? { color } : null,
+                ]}
+              >
+                {line}
+              </Text>
+            ))}
+          </View>
         </View>
       </View>
     </View>
@@ -527,7 +533,7 @@ export default function TaskDetailsScreen({ navigation, route }: Props) {
     };
   }, [task?.id]);
 
-  useEffect(() => {
+  const loadSavedMeetingLink = useCallback(() => {
     let isMounted = true;
 
     if (!task?.id) {
@@ -558,6 +564,8 @@ export default function TaskDetailsScreen({ navigation, route }: Props) {
 
   useEffect(loadSavedTaskPlan, [loadSavedTaskPlan]);
   useFocusEffect(loadSavedTaskPlan);
+  useEffect(loadSavedMeetingLink, [loadSavedMeetingLink]);
+  useFocusEffect(loadSavedMeetingLink);
 
   const detectedMeetingProvider = useMemo(() => {
     if (!meetingLinkInput.trim()) {
@@ -566,14 +574,6 @@ export default function TaskDetailsScreen({ navigation, route }: Props) {
 
     return detectMeetingProvider(meetingLinkInput);
   }, [meetingLinkInput]);
-
-  const miloData = useMemo(() => {
-    if (!task) {
-      return null;
-    }
-
-    return getMiloReaction([task]);
-  }, [task]);
 
   const hasOnlineMeetingLink = Boolean(onlineMeetingLink);
   const displayTaskPlan = useMemo(() => {
@@ -584,13 +584,13 @@ export default function TaskDetailsScreen({ navigation, route }: Props) {
     return generatedTaskPlan?.taskId === task.id ? generatedTaskPlan : null;
   }, [generatedTaskPlan, task]);
 
-  if (!task || !miloData) {
+  if (!task) {
     return (
       <ScreenContainer>
         <EmptyState
           imageSource={getMiloImageSource('worried')}
           title="Planner item not found"
-          message="Milo could not find this item. It may have been deleted."
+          message="This planner item may have been deleted."
           actionLabel="Go back"
           onActionPress={() => navigation.goBack()}
         />
@@ -632,10 +632,10 @@ export default function TaskDetailsScreen({ navigation, route }: Props) {
 
   const heroMessage =
     task.status === 'completed'
-      ? 'You did it. Milo is proud'
+      ? 'This planner item is completed.'
       : displayTaskPlan
-      ? 'Your smart plan is ready when you want to prep.'
-      : 'Task details are ready. Milo can help you prep when needed.';
+      ? 'Your smart plan is ready when you want to prepare.'
+      : 'Task details are ready. Focus and take action.';
 
   const focusActionLabel =
     task.plannerType === 'meeting'
@@ -704,7 +704,7 @@ export default function TaskDetailsScreen({ navigation, route }: Props) {
   const handleDelete = () => {
     Alert.alert(
       'Delete planner item?',
-      'Milo will remove this item from your planner.',
+      'This item will be removed from your planner.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -743,11 +743,11 @@ export default function TaskDetailsScreen({ navigation, route }: Props) {
       title:
         task.status === 'completed'
           ? 'Moved back to pending'
-          : 'Milo is celebrating!',
+          : 'Marked as completed!',
       message:
         task.status === 'completed'
           ? 'This item is now pending again.'
-          : 'You did it. Milo is proud.',
+          : 'This planner item is now completed.',
     });
   };
 
@@ -801,12 +801,12 @@ export default function TaskDetailsScreen({ navigation, route }: Props) {
         type: 'success',
         title:
           savedPlan.source === 'ai'
-            ? 'Milo refreshed with AI'
-            : 'Milo refreshed locally',
+            ? 'Plan refreshed with AI'
+            : 'Plan refreshed locally',
         message:
           aiSettings.aiMode === 'online' && savedPlan.source === 'local'
-            ? 'AI was not available, so Milo used the local safety plan.'
-            : 'Milo found a few tiny steps to make this easier.',
+            ? 'AI was not available, so FocusMate used the local safety plan.'
+            : 'FocusMate found a few tiny steps to make this easier.',
       });
     } catch (error) {
       console.warn('Failed to regenerate Milo task plan:', error);
@@ -819,7 +819,7 @@ export default function TaskDetailsScreen({ navigation, route }: Props) {
       setGeneratedTaskPlan(savedPlan);
       setNotice({
         type: 'info',
-        title: 'Milo used a local plan',
+        title: 'Local plan created',
         message: 'The safe local plan is ready on this device.',
       });
     } finally {
@@ -1014,10 +1014,45 @@ export default function TaskDetailsScreen({ navigation, route }: Props) {
 
   const displayPlanItems = showAllPlanSteps ? planItems : planItems.slice(0, 3);
   const hiddenPlanCount = Math.max(planItems.length - 3, 0);
+  const plannerTypeIcon =
+    task.plannerType === 'meeting'
+      ? 'people-outline'
+      : task.plannerType === 'date'
+      ? 'calendar-outline'
+      : 'checkbox-outline';
 
   return (
-    <ScreenContainer topPadding={8} bottomPadding={52}>
-      <Header title={task.title} onBack={() => navigation.goBack()} onMenu={handleMenu} />
+    <ScreenContainer
+      topPadding={8}
+      bottomPadding={52}
+      contentStyle={styles.detailScreenContent}
+    >
+      <View style={styles.detailHero}>
+        <Header onBack={() => navigation.goBack()} onMenu={handleMenu} />
+
+        <View style={styles.taskOverviewCard}>
+          <View style={styles.taskOverviewIconBox}>
+            <Ionicons
+              name={plannerTypeIcon}
+              size={29}
+              color={theme.colors.primaryDark}
+            />
+          </View>
+
+          <View style={styles.taskOverviewCopy}>
+            <Text
+              numberOfLines={1}
+              ellipsizeMode="tail"
+              style={styles.detailTaskTitle}
+            >
+              {task.title}
+            </Text>
+            <Text numberOfLines={1} style={styles.detailTaskMeta}>
+              {titleCase(task.plannerType)} plan
+            </Text>
+          </View>
+        </View>
+      </View>
 
       {notice ? (
         <NoticeCard
@@ -1028,15 +1063,11 @@ export default function TaskDetailsScreen({ navigation, route }: Props) {
       ) : null}
 
       <View style={styles.heroCard}>
-        <View style={styles.heroMiloBubble}>
-          <MiloMoodImage
-            mood={task.status === 'completed' ? 'celebrating' : 'happy'}
-            size={80}
-            style={styles.heroMiloImage}
-          />
+        <View style={styles.smartPlanIconBox}>
+          <Ionicons name="sparkles" size={25} color={theme.colors.primaryDark} />
         </View>
         <View style={styles.heroTextArea}>
-          <Text style={styles.heroEyebrow}>Milo Smart Plan</Text>
+          <Text style={styles.heroEyebrow}>Smart Plan</Text>
           <Text style={styles.heroText}>{heroMessage}</Text>
         </View>
         <Ionicons name="heart" size={18} color={theme.colors.primary} />
@@ -1059,11 +1090,13 @@ export default function TaskDetailsScreen({ navigation, route }: Props) {
           icon="calendar-outline"
           label="Due"
           value={formatDue(task.dueDate, task.dueTime)}
+          color={theme.colors.primaryDark}
         />
         <StatusSection
           icon="notifications-outline"
           label="Reminder"
           value={formatReminder(task.reminder, task.manualReminderMinutes)}
+          color={theme.colors.primaryDark}
           last
         />
       </View>
@@ -1073,7 +1106,7 @@ export default function TaskDetailsScreen({ navigation, route }: Props) {
           <View style={styles.locationIconWrap}>
             <Ionicons
               name="location-outline"
-              size={18}
+              size={17}
               color={theme.colors.primaryDark}
             />
           </View>
@@ -1104,7 +1137,7 @@ export default function TaskDetailsScreen({ navigation, route }: Props) {
           <View style={styles.onlineMeetingIconWrap}>
             <MaterialCommunityIcons
               name="video-outline"
-              size={18}
+              size={22}
               color={theme.colors.purple}
             />
           </View>
@@ -1122,6 +1155,19 @@ export default function TaskDetailsScreen({ navigation, route }: Props) {
               </Text>
             )}
           </View>
+
+          {!onlineMeetingLink ? (
+            <TouchableOpacity
+              activeOpacity={0.84}
+              style={styles.addMeetingButton}
+              onPress={openMeetingModal}
+              accessibilityRole="button"
+              accessibilityLabel="Add online meeting link"
+            >
+              <Ionicons name="add" size={18} color={theme.colors.purple} />
+              <Text style={styles.addMeetingButtonText}>Add Link</Text>
+            </TouchableOpacity>
+          ) : null}
         </View>
 
         {onlineMeetingLink ? (
@@ -1165,25 +1211,14 @@ export default function TaskDetailsScreen({ navigation, route }: Props) {
               </TouchableOpacity>
             </View>
           </>
-        ) : (
-          <TouchableOpacity
-            activeOpacity={0.84}
-            style={styles.addMeetingButton}
-            onPress={openMeetingModal}
-            accessibilityRole="button"
-            accessibilityLabel="Add online meeting link"
-          >
-            <Ionicons name="add" size={16} color={theme.colors.purple} />
-            <Text style={styles.addMeetingButtonText}>Add Link</Text>
-          </TouchableOpacity>
-        )}
+        ) : null}
       </View>
 
       {task.conflictAccepted ? (
         <View style={styles.conflictFocusCard}>
           <Ionicons name="eye-outline" size={17} color="#92400E" />
           <Text style={styles.conflictFocusText}>
-            Milo noted an overlap. Extra focus is on.
+            Overlap noted. Extra focus is on.
           </Text>
         </View>
       ) : null}
@@ -1192,19 +1227,15 @@ export default function TaskDetailsScreen({ navigation, route }: Props) {
         <View style={styles.smartPlanPreviewIcon}>
           <Ionicons
             name={displayTaskPlan ? 'sparkles' : 'sparkles-outline'}
-            size={18}
+            size={22}
             color={theme.colors.primaryDark}
           />
         </View>
 
         <View style={styles.smartPlanPreviewCopy}>
-          <Text style={styles.smartPlanPreviewTitle}>
-            {displayTaskPlan ? 'Milo Smart Plan Ready' : 'Milo Smart Plan'}
-          </Text>
+          <Text style={styles.smartPlanPreviewTitle}>Plan Prep</Text>
           <Text style={styles.smartPlanPreviewText}>
-            {displayTaskPlan
-              ? `${planItems.length} steps - ${smartNudges.length} nudges - timeline ready`
-              : 'Prepare this task with small steps, nudges, and a timeline.'}
+            Prepare this task with small steps, nudges, and a timeline.
           </Text>
 
           {displayTaskPlan ? (
@@ -1232,11 +1263,9 @@ export default function TaskDetailsScreen({ navigation, route }: Props) {
           style={styles.smartPlanPreviewButton}
           onPress={handleOpenSmartPlan}
           accessibilityRole="button"
-          accessibilityLabel={displayTaskPlan ? 'Open Plan Prep' : 'Plan Prep'}
+          accessibilityLabel="Plan Prep"
         >
-          <Text style={styles.smartPlanPreviewButtonText}>
-            {displayTaskPlan ? 'Open Plan Prep' : 'Plan Prep'}
-          </Text>
+          <Text style={styles.smartPlanPreviewButtonText}>Plan Prep</Text>
           <Ionicons name="chevron-forward" size={14} color="#FFFFFF" />
         </TouchableOpacity>
       </View>
@@ -1246,7 +1275,7 @@ export default function TaskDetailsScreen({ navigation, route }: Props) {
           title="Edit"
           variant="ghost"
           onPress={() => navigation.navigate('EditTask', { taskId: task.id })}
-          icon={<Ionicons name="create-outline" size={17} color={theme.colors.text} />}
+          icon={<Ionicons name="create-outline" size={20} color={theme.colors.text} />}
         />
         <CompactButton
           title={doneActionLabel}
@@ -1255,7 +1284,7 @@ export default function TaskDetailsScreen({ navigation, route }: Props) {
           icon={
             <Ionicons
               name="checkmark"
-              size={17}
+              size={21}
               color={theme.colors.primaryDark}
             />
           }
@@ -1267,7 +1296,7 @@ export default function TaskDetailsScreen({ navigation, route }: Props) {
           icon={
             <MaterialCommunityIcons
               name={task.plannerType === 'task' ? 'target' : task.plannerType === 'meeting' && joinUrl ? 'video-outline' : 'playlist-check'}
-              size={17}
+              size={21}
               color="#FFFFFF"
             />
           }
@@ -1279,6 +1308,7 @@ export default function TaskDetailsScreen({ navigation, route }: Props) {
         style={styles.deleteLink}
         onPress={handleDelete}
       >
+        <Ionicons name="trash-outline" size={15} color={theme.colors.danger} />
         <Text style={styles.deleteLinkText}>Delete planner item</Text>
       </TouchableOpacity>
 
@@ -1373,32 +1403,244 @@ export default function TaskDetailsScreen({ navigation, route }: Props) {
 }
 
 const styles = StyleSheet.create({
+  detailScreenContent: {
+    paddingHorizontal: 12,
+  },
+  detailHero: {
+    marginBottom: 12,
+  },
+  taskOverviewCard: {
+    minHeight: 104,
+    borderRadius: 26,
+    backgroundColor: theme.colors.card,
+    borderWidth: 1.2,
+    borderBottomWidth: 1.8,
+    borderColor: theme.colors.inputBorder,
+    borderTopColor: theme.colors.card,
+    borderBottomColor: 'rgba(30, 111, 54, 0.2)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    marginTop: 16,
+    shadowColor: theme.colors.shadow,
+    shadowOffset: {
+      width: 0,
+      height: 6,
+    },
+    shadowOpacity: 0.1,
+    shadowRadius: 13,
+    elevation: 4,
+    overflow: 'visible',
+  },
+  taskOverviewIconBox: {
+    width: 66,
+    height: 66,
+    borderRadius: 24,
+    backgroundColor: theme.colors.primarySoft,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 14,
+    borderWidth: 1.2,
+    borderBottomWidth: 1.7,
+    borderColor: theme.colors.inputBorder,
+    borderTopColor: theme.colors.card,
+    borderBottomColor: 'rgba(30, 111, 54, 0.22)',
+    shadowColor: theme.colors.shadow,
+    shadowOffset: {
+      width: 0,
+      height: 3,
+    },
+    shadowOpacity: 0.07,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  taskOverviewCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  detailScenery: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  detailHeroSpotlight: {
+    position: 'absolute',
+    width: 250,
+    height: 250,
+    borderRadius: 125,
+    top: -82,
+    right: -28,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+  },
+  detailHeroBlob: {
+    position: 'absolute',
+    borderRadius: 999,
+    backgroundColor: 'rgba(255, 255, 255, 0.26)',
+  },
+  detailHeroBlobLarge: {
+    width: 210,
+    height: 210,
+    top: -78,
+    right: -62,
+  },
+  detailHeroBlobSmall: {
+    width: 106,
+    height: 106,
+    top: 84,
+    left: -36,
+    backgroundColor: 'rgba(47, 143, 70, 0.14)',
+  },
+  detailHeroBlobAccent: {
+    width: 62,
+    height: 62,
+    top: 128,
+    right: 18,
+    backgroundColor: 'rgba(255, 246, 217, 0.3)',
+  },
+  detailHeroCloud: {
+    position: 'absolute',
+    height: 24,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255, 255, 255, 0.42)',
+  },
+  detailHeroCloudLeft: {
+    top: 86,
+    left: 26,
+    width: 68,
+  },
+  detailHeroCloudRight: {
+    top: 58,
+    right: 74,
+    width: 82,
+  },
+  detailHeroCloudLower: {
+    top: 154,
+    left: '38%',
+    width: 74,
+    height: 22,
+    backgroundColor: 'rgba(255, 255, 255, 0.28)',
+  },
+  detailHeroHill: {
+    position: 'absolute',
+    left: -34,
+    right: -34,
+    borderTopLeftRadius: 999,
+    borderTopRightRadius: 999,
+  },
+  detailHeroHillBack: {
+    height: 88,
+    bottom: -20,
+    backgroundColor: 'rgba(47, 143, 70, 0.16)',
+  },
+  detailHeroHillMid: {
+    height: 72,
+    bottom: -22,
+    left: -86,
+    right: 66,
+    backgroundColor: 'rgba(35, 107, 53, 0.13)',
+  },
+  detailHeroHillFront: {
+    height: 64,
+    bottom: -32,
+    left: 70,
+    backgroundColor: 'rgba(47, 143, 70, 0.26)',
+  },
+  detailHeroLeaf: {
+    position: 'absolute',
+    width: 10,
+    height: 5,
+    borderRadius: 999,
+    backgroundColor: 'rgba(35, 107, 53, 0.35)',
+  },
+  detailHeroLeafOne: {
+    top: 103,
+    right: 118,
+    transform: [{ rotate: '-24deg' }],
+  },
+  detailHeroLeafTwo: {
+    top: 139,
+    right: 146,
+    width: 8,
+    backgroundColor: 'rgba(47, 143, 70, 0.3)',
+    transform: [{ rotate: '30deg' }],
+  },
+  detailHeroLeafThree: {
+    top: 166,
+    left: 88,
+    width: 9,
+    backgroundColor: 'rgba(35, 107, 53, 0.24)',
+    transform: [{ rotate: '-18deg' }],
+  },
+  detailHeroSparkle: {
+    position: 'absolute',
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: 'rgba(47, 143, 70, 0.32)',
+  },
+  detailHeroSparkleOne: {
+    top: 118,
+    left: '44%',
+  },
+  detailHeroSparkleTwo: {
+    top: 146,
+    right: 42,
+    width: 4,
+    height: 4,
+  },
+  detailHeroSparkleThree: {
+    top: 64,
+    left: 116,
+    width: 5,
+    height: 5,
+  },
+  detailHeroSparkleFour: {
+    top: 112,
+    right: 96,
+    width: 4,
+    height: 4,
+    backgroundColor: 'rgba(244, 197, 66, 0.44)',
+  },
   headerWrap: {
-    marginBottom: 8,
+    marginBottom: 0,
   },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    minHeight: 56,
+    backgroundColor: 'transparent',
+    overflow: 'visible',
   },
   headerButton: {
-    width: 36,
-    height: 36,
+    width: 50,
+    height: 50,
     borderRadius: 18,
-    backgroundColor: theme.colors.surface,
+    backgroundColor: theme.colors.card,
     justifyContent: 'center',
     alignItems: 'center',
-    borderWidth: 1,
-    borderColor: theme.colors.border,
+    borderWidth: 1.2,
+    borderBottomWidth: 1.8,
+    borderColor: theme.colors.inputBorder,
+    borderTopColor: theme.colors.card,
+    borderBottomColor: 'rgba(30, 111, 54, 0.22)',
+    shadowColor: theme.colors.shadow,
+    shadowOffset: {
+      width: 0,
+      height: 5,
+    },
+    shadowOpacity: 0.1,
+    shadowRadius: 10,
+    elevation: 4,
   },
   headerCenter: {
     flex: 1,
     alignItems: 'center',
-    marginHorizontal: 10,
+    marginHorizontal: 12,
+    minWidth: 0,
   },
   headerTitle: {
     color: theme.colors.text,
-    fontSize: 18,
+    fontSize: 21,
     fontWeight: '900',
     textAlign: 'center',
     maxWidth: '100%',
@@ -1418,123 +1660,297 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     marginLeft: 3,
   },
+  detailHeroBody: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 13,
+  },
+  detailHeroCopy: {
+    flex: 1,
+    minWidth: 0,
+    paddingRight: 12,
+  },
+  detailSuggestedPill: {
+    alignSelf: 'flex-start',
+    minHeight: 28,
+    borderRadius: 999,
+    backgroundColor: theme.colors.card,
+    borderWidth: 1,
+    borderColor: theme.colors.inputBorder,
+    borderTopColor: '#FDF7E978',
+    borderBottomColor: 'rgba(35, 107, 53, 0.1)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    marginBottom: 9,
+    shadowColor: theme.colors.shadow,
+    shadowOffset: {
+      width: 0,
+      height: 7,
+    },
+    shadowOpacity: 0.12,
+    shadowRadius: 12,
+    elevation: 4,
+  },
+  detailSuggestedText: {
+    color: theme.colors.primaryDark,
+    fontSize: 10,
+    fontWeight: '900',
+    marginLeft: 4,
+  },
+  detailTaskTitle: {
+    color: theme.colors.text,
+    fontSize: 22,
+    fontWeight: '900',
+    lineHeight: 28,
+  },
+  detailTaskMeta: {
+    color: theme.colors.textSoft,
+    fontSize: 12.5,
+    fontWeight: '900',
+    marginTop: 4,
+  },
+  detailHeroMiloStage: {
+    width: 118,
+    height: 118,
+    borderRadius: 32,
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    backgroundColor: 'rgba(255, 255, 255, 0.34)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.5)',
+    borderBottomColor: 'rgba(35, 107, 53, 0.12)',
+    overflow: 'hidden',
+    shadowColor: theme.colors.shadow,
+    shadowOffset: {
+      width: 0,
+      height: 9,
+    },
+    shadowOpacity: 0.12,
+    shadowRadius: 18,
+    elevation: 5,
+  },
+  detailHeroMiloGround: {
+    position: 'absolute',
+    bottom: 9,
+    width: 80,
+    height: 17,
+    borderRadius: 999,
+    backgroundColor: 'rgba(35, 107, 53, 0.18)',
+  },
+  detailHeroMiloImage: {
+    marginBottom: -6,
+  },
   heroCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#EAF8EE',
+    backgroundColor: theme.colors.card,
+    minHeight: 80,
     borderRadius: 24,
-    paddingVertical: 9,
-    paddingHorizontal: 10,
-    marginBottom: 9,
-    borderWidth: 1,
-    borderColor: '#CDEFD7',
-    ...theme.shadowSoft,
+    paddingVertical: 13,
+    paddingHorizontal: 14,
+    marginBottom: 12,
+    borderWidth: 1.2,
+    borderBottomWidth: 1.8,
+    borderColor: theme.colors.inputBorder,
+    borderTopColor: theme.colors.card,
+    borderBottomColor: 'rgba(30, 111, 54, 0.2)',
+    shadowColor: theme.colors.shadow,
+    shadowOffset: {
+      width: 0,
+      height: 6,
+    },
+    shadowOpacity: 0.1,
+    shadowRadius: 12,
+    elevation: 4,
+    overflow: 'visible',
   },
-  heroMiloBubble: {
-    width: 78,
-    height: 74,
-    borderRadius: 20,
+  smartPlanIconBox: {
+    width: 54,
+    height: 54,
+    borderRadius: 22,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#F6FFF8',
+    backgroundColor: theme.colors.primarySoft,
+    borderWidth: 1.2,
+    borderBottomWidth: 1.7,
+    borderColor: theme.colors.inputBorder,
+    borderTopColor: theme.colors.card,
+    borderBottomColor: 'rgba(30, 111, 54, 0.2)',
     overflow: 'hidden',
+    shadowColor: theme.colors.shadow,
+    shadowOffset: {
+      width: 0,
+      height: 3,
+    },
+    shadowOpacity: 0.07,
+    shadowRadius: 7,
+    elevation: 2,
   },
   heroMiloImage: {
     marginTop: 7,
   },
   heroTextArea: {
     flex: 1,
-    marginLeft: 11,
+    marginLeft: 12,
     paddingRight: 8,
   },
   heroEyebrow: {
     color: theme.colors.primaryDark,
-    fontSize: 11,
+    fontSize: 13.5,
     fontWeight: '900',
-    marginBottom: 3,
+    marginBottom: 5,
   },
   heroText: {
     color: theme.colors.text,
     fontSize: 13,
-    fontWeight: '900',
-    lineHeight: 18,
+    fontWeight: '800',
+    lineHeight: 19,
   },
   statusOverviewCard: {
     flexDirection: 'row',
-    backgroundColor: theme.colors.surface,
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    marginBottom: 10,
-    minHeight: 88,
-    overflow: 'hidden',
-    ...theme.shadowSoft,
+    flexWrap: 'wrap',
+    marginHorizontal: -4,
+    marginBottom: 8,
   },
   statusSection: {
-    flex: 1,
+    width: '50%',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 5,
-    paddingVertical: 10,
+    paddingHorizontal: 4,
+    marginBottom: 10,
   },
   statusDivider: {
-    borderRightWidth: 1,
-    borderRightColor: theme.colors.border,
+    borderRightWidth: 0,
   },
   statusIcon: {
     marginRight: 4,
   },
   statusTextBlock: {
-    flex: 1,
+    minHeight: 76,
+    alignSelf: 'stretch',
     minWidth: 0,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  statusLabelRow: {
     flexDirection: 'row',
+    justifyContent: 'flex-start',
+    alignItems: 'center',
+    backgroundColor: theme.colors.card,
+    borderRadius: 20,
+    borderWidth: 1.2,
+    borderBottomWidth: 1.8,
+    borderColor: theme.colors.inputBorder,
+    borderTopColor: theme.colors.card,
+    borderBottomColor: 'rgba(30, 111, 54, 0.2)',
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    shadowColor: theme.colors.shadow,
+    shadowOffset: {
+      width: 0,
+      height: 5,
+    },
+    shadowOpacity: 0.09,
+    shadowRadius: 10,
+    elevation: 3,
+    overflow: 'visible',
+  },
+  statusIconBox: {
+    width: 42,
+    height: 42,
+    borderRadius: 17,
+    backgroundColor: theme.colors.primarySoft,
+    borderWidth: 1.2,
+    borderBottomWidth: 1.6,
+    borderColor: theme.colors.inputBorder,
+    borderTopColor: theme.colors.card,
+    borderBottomColor: 'rgba(30, 111, 54, 0.2)',
     alignItems: 'center',
     justifyContent: 'center',
+    marginRight: 9,
+    shadowColor: theme.colors.shadow,
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.05,
+    shadowRadius: 5,
+    elevation: 1,
+  },
+  statusIconBoxWarning: {
+    backgroundColor: theme.colors.yellowSoft,
+    borderColor: '#F7D391',
+    borderBottomColor: 'rgba(245, 158, 11, 0.24)',
+  },
+  statusIconBoxDanger: {
+    backgroundColor: theme.colors.dangerSoft,
+    borderColor: '#F3B7B7',
+    borderBottomColor: 'rgba(220, 38, 38, 0.24)',
+  },
+  statusCopy: {
+    flex: 1,
     minWidth: 0,
   },
   statusLabel: {
     color: theme.colors.text,
-    fontSize: 10.5,
-    fontWeight: '800',
+    fontSize: 13,
+    fontWeight: '900',
     flexShrink: 1,
   },
   statusValueWrap: {
-    minHeight: 33,
+    minHeight: 32,
     justifyContent: 'center',
-    alignItems: 'center',
-    marginTop: 6,
+    alignItems: 'flex-start',
+    marginTop: 3,
   },
   statusValue: {
     color: theme.colors.textSoft,
-    fontSize: 10.5,
-    fontWeight: '800',
-    lineHeight: 15,
-    textAlign: 'center',
+    fontSize: 12,
+    fontWeight: '900',
+    lineHeight: 17,
+    textAlign: 'left',
   },
   locationCard: {
-    minHeight: 64,
+    minHeight: 58,
     borderRadius: 18,
-    backgroundColor: theme.colors.surface,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.card,
+    borderWidth: 1.2,
+    borderBottomWidth: 1.8,
+    borderColor: theme.colors.inputBorder,
+    borderTopColor: theme.colors.card,
+    borderBottomColor: 'rgba(30, 111, 54, 0.2)',
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 10,
+    padding: 9,
     marginBottom: 10,
-    ...theme.shadowSoft,
+    shadowColor: theme.colors.shadow,
+    shadowOffset: {
+      width: 0,
+      height: 5,
+    },
+    shadowOpacity: 0.09,
+    shadowRadius: 10,
+    elevation: 3,
+    overflow: 'visible',
   },
   locationIconWrap: {
-    width: 38,
-    height: 38,
-    borderRadius: 15,
+    width: 34,
+    height: 34,
+    borderRadius: 13,
     backgroundColor: theme.colors.primarySoft,
     alignItems: 'center',
     justifyContent: 'center',
-    marginRight: 10,
+    marginRight: 9,
+    borderWidth: 1.2,
+    borderBottomWidth: 1.6,
+    borderColor: theme.colors.inputBorder,
+    borderTopColor: theme.colors.card,
+    borderBottomColor: 'rgba(30, 111, 54, 0.2)',
+    shadowColor: theme.colors.shadow,
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.05,
+    shadowRadius: 5,
+    elevation: 1,
   },
   locationCopy: {
     flex: 1,
@@ -1549,19 +1965,30 @@ const styles = StyleSheet.create({
   locationValue: {
     marginTop: 3,
     color: theme.colors.text,
-    fontSize: 12,
+    fontSize: 11.5,
     fontWeight: '900',
-    lineHeight: 17,
+    lineHeight: 16,
   },
   openMapsButton: {
-    minHeight: 34,
-    borderRadius: 17,
+    minHeight: 32,
+    borderRadius: 16,
     backgroundColor: theme.colors.primarySoft,
-    borderWidth: 1,
-    borderColor: '#CFEFDA',
+    borderWidth: 1.2,
+    borderBottomWidth: 1.6,
+    borderColor: '#BFE6C9',
+    borderTopColor: theme.colors.card,
+    borderBottomColor: 'rgba(30, 111, 54, 0.22)',
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 10,
+    shadowColor: theme.colors.shadow,
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.05,
+    shadowRadius: 5,
+    elevation: 1,
   },
   openMapsButtonText: {
     color: theme.colors.primaryDark,
@@ -1569,58 +1996,85 @@ const styles = StyleSheet.create({
     fontWeight: '900',
   },
   onlineMeetingCard: {
-    borderRadius: 18,
-    backgroundColor: theme.colors.surface,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    padding: 11,
-    marginBottom: 10,
-    ...theme.shadowSoft,
+    minHeight: 84,
+    borderRadius: 20,
+    backgroundColor: theme.colors.card,
+    borderWidth: 1.2,
+    borderBottomWidth: 1.8,
+    borderColor: '#D8CDF9',
+    borderTopColor: theme.colors.card,
+    borderBottomColor: 'rgba(139, 111, 217, 0.24)',
+    padding: 13,
+    marginBottom: 12,
+    shadowColor: theme.colors.shadow,
+    shadowOffset: {
+      width: 0,
+      height: 5,
+    },
+    shadowOpacity: 0.09,
+    shadowRadius: 10,
+    elevation: 3,
+    overflow: 'visible',
   },
   onlineMeetingHeader: {
     flexDirection: 'row',
     alignItems: 'center',
   },
   onlineMeetingIconWrap: {
-    width: 38,
-    height: 38,
-    borderRadius: 15,
+    width: 50,
+    height: 50,
+    borderRadius: 19,
     backgroundColor: theme.colors.purpleSoft,
     alignItems: 'center',
     justifyContent: 'center',
-    marginRight: 10,
+    marginRight: 12,
+    borderWidth: 1.2,
+    borderBottomWidth: 1.6,
+    borderColor: '#D4C8FF',
+    borderTopColor: theme.colors.card,
+    borderBottomColor: 'rgba(139, 111, 217, 0.24)',
+    shadowColor: theme.colors.shadow,
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.05,
+    shadowRadius: 5,
+    elevation: 1,
   },
   onlineMeetingCopy: {
     flex: 1,
     minWidth: 0,
+    paddingRight: 10,
   },
   onlineMeetingLabel: {
     color: theme.colors.purple,
-    fontSize: 10,
+    fontSize: 13.5,
     fontWeight: '900',
   },
   onlineMeetingProvider: {
-    marginTop: 3,
+    marginTop: 5,
     color: theme.colors.text,
     fontSize: 13,
     fontWeight: '900',
   },
   onlineMeetingEmptyText: {
-    marginTop: 3,
+    marginTop: 5,
     color: theme.colors.textSoft,
-    fontSize: 12,
+    fontSize: 12.5,
     fontWeight: '800',
-    lineHeight: 17,
+    lineHeight: 18,
   },
   onlineMeetingLinkBox: {
-    minHeight: 34,
+    minHeight: 32,
     borderRadius: 16,
     backgroundColor: theme.colors.backgroundSoft,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
+    borderWidth: 1.2,
+    borderColor: '#D8CDF9',
+    borderTopColor: theme.colors.card,
     flexDirection: 'row',
     alignItems: 'center',
-    marginTop: 10,
+    marginTop: 8,
     paddingHorizontal: 10,
   },
   onlineMeetingLinkText: {
@@ -1633,17 +2087,30 @@ const styles = StyleSheet.create({
   onlineMeetingActionRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginTop: 10,
+    marginTop: 8,
   },
   meetingPrimaryButton: {
     flex: 1,
-    minHeight: 36,
+    minHeight: 34,
     borderRadius: 17,
     backgroundColor: theme.colors.purple,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 10,
     marginRight: 7,
+    borderWidth: 1.2,
+    borderBottomWidth: 1.7,
+    borderColor: '#A891EA',
+    borderTopColor: '#D8CEFF',
+    borderBottomColor: '#6D56B8',
+    shadowColor: theme.colors.shadow,
+    shadowOffset: {
+      width: 0,
+      height: 3,
+    },
+    shadowOpacity: 0.08,
+    shadowRadius: 7,
+    elevation: 2,
   },
   meetingPrimaryButtonText: {
     color: '#FFFFFF',
@@ -1651,15 +2118,26 @@ const styles = StyleSheet.create({
     fontWeight: '900',
   },
   meetingSecondaryButton: {
-    minHeight: 36,
+    minHeight: 34,
     borderRadius: 17,
     backgroundColor: theme.colors.purpleSoft,
-    borderWidth: 1,
-    borderColor: '#DDD4FF',
+    borderWidth: 1.2,
+    borderBottomWidth: 1.6,
+    borderColor: '#D4C8FF',
+    borderTopColor: theme.colors.card,
+    borderBottomColor: 'rgba(139, 111, 217, 0.16)',
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 12,
     marginRight: 7,
+    shadowColor: theme.colors.shadow,
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.05,
+    shadowRadius: 5,
+    elevation: 1,
   },
   meetingSecondaryButtonText: {
     color: theme.colors.purple,
@@ -1667,14 +2145,25 @@ const styles = StyleSheet.create({
     fontWeight: '900',
   },
   meetingDangerButton: {
-    minHeight: 36,
+    minHeight: 34,
     borderRadius: 17,
     backgroundColor: theme.colors.dangerSoft,
-    borderWidth: 1,
-    borderColor: '#F8CACA',
+    borderWidth: 1.2,
+    borderBottomWidth: 1.6,
+    borderColor: '#F3B7B7',
+    borderTopColor: theme.colors.card,
+    borderBottomColor: 'rgba(220, 38, 38, 0.18)',
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 12,
+    shadowColor: theme.colors.shadow,
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.05,
+    shadowRadius: 5,
+    elevation: 1,
   },
   meetingDangerButtonText: {
     color: theme.colors.danger,
@@ -1682,23 +2171,34 @@ const styles = StyleSheet.create({
     fontWeight: '900',
   },
   addMeetingButton: {
-    alignSelf: 'flex-start',
-    minHeight: 35,
-    borderRadius: 17,
+    alignSelf: 'center',
+    minHeight: 38,
+    borderRadius: 20,
     backgroundColor: theme.colors.purpleSoft,
-    borderWidth: 1,
-    borderColor: '#DDD4FF',
+    borderWidth: 1.2,
+    borderBottomWidth: 1.6,
+    borderColor: '#D4C8FF',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 12,
-    marginTop: 10,
+    flexShrink: 0,
+    borderTopColor: theme.colors.card,
+    borderBottomColor: 'rgba(139, 111, 217, 0.16)',
+    shadowColor: theme.colors.shadow,
+    shadowOffset: {
+      width: 0,
+      height: 3,
+    },
+    shadowOpacity: 0.07,
+    shadowRadius: 7,
+    elevation: 2,
   },
   addMeetingButtonText: {
     color: theme.colors.purple,
-    fontSize: 11,
+    fontSize: 12.5,
     fontWeight: '900',
-    marginLeft: 4,
+    marginLeft: 5,
   },
   tabControl: {
     flexDirection: 'row',
@@ -1738,6 +2238,8 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     borderWidth: 1,
     borderColor: '#FED7AA',
+    borderTopColor: '#FFF7ED',
+    ...theme.shadowSoft,
   },
   conflictFocusText: {
     flex: 1,
@@ -1749,22 +2251,47 @@ const styles = StyleSheet.create({
   smartPlanPreviewCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: theme.colors.surface,
-    borderRadius: 22,
-    padding: 12,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: '#E1E8DF',
-    ...theme.shadowSoft,
+    backgroundColor: theme.colors.card,
+    minHeight: 88,
+    borderRadius: 24,
+    padding: 13,
+    marginBottom: 14,
+    borderWidth: 1.2,
+    borderBottomWidth: 1.8,
+    borderColor: theme.colors.inputBorder,
+    borderTopColor: theme.colors.card,
+    borderBottomColor: 'rgba(30, 111, 54, 0.2)',
+    shadowColor: theme.colors.shadow,
+    shadowOffset: {
+      width: 0,
+      height: 6,
+    },
+    shadowOpacity: 0.1,
+    shadowRadius: 12,
+    elevation: 4,
+    overflow: 'visible',
   },
   smartPlanPreviewIcon: {
-    width: 42,
-    height: 42,
-    borderRadius: 18,
+    width: 50,
+    height: 50,
+    borderRadius: 20,
     backgroundColor: theme.colors.primarySoft,
     alignItems: 'center',
     justifyContent: 'center',
-    marginRight: 10,
+    marginRight: 12,
+    borderWidth: 1.2,
+    borderBottomWidth: 1.6,
+    borderColor: theme.colors.inputBorder,
+    borderTopColor: theme.colors.card,
+    borderBottomColor: 'rgba(30, 111, 54, 0.2)',
+    shadowColor: theme.colors.shadow,
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.05,
+    shadowRadius: 5,
+    elevation: 1,
   },
   smartPlanPreviewCopy: {
     flex: 1,
@@ -1773,18 +2300,18 @@ const styles = StyleSheet.create({
   },
   smartPlanPreviewTitle: {
     color: theme.colors.text,
-    fontSize: 13,
+    fontSize: 14.5,
     fontWeight: '900',
   },
   smartPlanPreviewText: {
     color: theme.colors.textSoft,
-    fontSize: 11,
+    fontSize: 12.5,
     fontWeight: '800',
-    lineHeight: 16,
-    marginTop: 4,
+    lineHeight: 18,
+    marginTop: 5,
   },
   smartPlanMiniProgress: {
-    marginTop: 9,
+    marginTop: 7,
   },
   smartPlanMiniProgressHeader: {
     flexDirection: 'row',
@@ -1807,6 +2334,8 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     backgroundColor: '#E8F3E5',
     overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: theme.colors.inputBorder,
   },
   smartPlanMiniFill: {
     height: 5,
@@ -1814,19 +2343,33 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.primary,
   },
   smartPlanPreviewButton: {
-    minHeight: 38,
-    borderRadius: 18,
+    minHeight: 46,
+    minWidth: 112,
+    borderRadius: 20,
     backgroundColor: theme.colors.primary,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 12,
+    paddingHorizontal: 16,
+    borderWidth: 1.2,
+    borderBottomWidth: 2,
+    borderColor: '#4DBA62',
+    borderTopColor: '#7CE38D',
+    borderBottomColor: '#1E6C34',
+    shadowColor: theme.colors.primaryDark,
+    shadowOffset: {
+      width: 0,
+      height: 5,
+    },
+    shadowOpacity: 0.14,
+    shadowRadius: 10,
+    elevation: 4,
   },
   smartPlanPreviewButtonText: {
     color: '#FFFFFF',
-    fontSize: 11,
+    fontSize: 13,
     fontWeight: '900',
-    marginRight: 4,
+    marginRight: 6,
   },
   progressCard: {
     backgroundColor: '#F5FBF4',
@@ -2241,33 +2784,59 @@ const styles = StyleSheet.create({
   },
   actionRow: {
     flexDirection: 'row',
-    marginTop: 2,
+    alignItems: 'center',
+    marginTop: 0,
   },
   compactButton: {
     flex: 1,
-    minHeight: 46,
-    borderRadius: 17,
-    backgroundColor: theme.colors.surface,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
+    minHeight: 58,
+    borderRadius: 20,
+    backgroundColor: theme.colors.card,
+    borderWidth: 1.2,
+    borderBottomWidth: 1.8,
+    borderColor: theme.colors.inputBorder,
+    borderTopColor: theme.colors.card,
+    borderBottomColor: 'rgba(30, 111, 54, 0.2)',
     justifyContent: 'center',
     alignItems: 'center',
-    marginRight: 8,
+    marginRight: 7,
     paddingHorizontal: 6,
+    shadowColor: theme.colors.shadow,
+    shadowOffset: {
+      width: 0,
+      height: 4,
+    },
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    elevation: 3,
   },
   compactButtonPrimary: {
+    flex: 1.18,
+    marginRight: 0,
     backgroundColor: theme.colors.primary,
-    borderColor: theme.colors.primary,
+    borderColor: '#4DBA62',
+    borderTopColor: '#7CE38D',
+    borderBottomColor: '#1E6C34',
+    shadowColor: theme.colors.primaryDark,
+    shadowOffset: {
+      width: 0,
+      height: 5,
+    },
+    shadowOpacity: 0.15,
+    shadowRadius: 11,
+    elevation: 5,
   },
   compactButtonSoft: {
-    backgroundColor: theme.colors.primarySoft,
-    borderColor: '#CFEFDA',
+    backgroundColor: theme.colors.card,
+    borderColor: theme.colors.inputBorder,
+    borderTopColor: theme.colors.card,
+    borderBottomColor: 'rgba(30, 111, 54, 0.22)',
   },
   compactButtonText: {
     color: theme.colors.text,
-    fontSize: 10,
+    fontSize: 11.5,
     fontWeight: '900',
-    marginTop: 4,
+    marginTop: 5,
   },
   compactButtonTextPrimary: {
     color: '#FFFFFF',
@@ -2277,12 +2846,16 @@ const styles = StyleSheet.create({
   },
   deleteLink: {
     alignSelf: 'center',
-    paddingVertical: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingTop: 16,
+    paddingBottom: 14,
   },
   deleteLinkText: {
-    color: theme.colors.muted,
-    fontSize: 12,
+    color: theme.colors.danger,
+    fontSize: 13,
     fontWeight: '900',
+    marginLeft: 7,
   },
   meetingModalOverlay: {
     flex: 1,
@@ -2294,9 +2867,19 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.surface,
     borderRadius: 24,
     padding: 15,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    ...theme.shadow,
+    borderWidth: 1.2,
+    borderBottomWidth: 1.8,
+    borderColor: theme.colors.inputBorder,
+    borderTopColor: theme.colors.surface,
+    borderBottomColor: 'rgba(30, 111, 54, 0.2)',
+    shadowColor: theme.colors.shadow,
+    shadowOffset: {
+      width: 0,
+      height: 7,
+    },
+    shadowOpacity: 0.13,
+    shadowRadius: 15,
+    elevation: 5,
   },
   meetingModalHeader: {
     flexDirection: 'row',
@@ -2314,8 +2897,11 @@ const styles = StyleSheet.create({
     height: 34,
     borderRadius: 17,
     backgroundColor: theme.colors.backgroundSoft,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
+    borderWidth: 1.2,
+    borderBottomWidth: 1.6,
+    borderColor: theme.colors.inputBorder,
+    borderTopColor: theme.colors.surface,
+    borderBottomColor: 'rgba(30, 111, 54, 0.18)',
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -2330,8 +2916,11 @@ const styles = StyleSheet.create({
     minHeight: 48,
     borderRadius: 16,
     backgroundColor: theme.colors.backgroundSoft,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
+    borderWidth: 1.2,
+    borderBottomWidth: 1.6,
+    borderColor: theme.colors.inputBorder,
+    borderTopColor: theme.colors.surface,
+    borderBottomColor: 'rgba(30, 111, 54, 0.18)',
     color: theme.colors.text,
     fontSize: 14,
     fontWeight: '800',
@@ -2346,8 +2935,8 @@ const styles = StyleSheet.create({
     minHeight: 30,
     borderRadius: 15,
     backgroundColor: theme.colors.purpleSoft,
-    borderWidth: 1,
-    borderColor: '#DDD4FF',
+    borderWidth: 1.2,
+    borderColor: '#D4C8FF',
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 10,
@@ -2376,8 +2965,11 @@ const styles = StyleSheet.create({
     minHeight: 44,
     borderRadius: 17,
     backgroundColor: theme.colors.surface,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
+    borderWidth: 1.2,
+    borderBottomWidth: 1.6,
+    borderColor: theme.colors.inputBorder,
+    borderTopColor: theme.colors.surface,
+    borderBottomColor: 'rgba(30, 111, 54, 0.18)',
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 9,
@@ -2392,6 +2984,11 @@ const styles = StyleSheet.create({
     minHeight: 44,
     borderRadius: 17,
     backgroundColor: theme.colors.primary,
+    borderWidth: 1.2,
+    borderBottomWidth: 1.8,
+    borderColor: '#4DBA62',
+    borderTopColor: '#7CE38D',
+    borderBottomColor: '#1E6C34',
     alignItems: 'center',
     justifyContent: 'center',
   },

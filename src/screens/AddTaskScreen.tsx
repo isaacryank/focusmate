@@ -44,7 +44,6 @@ import { isPhysicalLocationLikeValue } from '../lib/locationPickerUtils';
 
 import ScreenContainer from '../components/ui/ScreenContainer';
 import NoticeCard from '../components/ui/NoticeCard';
-import MiloMoodImage from '../components/milo/MiloMoodImage';
 import SmartLocationPickerModal from '../components/SmartLocationPickerModal';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'AddTask'>;
@@ -53,7 +52,6 @@ type PickerMode = 'date' | 'time' | null;
 type ScheduleSheet = 'duration' | 'location' | 'onlineMeeting' | 'reminder' | null;
 type ReminderUnit = 'minutes' | 'hours' | 'days';
 
-const SCHEDULE_MILO_ROTATION_MS = 57000;
 const MAX_RECENT_LOCATION_CHIPS = 3;
 
 const plannerTypes: {
@@ -198,113 +196,7 @@ function formatScheduleDate(value: string) {
   });
 }
 
-function getScheduleMiloMessages({
-  dueDate,
-  dueTime,
-  estimatedDurationMinutes,
-  plannerType,
-  conflictInfo,
-  overlapAccepted,
-}: {
-  dueDate: string;
-  dueTime: string;
-  estimatedDurationMinutes?: number;
-  plannerType: PlannerType;
-  conflictInfo?: MiloConflictInfo;
-  overlapAccepted: boolean;
-}) {
-  const noFixedDuration = estimatedDurationMinutes === undefined;
-  const selectedTimeLabel = conflictInfo?.selectedTimeLabel || dueTime || 'this time';
-  const conflictingTitle = conflictInfo?.conflictingTitle || 'that plan';
-  const conflictingStart =
-    conflictInfo?.conflictingStartTimeLabel ||
-    conflictInfo?.conflictingTime ||
-    'the same time';
-  const conflictingEnd = conflictInfo?.conflictingEndTimeLabel;
-
-  if (
-    overlapAccepted &&
-    (conflictInfo?.level === 'hard' ||
-      conflictInfo?.level === 'soft' ||
-      conflictInfo?.level === 'same_time')
-  ) {
-    return [
-      'Okay, Milo will keep an extra eye on both.',
-      'This stays high focus.',
-      "Milo saved it, but we'll stay careful.",
-    ];
-  }
-
-  if (conflictInfo?.type === 'same_time' || conflictInfo?.level === 'same_time') {
-    return [
-      `Milo noticed this shares ${selectedTimeLabel} with ${conflictingTitle}.`,
-      'Both plans start at the same time.',
-      'You can keep both, or Milo can find a calmer time.',
-    ];
-  }
-
-  if (
-    conflictInfo?.type === 'hard_overlap' ||
-    conflictInfo?.type === 'ongoing_overlap' ||
-    conflictInfo?.level === 'hard'
-  ) {
-    return [
-      `${conflictingTitle} may still be ongoing at ${selectedTimeLabel}.`,
-      conflictingEnd
-        ? `It could finish around ${conflictingEnd}.`
-        : `It starts around ${conflictingStart}.`,
-      'Want to keep both, or choose another time?',
-    ];
-  }
-
-  if (
-    conflictInfo?.type === 'whole_day' ||
-    conflictInfo?.type === 'soft_overlap' ||
-    conflictInfo?.level === 'soft'
-  ) {
-    return [
-      `This is during ${conflictingTitle}.`,
-      'You can keep both if that still works.',
-      'Milo can help you leave a gentle buffer.',
-    ];
-  }
-
-  if (noFixedDuration) {
-    return [
-      'No fixed duration is okay.',
-      'Milo will focus on the deadline.',
-      "We can plan small steps before it's due.",
-    ];
-  }
-
-  if (!dueDate || !dueTime) {
-    return [
-      "Pick a time and I'll help.",
-      'Milo will watch the plan with you.',
-      'Choose the schedule gently.',
-    ];
-  }
-
-  return plannerType === 'task'
-    ? [
-        'This time looks calm so far.',
-        'Milo will watch the plan with you.',
-        'Choose the schedule gently.',
-      ]
-    : [
-        'This slot looks okay so far.',
-        'Milo will watch the plan with you.',
-        'Leave a little room if you need it.',
-      ];
-}
-
-function Header({
-  onBack,
-  showAvatar = true,
-}: {
-  onBack: () => void;
-  showAvatar?: boolean;
-}) {
+function Header({ onBack }: { onBack: () => void }) {
   return (
     <View style={styles.header}>
       <TouchableOpacity
@@ -318,14 +210,7 @@ function Header({
       </TouchableOpacity>
 
       <Text style={styles.headerTitle}>FocusMate</Text>
-
-      {showAvatar ? (
-        <View style={styles.headerAvatar}>
-          <MiloMoodImage mood="happy" size={34} />
-        </View>
-      ) : (
-        <View style={styles.headerSpacer} />
-      )}
+      <View style={styles.headerSpacer} />
     </View>
   );
 }
@@ -394,6 +279,7 @@ function FormInput({
   multiline,
   icon,
   invalid,
+  validationMessage,
 }: {
   label: string;
   value: string;
@@ -402,10 +288,18 @@ function FormInput({
   multiline?: boolean;
   icon?: keyof typeof Ionicons.glyphMap;
   invalid?: boolean;
+  validationMessage?: string;
 }) {
   return (
-    <View style={[styles.detailCard, invalid && styles.detailCardInvalid]}>
-      <View style={styles.detailCardHeader}>
+    <View
+      style={[
+        styles.cardDepthWrap,
+        styles.detailCardDepthWrap,
+        invalid && styles.cardDepthWrapInvalid,
+      ]}
+    >
+      <View style={[styles.detailCard, invalid && styles.detailCardInvalid]}>
+        <View style={styles.detailCardHeader}>
         {icon ? (
           <View style={styles.detailIcon}>
             <Ionicons name={icon} size={17} color={theme.colors.primaryDark} />
@@ -426,6 +320,16 @@ function FormInput({
         multiline={multiline}
         textAlignVertical={multiline ? 'top' : 'center'}
       />
+
+        {invalid ? (
+          <View style={styles.fieldErrorRow}>
+            <Ionicons name="alert-circle-outline" size={15} color={theme.colors.danger} />
+            <Text style={styles.fieldErrorText}>
+              {validationMessage || 'Please fill in this field.'}
+            </Text>
+          </View>
+        ) : null}
+      </View>
     </View>
   );
 }
@@ -450,6 +354,7 @@ function TypeSegment({
       activeOpacity={0.85}
       style={[
         styles.segment,
+        selected && styles.segmentSelected,
         selected && {
           backgroundColor: tint,
           borderColor: color,
@@ -498,6 +403,7 @@ function PrioritySegment({
       activeOpacity={0.85}
       style={[
         styles.segment,
+        selected && styles.segmentSelected,
         selected && {
           backgroundColor: tint,
           borderColor: color,
@@ -532,14 +438,16 @@ function DetailSelectCard({
   children: React.ReactNode;
 }) {
   return (
-    <View style={styles.detailCard}>
-      <View style={styles.detailCardHeader}>
+    <View style={[styles.cardDepthWrap, styles.detailCardDepthWrap]}>
+      <View style={styles.detailCard}>
+        <View style={styles.detailCardHeader}>
         <View style={styles.detailIcon}>
           <Ionicons name={icon} size={17} color={theme.colors.primaryDark} />
         </View>
         <FieldLabel label={label} />
+        </View>
+        {children}
       </View>
-      {children}
     </View>
   );
 }
@@ -652,26 +560,28 @@ function PrimaryButton({
   return (
     <TouchableOpacity
       activeOpacity={0.86}
-      style={[styles.primaryButton, loading && styles.disabledButton]}
+      style={[styles.primaryButtonDepth, loading && styles.disabledButton]}
       onPress={onPress}
       disabled={loading}
       accessibilityRole="button"
       accessibilityLabel={title}
     >
-      {icon && iconSide === 'left' ? (
-        <View style={styles.primaryButtonLeftIcon}>{icon}</View>
-      ) : null}
-      <Text
-        style={[
-          styles.primaryButtonText,
-          iconSide === 'left' && styles.primaryButtonTextCentered,
-        ]}
-      >
-        {loading ? 'Saving...' : title}
-      </Text>
-      {icon && iconSide === 'right' ? (
-        <View style={styles.primaryButtonRightIcon}>{icon}</View>
-      ) : null}
+      <View style={styles.primaryButtonFace}>
+        {icon && iconSide === 'left' ? (
+          <View style={styles.primaryButtonLeftIcon}>{icon}</View>
+        ) : null}
+        <Text
+          style={[
+            styles.primaryButtonText,
+            iconSide === 'left' && styles.primaryButtonTextCentered,
+          ]}
+        >
+          {loading ? 'Saving...' : title}
+        </Text>
+        {icon && iconSide === 'right' ? (
+          <View style={styles.primaryButtonRightIcon}>{icon}</View>
+        ) : null}
+      </View>
     </TouchableOpacity>
   );
 }
@@ -686,12 +596,14 @@ function SecondaryButton({
   return (
     <TouchableOpacity
       activeOpacity={0.86}
-      style={styles.secondaryButton}
+      style={styles.secondaryButtonDepth}
       onPress={onPress}
       accessibilityRole="button"
       accessibilityLabel={title}
     >
-      <Text style={styles.secondaryButtonText}>{title}</Text>
+      <View style={styles.secondaryButtonFace}>
+        <Text style={styles.secondaryButtonText}>{title}</Text>
+      </View>
     </TouchableOpacity>
   );
 }
@@ -728,7 +640,6 @@ export default function AddTaskScreen({ navigation }: Props) {
     string | null
   >(null);
   const [showOverlapConfirm, setShowOverlapConfirm] = useState(false);
-  const [scheduleMiloMessageIndex, setScheduleMiloMessageIndex] = useState(0);
 
   const [pickerMode, setPickerMode] = useState<PickerMode>(null);
   const [scheduleSheet, setScheduleSheet] = useState<ScheduleSheet>(null);
@@ -878,41 +789,8 @@ export default function AddTaskScreen({ navigation }: Props) {
     : currentConflictAccepted
     ? 'Proceed: Review'
     : 'Keep Anyway';
-  const scheduleMiloMessages = useMemo(
-    () =>
-      getScheduleMiloMessages({
-        dueDate,
-        dueTime,
-        estimatedDurationMinutes,
-        plannerType,
-        conflictInfo,
-        overlapAccepted: currentConflictAccepted,
-      }),
-    [
-      conflictInfo,
-      dueDate,
-      dueTime,
-      estimatedDurationMinutes,
-      currentConflictAccepted,
-      plannerType,
-    ]
-  );
-  const scheduleMiloMessageSignature = scheduleMiloMessages.join('|');
-  const scheduleMiloBubbleText =
-    scheduleMiloMessages[
-      Math.min(scheduleMiloMessageIndex, scheduleMiloMessages.length - 1)
-    ] || "Pick a time and I'll help.";
   const reviewMiloUrgency =
     currentConflictAccepted && hasScheduleConflict ? 'high' : smartData.urgency;
-  const reviewMiloMessage = currentConflictAccepted && hasScheduleConflict
-    ? "Milo noted both plans. We'll stay careful."
-    : reviewMiloUrgency === 'high'
-    ? 'This needs your focus soon.'
-    : priority === 'high'
-    ? 'Milo thinks this deserves extra attention.'
-    : plannerType === 'meeting'
-    ? 'Milo checked the meeting plan.'
-    : "Looks good. Ready to save?";
   const priorityTone =
     priority === 'high'
       ? {
@@ -969,26 +847,6 @@ export default function AddTaskScreen({ navigation }: Props) {
   }. Milo can keep both and mark this as high focus.`;
 
   const isTitleInvalid = showTitleValidation && !title.trim();
-  const miloPromptText = isTitleInvalid
-    ? 'Milo needs a title first so I know what to help with.'
-    : "Tell Milo what you're planning.";
-
-  useEffect(() => {
-    setScheduleMiloMessageIndex(0);
-  }, [scheduleMiloMessageSignature]);
-
-  useEffect(() => {
-    if (step !== 2 || scheduleMiloMessages.length <= 1) return undefined;
-
-    const intervalId = setInterval(() => {
-      setScheduleMiloMessageIndex((current) =>
-        (current + 1) % scheduleMiloMessages.length
-      );
-    }, SCHEDULE_MILO_ROTATION_MS);
-
-    return () => clearInterval(intervalId);
-  }, [scheduleMiloMessages.length, scheduleMiloMessageSignature, step]);
-
   const showNotice = (
     type: 'success' | 'info' | 'warning' | 'error',
     noticeTitle: string,
@@ -1247,39 +1105,94 @@ export default function AddTaskScreen({ navigation }: Props) {
     setIsSaving(false);
   };
 
+  const stepHeading =
+    step === 1
+      ? 'Create Task — Details'
+      : step === 2
+      ? 'Create Task — Schedule'
+      : 'Create Task — Review';
+  const stepSubheading =
+    step === 1
+      ? 'Fill in the basic information for your plan.'
+      : step === 2
+      ? 'Choose when, where, and how you want to prepare.'
+      : 'Check the details before saving your plan.';
+
   return (
-    <ScreenContainer topPadding={2} bottomPadding={40}>
-      <Header onBack={() => navigation.goBack()} showAvatar={step === 1} />
-      <Stepper step={step} />
+    <ScreenContainer
+      topPadding={2}
+      bottomPadding={40}
+      contentStyle={styles.screenContent}
+    >
+      <View style={styles.headerDepthWrap}>
+        <View style={styles.simpleHeaderPanel}>
+          <Header onBack={() => navigation.goBack()} />
+        <Stepper step={step} />
+        <View style={styles.simpleStepCopy}>
+          <Text style={styles.simpleStepTitle}>{stepHeading}</Text>
+          <Text style={styles.simpleStepSubtitle}>{stepSubheading}</Text>
+        </View>
 
-      {notice ? (
-        <NoticeCard
-          type={notice.type}
-          title={notice.title}
-          message={notice.message}
-        />
-      ) : null}
-
-      {step === 1 ? (
-        <>
-          <View style={styles.miloPrompt}>
-            <MiloMoodImage mood="waving" size={84} />
-            <View
-              style={[
-                styles.speechBubble,
-                isTitleInvalid && styles.speechBubbleInvalid,
-              ]}
+        {step === 2 && hasScheduleConflict ? (
+          <View style={styles.conflictActions}>
+            <TouchableOpacity
+              activeOpacity={0.85}
+              style={styles.conflictButton}
+              onPress={() =>
+                setDueTime(
+                  moveDraftTime(
+                    dueDate,
+                    dueTime,
+                    'earlier',
+                    estimatedDurationMinutes
+                  )
+                )
+              }
             >
-              <View
-                style={[
-                  styles.speechTail,
-                  isTitleInvalid && styles.speechTailInvalid,
-                ]}
-              />
-              <Text style={styles.speechText}>{miloPromptText}</Text>
-            </View>
-          </View>
+              <Text style={styles.conflictButtonText}>Move Earlier</Text>
+            </TouchableOpacity>
 
+            <TouchableOpacity
+              activeOpacity={0.85}
+              style={styles.conflictButton}
+              onPress={() =>
+                setDueTime(
+                  moveDraftTime(
+                    dueDate,
+                    dueTime,
+                    'later',
+                    estimatedDurationMinutes
+                  )
+                )
+              }
+            >
+              <Text style={styles.conflictButtonText}>Move Later</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              activeOpacity={0.85}
+              style={styles.conflictButton}
+              onPress={() => setPickerMode('time')}
+            >
+              <Text style={styles.conflictButtonText}>Edit</Text>
+            </TouchableOpacity>
+          </View>
+          ) : null}
+        </View>
+      </View>
+
+      <View style={styles.createSheetDepth}>
+        <View style={styles.createSheet}>
+        {notice ? (
+          <NoticeCard
+            type={notice.type}
+            title={notice.title}
+            message={notice.message}
+          />
+        ) : null}
+
+        {step === 1 ? (
+          <>
           <FormInput
             label="Title"
             value={title}
@@ -1287,6 +1200,7 @@ export default function AddTaskScreen({ navigation }: Props) {
             placeholder="Example: Assignment Lab"
             icon="document-text-outline"
             invalid={isTitleInvalid}
+            validationMessage="Please fill in the task title before continuing."
           />
 
           <FormInput
@@ -1337,92 +1251,14 @@ export default function AddTaskScreen({ navigation }: Props) {
               icon={<Ionicons name="chevron-forward" size={18} color="#FFFFFF" />}
             />
           </View>
-        </>
-      ) : null}
+          </>
+        ) : null}
 
-      {step === 2 ? (
-        <>
-          <View style={styles.scheduleMiloRow}>
-            <MiloMoodImage
-              mood={
-                hasScheduleConflict && !currentConflictAccepted ? 'worried' : 'happy'
-              }
-              size={92}
-              style={styles.scheduleMilo}
-            />
-            <View style={styles.scheduleBubbleArea}>
-              <View
-                style={[
-                  styles.scheduleBubble,
-                  hasScheduleConflict && styles.scheduleBubbleConflict,
-                ]}
-              >
-                <View
-                  style={[
-                    styles.scheduleBubbleTail,
-                    hasScheduleConflict && styles.scheduleBubbleTailConflict,
-                  ]}
-                />
-                <Text
-                  style={[
-                    styles.scheduleBubbleText,
-                    hasScheduleConflict && styles.scheduleBubbleTextConflict,
-                  ]}
-                >
-                  {scheduleMiloBubbleText}
-                </Text>
-              </View>
-
-              {hasScheduleConflict ? (
-                <View style={styles.conflictActions}>
-                  <TouchableOpacity
-                    activeOpacity={0.85}
-                    style={styles.conflictButton}
-                    onPress={() =>
-                      setDueTime(
-                        moveDraftTime(
-                          dueDate,
-                          dueTime,
-                          'earlier',
-                          estimatedDurationMinutes
-                        )
-                      )
-                    }
-                  >
-                    <Text style={styles.conflictButtonText}>Move Earlier</Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                    activeOpacity={0.85}
-                    style={styles.conflictButton}
-                    onPress={() =>
-                      setDueTime(
-                        moveDraftTime(
-                          dueDate,
-                          dueTime,
-                          'later',
-                          estimatedDurationMinutes
-                        )
-                      )
-                    }
-                  >
-                    <Text style={styles.conflictButtonText}>Move Later</Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                    activeOpacity={0.85}
-                    style={styles.conflictButton}
-                    onPress={() => setPickerMode('time')}
-                  >
-                    <Text style={styles.conflictButtonText}>Edit</Text>
-                  </TouchableOpacity>
-                </View>
-              ) : null}
-            </View>
-          </View>
-
-          <View style={styles.scheduleCard}>
-            <ScheduleRow
+        {step === 2 ? (
+          <>
+          <View style={[styles.cardDepthWrap, styles.scheduleCardDepthWrap]}>
+            <View style={styles.scheduleCard}>
+              <ScheduleRow
               label="Date"
               value={dateLabel}
               placeholder="Choose date"
@@ -1458,14 +1294,15 @@ export default function AddTaskScreen({ navigation }: Props) {
               icon="videocam-outline"
               onPress={openOnlineMeetingSheet}
             />
-            <ScheduleRow
-              label="Final Reminder"
-              value={reminderLabel}
-              placeholder="No reminder"
-              icon="notifications-outline"
-              onPress={() => setScheduleSheet('reminder')}
-              last
-            />
+              <ScheduleRow
+                label="Final Reminder"
+                value={reminderLabel}
+                placeholder="No reminder"
+                icon="notifications-outline"
+                onPress={() => setScheduleSheet('reminder')}
+                last
+              />
+            </View>
           </View>
 
           <View style={styles.footerRow}>
@@ -1478,25 +1315,14 @@ export default function AddTaskScreen({ navigation }: Props) {
               />
             </View>
           </View>
-        </>
-      ) : null}
+          </>
+        ) : null}
 
-      {step === 3 ? (
-        <>
-          <View style={styles.reviewMiloPrompt}>
-            <MiloMoodImage
-              mood={currentConflictAccepted && hasScheduleConflict ? 'focused' : 'happy'}
-              size={104}
-              style={styles.reviewMiloImage}
-            />
-            <View style={styles.reviewSpeechBubble}>
-              <View style={styles.reviewSpeechTail} />
-              <Text style={styles.reviewSpeechText}>{reviewMiloMessage}</Text>
-            </View>
-          </View>
-
-          <View style={styles.summaryCard}>
-            <View style={styles.summaryHeader}>
+        {step === 3 ? (
+          <>
+          <View style={[styles.cardDepthWrap, styles.summaryCardDepthWrap]}>
+            <View style={styles.summaryCard}>
+              <View style={styles.summaryHeader}>
               <Text style={styles.summaryTitle}>Plan Summary</Text>
               <TouchableOpacity
                 activeOpacity={0.85}
@@ -1545,6 +1371,7 @@ export default function AddTaskScreen({ navigation }: Props) {
                 value={reminderLabel}
                 last
               />
+              </View>
             </View>
           </View>
 
@@ -1559,8 +1386,9 @@ export default function AddTaskScreen({ navigation }: Props) {
             </View>
           ) : null}
 
-          <View style={styles.urgencyCard}>
-            <View
+          <View style={[styles.cardDepthWrap, styles.urgencyCardDepthWrap]}>
+            <View style={styles.urgencyCard}>
+              <View
               style={[
                 styles.urgencyIcon,
                 {
@@ -1572,21 +1400,22 @@ export default function AddTaskScreen({ navigation }: Props) {
               <Ionicons name="flame-outline" size={17} color={urgencyTone.color} />
             </View>
             <View style={styles.urgencyTextArea}>
-              <Text style={styles.urgencyLabel}>Milo Urgency</Text>
-              <Text style={styles.urgencyHint}>Milo will help you stay on track</Text>
+              <Text style={styles.urgencyLabel}>Urgency</Text>
+              <Text style={styles.urgencyHint}>Helps you stay on track</Text>
             </View>
-            <View
-              style={[
-                styles.urgencyBadge,
-                {
-                  backgroundColor: urgencyTone.tint,
-                  borderColor: urgencyTone.border,
-                },
-              ]}
-            >
-              <Text style={[styles.urgencyBadgeText, { color: urgencyTone.color }]}>
-                {reviewMiloUrgency}
-              </Text>
+              <View
+                style={[
+                  styles.urgencyBadge,
+                  {
+                    backgroundColor: urgencyTone.tint,
+                    borderColor: urgencyTone.border,
+                  },
+                ]}
+              >
+                <Text style={[styles.urgencyBadgeText, { color: urgencyTone.color }]}>
+                  {reviewMiloUrgency}
+                </Text>
+              </View>
             </View>
           </View>
 
@@ -1608,8 +1437,10 @@ export default function AddTaskScreen({ navigation }: Props) {
               />
             </View>
           </View>
-        </>
-      ) : null}
+          </>
+        ) : null}
+        </View>
+      </View>
 
       {pickerMode ? (
         <DateTimePicker
@@ -1628,8 +1459,10 @@ export default function AddTaskScreen({ navigation }: Props) {
       >
         <View style={styles.modalOverlay}>
           <View style={styles.confirmSheet}>
-            <View style={styles.confirmMiloRow}>
-              <MiloMoodImage mood="focused" size={58} />
+            <View style={styles.confirmMessageRow}>
+              <View style={styles.confirmIconBox}>
+                <Ionicons name="warning-outline" size={22} color="#92400E" />
+              </View>
               <View style={styles.confirmBubble}>
                 <Text style={styles.confirmText}>{overlapConfirmMessage}</Text>
               </View>
@@ -1914,6 +1747,273 @@ export default function AddTaskScreen({ navigation }: Props) {
 }
 
 const styles = StyleSheet.create({
+  screenContent: {
+    paddingHorizontal: 14,
+  },
+  headerDepthWrap: {
+    backgroundColor: 'rgba(190, 216, 194, 0.22)',
+    borderRadius: 31,
+    paddingRight: 0,
+    paddingBottom: 1,
+    marginBottom: 15,
+    shadowColor: '#174726',
+    shadowOffset: {
+      width: 0,
+      height: 4,
+    },
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  createSheetDepth: {
+    backgroundColor: 'rgba(190, 216, 194, 0.24)',
+    borderRadius: 30,
+    paddingRight: 0,
+    paddingBottom: 1,
+    shadowColor: '#174726',
+    shadowOffset: {
+      width: 0,
+      height: 5,
+    },
+    shadowOpacity: 0.08,
+    shadowRadius: 10,
+    elevation: 4,
+  },
+  cardDepthWrap: {
+    backgroundColor: 'rgba(190, 216, 194, 0.20)',
+    borderRadius: 24,
+    paddingRight: 0,
+    paddingBottom: 1,
+    marginBottom: 14,
+    shadowColor: '#174726',
+    shadowOffset: {
+      width: 0,
+      height: 4,
+    },
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  cardDepthWrapInvalid: {
+    backgroundColor: '#F2BEBE',
+    shadowColor: '#7F1D1D',
+  },
+  detailCardDepthWrap: {
+    borderRadius: 24,
+  },
+  scheduleCardDepthWrap: {
+    borderRadius: 28,
+  },
+  summaryCardDepthWrap: {
+    borderRadius: 27,
+    marginBottom: 0,
+  },
+  urgencyCardDepthWrap: {
+    borderRadius: 25,
+    marginTop: 16,
+    marginBottom: 0,
+  },
+  simpleHeaderPanel: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 28,
+    paddingHorizontal: 15,
+    paddingTop: 12,
+    paddingBottom: 15,
+    marginBottom: 0,
+    borderWidth: 1,
+    borderBottomWidth: 1.5,
+    borderColor: 'rgba(36, 105, 57, 0.12)',
+    borderTopColor: '#FFFFFF',
+    borderBottomColor: 'rgba(30, 111, 54, 0.13)',
+    shadowColor: '#174726',
+    shadowOffset: {
+      width: 0,
+      height: 3,
+    },
+    shadowOpacity: 0.05,
+    shadowRadius: 6,
+    elevation: 2,
+    overflow: 'visible',
+  },
+  simpleStepCopy: {
+    marginTop: 2,
+    paddingHorizontal: 5,
+  },
+  simpleStepTitle: {
+    color: theme.colors.text,
+    fontSize: 17,
+    fontWeight: '900',
+  },
+  simpleStepSubtitle: {
+    color: theme.colors.textSoft,
+    fontSize: 12,
+    fontWeight: '800',
+    lineHeight: 17,
+    marginTop: 3,
+  },
+  createHero: {
+    minHeight: 248,
+    borderRadius: 32,
+    paddingHorizontal: 15,
+    paddingTop: 12,
+    paddingBottom: 23,
+    marginBottom: -22,
+    backgroundColor: theme.colors.primarySoft,
+    borderWidth: 1,
+    borderColor: theme.colors.inputBorder,
+    borderTopColor: '#FDF7E978',
+    borderBottomColor: 'rgba(35, 107, 53, 0.14)',
+    overflow: 'hidden',
+    shadowColor: theme.colors.shadow,
+    shadowOffset: {
+      width: 0,
+      height: 16,
+    },
+    shadowOpacity: 0.18,
+    shadowRadius: 24,
+    elevation: 8,
+  },
+  scenicDecor: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  heroSpotlight: {
+    position: 'absolute',
+    width: 220,
+    height: 220,
+    borderRadius: 110,
+    top: -58,
+    right: -18,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+  },
+  heroBlob: {
+    position: 'absolute',
+    borderRadius: 999,
+    backgroundColor: 'rgba(255, 255, 255, 0.28)',
+  },
+  heroBlobLarge: {
+    width: 184,
+    height: 184,
+    top: -62,
+    right: -44,
+  },
+  heroBlobSmall: {
+    width: 104,
+    height: 104,
+    top: 76,
+    left: -40,
+    backgroundColor: 'rgba(47, 143, 70, 0.13)',
+  },
+  heroBlobTiny: {
+    width: 54,
+    height: 54,
+    top: 120,
+    right: 18,
+    backgroundColor: 'rgba(255, 246, 217, 0.26)',
+  },
+  heroCloud: {
+    position: 'absolute',
+    width: 64,
+    height: 24,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255, 255, 255, 0.42)',
+  },
+  heroCloudLeft: {
+    top: 89,
+    left: 23,
+  },
+  heroCloudRight: {
+    top: 54,
+    right: 48,
+    width: 80,
+  },
+  heroCloudLower: {
+    top: 143,
+    left: '42%',
+    width: 72,
+    height: 22,
+    backgroundColor: 'rgba(255, 255, 255, 0.28)',
+  },
+  heroHill: {
+    position: 'absolute',
+    left: -30,
+    right: -30,
+    borderTopLeftRadius: 999,
+    borderTopRightRadius: 999,
+  },
+  heroHillBack: {
+    height: 84,
+    bottom: -20,
+    backgroundColor: 'rgba(47, 143, 70, 0.15)',
+  },
+  heroHillMid: {
+    height: 68,
+    bottom: -18,
+    left: -72,
+    right: 64,
+    backgroundColor: 'rgba(35, 107, 53, 0.12)',
+  },
+  heroHillFront: {
+    height: 62,
+    bottom: -30,
+    left: 58,
+    backgroundColor: 'rgba(47, 143, 70, 0.24)',
+  },
+  heroLeaf: {
+    position: 'absolute',
+    width: 10,
+    height: 5,
+    borderRadius: 999,
+    backgroundColor: 'rgba(35, 107, 53, 0.34)',
+  },
+  heroLeafOne: {
+    top: 93,
+    right: 95,
+    transform: [{ rotate: '-24deg' }],
+  },
+  heroLeafTwo: {
+    top: 130,
+    right: 126,
+    width: 8,
+    backgroundColor: 'rgba(47, 143, 70, 0.28)',
+    transform: [{ rotate: '28deg' }],
+  },
+  heroLeafThree: {
+    top: 154,
+    left: 78,
+    width: 9,
+    backgroundColor: 'rgba(35, 107, 53, 0.24)',
+    transform: [{ rotate: '-18deg' }],
+  },
+  heroDot: {
+    position: 'absolute',
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: 'rgba(47, 143, 70, 0.28)',
+  },
+  heroDotOne: {
+    top: 68,
+    left: '42%',
+  },
+  heroDotTwo: {
+    top: 118,
+    right: 38,
+    width: 5,
+    height: 5,
+  },
+  heroDotThree: {
+    top: 150,
+    left: 48,
+    width: 4,
+    height: 4,
+  },
+  heroDotFour: {
+    top: 104,
+    right: 118,
+    width: 4,
+    height: 4,
+    backgroundColor: 'rgba(244, 197, 66, 0.42)',
+  },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1924,13 +2024,22 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: theme.colors.surface,
+    backgroundColor: '#FFFFFF',
     justifyContent: 'center',
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: theme.colors.border,
-    borderTopColor: '#FDF7E978',
-    ...theme.shadowSoft,
+    borderBottomWidth: 1.5,
+    borderColor: 'rgba(36, 105, 57, 0.12)',
+    borderTopColor: '#FFFFFF',
+    borderBottomColor: 'rgba(30, 111, 54, 0.18)',
+    shadowColor: '#10391D',
+    shadowOffset: {
+      width: 0,
+      height: 4,
+    },
+    shadowOpacity: 0.12,
+    shadowRadius: 7,
+    elevation: 4,
   },
   headerTitle: {
     color: theme.colors.text,
@@ -1965,44 +2074,62 @@ const styles = StyleSheet.create({
   },
   stepperTrackWrap: {
     position: 'absolute',
-    top: 15,
+    top: 16,
     left: '16.67%',
     right: '16.67%',
-    height: 2,
+    height: 4,
     zIndex: 0,
   },
   stepperTrack: {
     position: 'absolute',
     left: 0,
     right: 0,
-    height: 2,
-    borderRadius: 2,
+    height: 4,
+    borderRadius: 4,
     backgroundColor: theme.colors.divider,
   },
   stepperTrackActive: {
-    height: 2,
-    borderRadius: 2,
+    height: 4,
+    borderRadius: 4,
     backgroundColor: theme.colors.primary,
   },
   stepCircle: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: theme.colors.surface,
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: '#FFFFFF',
     borderWidth: 1,
-    borderColor: theme.colors.border,
+    borderBottomWidth: 2,
+    borderColor: 'rgba(36, 105, 57, 0.15)',
+    borderTopColor: '#FFFFFF',
+    borderBottomColor: 'rgba(30, 111, 54, 0.18)',
     justifyContent: 'center',
     alignItems: 'center',
     zIndex: 3,
-    ...theme.shadowSoft,
+    shadowColor: '#10391D',
+    shadowOffset: {
+      width: 0,
+      height: 3,
+    },
+    shadowOpacity: 0.1,
+    shadowRadius: 6,
+    elevation: 3,
   },
   stepCircleActive: {
     backgroundColor: theme.colors.primary,
-    borderColor: theme.colors.primary,
+    borderColor: '#4DBA62',
+    borderTopColor: '#7CE38D',
+    borderBottomColor: '#1E6C34',
+    shadowColor: theme.colors.primaryDark,
+    shadowOpacity: 0.15,
+    shadowRadius: 7,
+    elevation: 4,
   },
   stepCircleComplete: {
     backgroundColor: theme.colors.primaryDark,
-    borderColor: theme.colors.primaryDark,
+    borderColor: '#2F8F46',
+    borderTopColor: '#62C875',
+    borderBottomColor: '#1F5F2F',
   },
   stepNumber: {
     color: theme.colors.muted,
@@ -2020,6 +2147,122 @@ const styles = StyleSheet.create({
   },
   stepLabelActive: {
     color: theme.colors.primaryDark,
+  },
+  heroGuideRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 2,
+  },
+  heroMiloStage: {
+    width: 104,
+    height: 96,
+    borderRadius: 28,
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    backgroundColor: 'rgba(255, 255, 255, 0.34)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.5)',
+    borderBottomColor: 'rgba(35, 107, 53, 0.12)',
+    overflow: 'hidden',
+    shadowColor: theme.colors.shadow,
+    shadowOffset: {
+      width: 0,
+      height: 8,
+    },
+    shadowOpacity: 0.1,
+    shadowRadius: 16,
+    elevation: 4,
+  },
+  heroMiloGround: {
+    position: 'absolute',
+    bottom: 7,
+    width: 72,
+    height: 16,
+    borderRadius: 999,
+    backgroundColor: 'rgba(35, 107, 53, 0.18)',
+  },
+  heroMiloImage: {
+    marginBottom: -5,
+  },
+  heroSpeechBubble: {
+    flex: 1,
+    minHeight: 62,
+    backgroundColor: theme.colors.card,
+    borderRadius: 22,
+    paddingHorizontal: 15,
+    paddingVertical: 12,
+    marginLeft: 12,
+    borderWidth: 1,
+    borderColor: theme.colors.inputBorder,
+    borderTopColor: '#FDF7E978',
+    borderBottomColor: 'rgba(35, 107, 53, 0.12)',
+    justifyContent: 'center',
+    shadowColor: theme.colors.shadow,
+    shadowOffset: {
+      width: 0,
+      height: 10,
+    },
+    shadowOpacity: 0.14,
+    shadowRadius: 18,
+    elevation: 6,
+  },
+  heroSpeechBubbleWarning: {
+    backgroundColor: theme.colors.warningSoft,
+  },
+  heroSpeechBubbleDanger: {
+    backgroundColor: theme.colors.dangerSoft,
+  },
+  heroSpeechTail: {
+    position: 'absolute',
+    left: -7,
+    top: 25,
+    width: 14,
+    height: 14,
+    backgroundColor: theme.colors.card,
+    borderLeftWidth: 1,
+    borderBottomWidth: 1,
+    borderColor: theme.colors.inputBorder,
+    transform: [{ rotate: '45deg' }],
+  },
+  heroSpeechTailWarning: {
+    backgroundColor: theme.colors.warningSoft,
+  },
+  heroSpeechTailDanger: {
+    backgroundColor: theme.colors.dangerSoft,
+  },
+  heroSpeechText: {
+    color: theme.colors.text,
+    fontSize: 14,
+    fontWeight: '900',
+    lineHeight: 19,
+  },
+  heroSpeechTextWarning: {
+    color: '#92400E',
+  },
+  heroExtraContent: {
+    paddingLeft: 108,
+    marginTop: 8,
+  },
+  createSheet: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 26,
+    paddingHorizontal: 15,
+    paddingTop: 16,
+    paddingBottom: 16,
+    borderWidth: 1,
+    borderBottomWidth: 1,
+    borderColor: 'rgba(36, 105, 57, 0.13)',
+    borderTopColor: '#FFFFFF',
+    borderBottomColor: 'rgba(30, 111, 54, 0.16)',
+    shadowColor: '#10391D',
+    shadowOffset: {
+      width: 0,
+      height: 6,
+    },
+    shadowOpacity: 0.05,
+    shadowRadius: 10,
+    elevation: 3,
+    overflow: 'visible',
   },
   miloPrompt: {
     flexDirection: 'row',
@@ -2078,24 +2321,34 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   detailCard: {
-    backgroundColor: theme.colors.surface,
-    borderRadius: 18,
-    paddingHorizontal: 13,
-    paddingTop: 11,
-    paddingBottom: 10,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    paddingHorizontal: 14,
+    paddingTop: 12,
+    paddingBottom: 12,
     borderWidth: 1,
-    borderColor: theme.colors.border,
-    borderTopColor: '#FDF7E978',
-    borderBottomColor: 'rgba(46, 125, 75, 0.08)',
-    marginBottom: 9,
-    ...theme.shadowSoft,
-    shadowOpacity: 0.11,
-    shadowRadius: 15,
-    elevation: 5,
+    borderRightWidth: 1,
+    borderBottomWidth: 1.2,
+    borderColor: 'rgba(36, 105, 57, 0.10)',
+    borderTopColor: '#FFFFFF',
+    borderBottomColor: 'rgba(30, 111, 54, 0.11)',
+    marginBottom: 0,
+    shadowColor: '#174726',
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.035,
+    shadowRadius: 5,
+    elevation: 1,
+    overflow: 'visible',
   },
   detailCardInvalid: {
-    backgroundColor: theme.colors.dangerSoft,
-    borderColor: theme.colors.inputBorder,
+    backgroundColor: '#FFF4F4',
+    borderColor: '#F4B4B4',
+    borderTopColor: '#FFFFFF',
+    borderBottomColor: 'rgba(220, 38, 38, 0.28)',
+    shadowColor: '#7F1D1D',
   },
   detailCardHeader: {
     flexDirection: 'row',
@@ -2103,16 +2356,26 @@ const styles = StyleSheet.create({
     marginBottom: 6,
   },
   detailIcon: {
-    width: 28,
-    height: 28,
-    borderRadius: 11,
+    width: 30,
+    height: 30,
+    borderRadius: 12,
     backgroundColor: theme.colors.primarySoft,
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 8,
     borderWidth: 1,
+    borderBottomWidth: 1.2,
     borderColor: theme.colors.inputBorder,
-    borderTopColor: '#FDF7E978',
+    borderTopColor: '#FFFFFF',
+    borderBottomColor: 'rgba(30, 111, 54, 0.12)',
+    shadowColor: '#174726',
+    shadowOffset: {
+      width: 0,
+      height: 1,
+    },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    elevation: 1,
   },
   fieldLabel: {
     color: theme.colors.text,
@@ -2133,6 +2396,25 @@ const styles = StyleSheet.create({
   inputInvalid: {
     borderTopColor: '#F8CACA',
   },
+  fieldErrorRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 8,
+    paddingHorizontal: 9,
+    paddingVertical: 7,
+    borderRadius: 13,
+    backgroundColor: 'rgba(220, 38, 38, 0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(220, 38, 38, 0.16)',
+  },
+  fieldErrorText: {
+    flex: 1,
+    color: theme.colors.danger,
+    fontSize: 11.5,
+    fontWeight: '800',
+    lineHeight: 16,
+    marginLeft: 6,
+  },
   multilineInput: {
     minHeight: 58,
     paddingTop: 9,
@@ -2144,24 +2426,38 @@ const styles = StyleSheet.create({
   },
   segment: {
     flex: 1,
-    minHeight: 40,
-    borderRadius: 14,
-    backgroundColor: theme.colors.input,
+    minHeight: 42,
+    borderRadius: 15,
+    backgroundColor: '#FFFFFF',
     borderWidth: 1,
-    borderColor: theme.colors.border,
-    borderTopColor: '#FDF7E978',
+    borderBottomWidth: 1.5,
+    borderColor: 'rgba(36, 105, 57, 0.12)',
+    borderTopColor: '#FFFFFF',
+    borderBottomColor: 'rgba(30, 111, 54, 0.12)',
     justifyContent: 'center',
     alignItems: 'center',
     flexDirection: 'row',
     marginHorizontal: 4,
     paddingHorizontal: 7,
-    shadowColor: theme.colors.shadow,
+    shadowColor: '#174726',
     shadowOffset: {
       width: 0,
-      height: 4,
+      height: 2,
     },
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
+    shadowOpacity: 0.045,
+    shadowRadius: 5,
+    elevation: 2,
+  },
+  segmentSelected: {
+    borderTopColor: '#FFFFFF',
+    borderBottomColor: 'rgba(30, 111, 54, 0.16)',
+    shadowColor: '#174726',
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.055,
+    shadowRadius: 5,
     elevation: 2,
   },
   segmentText: {
@@ -2178,23 +2474,79 @@ const styles = StyleSheet.create({
   singleFooter: {
     marginTop: 4,
   },
-  primaryButton: {
-    minHeight: 48,
-    borderRadius: 18,
+  primaryButtonDepth: {
+    borderRadius: 21,
+    backgroundColor: '#167A38',
+    paddingRight: 0,
+    paddingBottom: 2,
+    shadowColor: '#0B3D1E',
+    shadowOffset: {
+      width: 0,
+      height: 4,
+    },
+    shadowOpacity: 0.1,
+    shadowRadius: 7,
+    elevation: 4,
+  },
+  primaryButtonFace: {
+    minHeight: 52,
+    borderRadius: 19,
     backgroundColor: theme.colors.primary,
     flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'center',
     paddingHorizontal: 16,
     borderWidth: 1,
-    borderColor: '#4DBA62',
-    borderTopColor: '#7CE38D',
-    borderBottomColor: '#1E6C34',
-    ...theme.shadowSoft,
-    shadowColor: theme.colors.primaryDark,
-    shadowOpacity: 0.16,
-    shadowRadius: 16,
-    elevation: 5,
+    borderColor: '#46AE5A',
+    borderTopColor: '#7BE58B',
+  },
+  secondaryButtonDepth: {
+    borderRadius: 21,
+    backgroundColor: 'rgba(190, 216, 194, 0.32)',
+    paddingRight: 0,
+    paddingBottom: 1,
+    shadowColor: '#174726',
+    shadowOffset: {
+      width: 0,
+      height: 3,
+    },
+    shadowOpacity: 0.055,
+    shadowRadius: 5,
+    elevation: 2,
+  },
+  secondaryButtonFace: {
+    minHeight: 48,
+    borderRadius: 19,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: 'rgba(36, 105, 57, 0.12)',
+    borderTopColor: '#FFFFFF',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+  },
+  primaryButton: {
+    minHeight: 52,
+    borderRadius: 19,
+    backgroundColor: theme.colors.primary,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    borderWidth: 1,
+    borderBottomWidth: 1.8,
+    borderColor: '#46AE5A',
+    borderTopColor: '#7BE58B',
+    borderBottomColor: '#17813A',
+    shadowColor: '#0F4F25',
+    shadowOffset: {
+      width: 0,
+      height: 4,
+    },
+    shadowOpacity: 0.11,
+    shadowRadius: 7,
+    elevation: 4,
+    overflow: 'visible',
   },
   primaryButtonText: {
     color: '#FFFFFF',
@@ -2221,21 +2573,23 @@ const styles = StyleSheet.create({
   secondaryButton: {
     minHeight: 48,
     borderRadius: 20,
-    backgroundColor: theme.colors.surface,
+    backgroundColor: '#FFFFFF',
     borderWidth: 1,
-    borderColor: theme.colors.border,
-    borderTopColor: '#FDF7E978',
+    borderBottomWidth: 1.5,
+    borderColor: 'rgba(36, 105, 57, 0.12)',
+    borderTopColor: '#FFFFFF',
+    borderBottomColor: 'rgba(30, 111, 54, 0.14)',
     justifyContent: 'center',
     alignItems: 'center',
     paddingHorizontal: 16,
-    shadowColor: theme.colors.shadow,
+    shadowColor: '#174726',
     shadowOffset: {
       width: 0,
-      height: 7,
+      height: 3,
     },
-    shadowOpacity: 0.12,
-    shadowRadius: 14,
-    elevation: 4,
+    shadowOpacity: 0.08,
+    shadowRadius: 7,
+    elevation: 3,
   },
   secondaryButtonText: {
     color: theme.colors.text,
@@ -2316,9 +2670,9 @@ const styles = StyleSheet.create({
       width: 0,
       height: 4,
     },
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
-    elevation: 2,
+    shadowOpacity: 0.12,
+    shadowRadius: 10,
+    elevation: 3,
   },
   conflictButtonText: {
     color: '#92400E',
@@ -2326,25 +2680,81 @@ const styles = StyleSheet.create({
     fontWeight: '900',
   },
   scheduleCard: {
-    backgroundColor: theme.colors.card,
-    borderRadius: 24,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 25,
     paddingHorizontal: 14,
     paddingVertical: 6,
     borderWidth: 1,
+    borderBottomWidth: 1.5,
+    borderColor: 'rgba(36, 105, 57, 0.11)',
+    borderTopColor: '#FFFFFF',
+    borderBottomColor: 'rgba(30, 111, 54, 0.13)',
+    shadowColor: '#174726',
+    shadowOffset: {
+      width: 0,
+      height: 3,
+    },
+    shadowOpacity: 0.045,
+    shadowRadius: 7,
+    elevation: 2,
+    overflow: 'visible',
+  },
+  miloTipCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: theme.colors.primarySoft,
+    borderRadius: 24,
+    padding: 13,
+    marginTop: 12,
+    borderWidth: 1,
+    borderColor: theme.colors.inputBorder,
+    borderTopColor: '#FDF7E978',
+    borderBottomColor: 'rgba(35, 107, 53, 0.12)',
+    shadowColor: theme.colors.shadow,
+    shadowOffset: {
+      width: 0,
+      height: 11,
+    },
+    shadowOpacity: 0.15,
+    shadowRadius: 18,
+    elevation: 6,
+  },
+  miloTipMiloBadge: {
+    width: 48,
+    height: 48,
+    borderRadius: 18,
+    backgroundColor: theme.colors.card,
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+    borderWidth: 1,
     borderColor: theme.colors.border,
     borderTopColor: '#FDF7E978',
-    borderBottomColor: 'rgba(46, 125, 75, 0.08)',
     ...theme.shadowSoft,
-    shadowOpacity: 0.12,
-    shadowRadius: 16,
-    elevation: 5,
+  },
+  miloTipCopy: {
+    flex: 1,
+    minWidth: 0,
+    marginLeft: 11,
+  },
+  miloTipTitle: {
+    color: theme.colors.primaryDark,
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  miloTipText: {
+    color: theme.colors.textSoft,
+    fontSize: 12,
+    fontWeight: '800',
+    lineHeight: 17,
+    marginTop: 3,
   },
   scheduleRow: {
     minHeight: 50,
     flexDirection: 'row',
     alignItems: 'center',
     borderBottomWidth: 1,
-    borderBottomColor: theme.colors.border,
+    borderBottomColor: theme.colors.divider,
   },
   scheduleInputRow: {
     minHeight: 50,
@@ -2365,8 +2775,18 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginRight: 9,
     borderWidth: 1,
+    borderBottomWidth: 1.5,
     borderColor: theme.colors.inputBorder,
-    borderTopColor: '#FDF7E978',
+    borderTopColor: '#FFFFFF',
+    borderBottomColor: 'rgba(30, 111, 54, 0.18)',
+    shadowColor: '#10391D',
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.06,
+    shadowRadius: 5,
+    elevation: 2,
   },
   scheduleLabel: {
     color: theme.colors.text,
@@ -2415,9 +2835,27 @@ const styles = StyleSheet.create({
     borderTopColor: '#FDF7E978',
     ...theme.shadow,
   },
-  confirmMiloRow: {
+  confirmMessageRow: {
     flexDirection: 'row',
     alignItems: 'center',
+  },
+  confirmIconBox: {
+    width: 48,
+    height: 48,
+    borderRadius: 18,
+    backgroundColor: theme.colors.warningSoft,
+    borderWidth: 1,
+    borderColor: '#FCD34D',
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: theme.colors.shadow,
+    shadowOffset: {
+      width: 0,
+      height: 6,
+    },
+    shadowOpacity: 0.12,
+    shadowRadius: 12,
+    elevation: 4,
   },
   confirmBubble: {
     flex: 1,
@@ -2921,23 +3359,25 @@ const styles = StyleSheet.create({
     lineHeight: 19,
   },
   summaryCard: {
-    backgroundColor: theme.colors.card,
-    borderRadius: 20,
-    paddingHorizontal: 15,
-    paddingTop: 14,
-    paddingBottom: 7,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 24,
+    paddingHorizontal: 16,
+    paddingTop: 15,
+    paddingBottom: 8,
     borderWidth: 1,
-    borderColor: theme.colors.border,
-    borderTopColor: '#FDF7E978',
-    borderBottomColor: 'rgba(46, 125, 75, 0.08)',
-    shadowColor: theme.colors.shadow,
+    borderBottomWidth: 1,
+    borderColor: 'rgba(36, 105, 57, 0.12)',
+    borderTopColor: '#FFFFFF',
+    borderBottomColor: 'rgba(30, 111, 54, 0.12)',
+    shadowColor: '#10391D',
     shadowOffset: {
       width: 0,
-      height: 11,
+      height: 8,
     },
-    shadowOpacity: 0.12,
-    shadowRadius: 16,
-    elevation: 5,
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
+    elevation: 3,
+    overflow: 'visible',
   },
   summaryHeader: {
     flexDirection: 'row',
@@ -2971,22 +3411,24 @@ const styles = StyleSheet.create({
     fontWeight: '900',
   },
   summaryEditButton: {
-    minHeight: 27,
+    minHeight: 30,
     borderRadius: 999,
     backgroundColor: theme.colors.primarySoft,
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 10,
     borderWidth: 1,
+    borderBottomWidth: 1.5,
     borderColor: theme.colors.inputBorder,
-    borderTopColor: '#FDF7E978',
-    shadowColor: theme.colors.shadow,
+    borderTopColor: '#FFFFFF',
+    borderBottomColor: 'rgba(30, 111, 54, 0.18)',
+    shadowColor: '#10391D',
     shadowOffset: {
       width: 0,
-      height: 4,
+      height: 2,
     },
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
+    shadowOpacity: 0.06,
+    shadowRadius: 5,
     elevation: 2,
   },
   summaryEditText: {
@@ -2999,7 +3441,7 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.card,
   },
   reviewSummaryRow: {
-    minHeight: 43,
+    minHeight: 45,
     flexDirection: 'row',
     alignItems: 'center',
     borderBottomWidth: 1,
@@ -3009,16 +3451,26 @@ const styles = StyleSheet.create({
     borderBottomWidth: 0,
   },
   reviewRowIcon: {
-    width: 24,
-    height: 24,
-    borderRadius: 9,
+    width: 26,
+    height: 26,
+    borderRadius: 10,
     backgroundColor: theme.colors.primarySoft,
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 10,
     borderWidth: 1,
+    borderBottomWidth: 1.5,
     borderColor: theme.colors.inputBorder,
-    borderTopColor: '#FDF7E978',
+    borderTopColor: '#FFFFFF',
+    borderBottomColor: 'rgba(30, 111, 54, 0.16)',
+    shadowColor: '#10391D',
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.06,
+    shadowRadius: 5,
+    elevation: 2,
   },
   reviewSummaryLabel: {
     color: theme.colors.mutedText,
@@ -3036,13 +3488,23 @@ const styles = StyleSheet.create({
   },
   reviewSummaryValueBadge: {
     maxWidth: 116,
-    minHeight: 25,
+    minHeight: 27,
     borderRadius: 999,
     borderWidth: 1,
+    borderBottomWidth: 1.4,
     paddingHorizontal: 11,
     justifyContent: 'center',
     alignItems: 'center',
     marginLeft: 'auto',
+    borderTopColor: '#FFFFFF',
+    shadowColor: '#10391D',
+    shadowOffset: {
+      width: 0,
+      height: 3,
+    },
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
+    elevation: 3,
   },
   reviewSummaryBadgeText: {
     fontSize: 11,
@@ -3094,32 +3556,42 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: theme.colors.card,
-    borderRadius: 20,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 22,
     paddingHorizontal: 14,
-    paddingVertical: 13,
-    marginTop: 11,
+    paddingVertical: 14,
+    marginTop: 0,
     borderWidth: 1,
-    borderColor: theme.colors.border,
-    borderTopColor: '#FDF7E978',
-    borderBottomColor: 'rgba(46, 125, 75, 0.08)',
-    shadowColor: theme.colors.shadow,
+    borderBottomWidth: 1.5,
+    borderColor: 'rgba(36, 105, 57, 0.12)',
+    borderTopColor: '#FFFFFF',
+    borderBottomColor: 'rgba(30, 111, 54, 0.14)',
+    shadowColor: '#10391D',
     shadowOffset: {
       width: 0,
-      height: 10,
+      height: 4,
     },
-    shadowOpacity: 0.15,
-    shadowRadius: 15,
-    elevation: 5,
+    shadowOpacity: 0.07,
+    shadowRadius: 8,
+    elevation: 3,
+    overflow: 'visible',
   },
   urgencyIcon: {
-    width: 34,
-    height: 34,
-    borderRadius: 13,
+    width: 36,
+    height: 36,
+    borderRadius: 14,
     borderWidth: 1,
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 10,
+    shadowColor: theme.colors.shadow,
+    shadowOffset: {
+      width: 0,
+      height: 4,
+    },
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    elevation: 2,
   },
   urgencyLabel: {
     color: theme.colors.text,
@@ -3141,6 +3613,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 7,
     borderWidth: 1,
+    shadowColor: theme.colors.shadow,
+    shadowOffset: {
+      width: 0,
+      height: 5,
+    },
+    shadowOpacity: 0.1,
+    shadowRadius: 9,
+    elevation: 3,
   },
   urgencyBadgeText: {
     fontSize: 12,
