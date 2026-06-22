@@ -21,6 +21,7 @@ import {
 } from '../types/task';
 import { theme } from '../theme';
 import { useFocusMateTheme } from '../theme/FocusMateThemeProvider';
+import { secondaryHeader } from '../constants/header';
 import { useTasks } from '../lib/TaskContext';
 import { schedulePlannerReminder } from '../lib/notificationUtils';
 import {
@@ -187,12 +188,18 @@ function Header({ onBack }: { onBack: () => void }) {
         accessibilityRole="button"
         accessibilityLabel="Go back"
       >
-        <Ionicons name="arrow-back" size={26} color={theme.colors.text} />
+        <Ionicons
+          name="arrow-back"
+          size={secondaryHeader.iconSize}
+          color={theme.colors.text}
+        />
       </TouchableOpacity>
 
       <Text numberOfLines={1} style={styles.headerTitle}>
-        Edit Planner Item
+        FocusMate
       </Text>
+
+      <View style={styles.headerSpacer} />
     </View>
   );
 }
@@ -619,7 +626,7 @@ export default function EditTaskScreen({ navigation, route }: Props) {
 
   return (
     <ScreenContainer
-      topPadding={14}
+      topPadding={8}
       bottomPadding={34}
       contentStyle={styles.screenContent}
     >
@@ -917,15 +924,16 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
   },
   headerRow: {
-    minHeight: 56,
+    minHeight: secondaryHeader.minHeight,
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 20,
+    justifyContent: 'space-between',
+    marginBottom: secondaryHeader.marginBottom,
   },
   backButton: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
+    width: secondaryHeader.buttonSize,
+    height: secondaryHeader.buttonSize,
+    borderRadius: secondaryHeader.buttonRadius,
     backgroundColor: theme.colors.card,
     borderWidth: 1.2,
     borderBottomWidth: 1.8,
@@ -946,9 +954,15 @@ const styles = StyleSheet.create({
   headerTitle: {
     flex: 1,
     color: theme.colors.text,
-    fontSize: 21,
-    fontWeight: '900',
-    marginLeft: 14,
+    fontSize: secondaryHeader.titleFontSize,
+    lineHeight: secondaryHeader.titleLineHeight,
+    fontWeight: secondaryHeader.titleFontWeight,
+    textAlign: 'center',
+    marginHorizontal: secondaryHeader.sideGap,
+  },
+  headerSpacer: {
+    width: secondaryHeader.buttonSize,
+    height: secondaryHeader.buttonSize,
   },
   intro: {
     marginBottom: 16,

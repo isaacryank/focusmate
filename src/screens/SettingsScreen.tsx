@@ -23,6 +23,7 @@ import ScreenContainer from '../components/ui/ScreenContainer';
 import AppButton from '../components/ui/AppButton';
 import { theme } from '../theme';
 import { useFocusMateTheme } from '../theme/FocusMateThemeProvider';
+import { mainHeader } from '../constants/header';
 import { useAuth } from '../lib/AuthContext';
 import { useFocus } from '../lib/FocusContext';
 import { useTasks } from '../lib/TaskContext';
@@ -1143,12 +1144,18 @@ export default function SettingsScreen() {
 
   return (
     <ScreenContainer
-      topPadding={18}
+      topPadding={mainHeader.topPadding}
       bottomPadding={150}
       style={styles.screen}
       contentStyle={styles.screenContent}
     >
-      <Text style={styles.screenTitle}>Settings</Text>
+      <View style={styles.header}>
+        <View style={styles.headerTextBlock}>
+          <Text numberOfLines={1} style={styles.screenTitle}>
+            Settings
+          </Text>
+        </View>
+      </View>
 
       <TouchableOpacity
         activeOpacity={0.86}
@@ -2041,13 +2048,23 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.backgroundSoft,
   },
   screenContent: {
-    paddingHorizontal: 14,
+    paddingHorizontal: mainHeader.screenPaddingHorizontal,
+  },
+  header: {
+    minHeight: mainHeader.minHeight,
+    marginBottom: mainHeader.marginBottom,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  headerTextBlock: {
+    flex: 1,
+    minWidth: 0,
   },
   screenTitle: {
     color: theme.colors.text,
-    fontSize: 26,
-    fontWeight: '900',
-    marginBottom: 8,
+    fontSize: mainHeader.titleFontSize,
+    lineHeight: mainHeader.titleLineHeight,
+    fontWeight: mainHeader.titleFontWeight,
   },
   profileCard: {
     minHeight: 72,

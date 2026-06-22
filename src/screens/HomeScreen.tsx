@@ -38,6 +38,11 @@ import { useTasks } from '../lib/TaskContext';
 import { Task } from '../types/task';
 import { theme } from '../theme';
 import { useFocusMateTheme } from '../theme/FocusMateThemeProvider';
+import {
+  headerActionButton,
+  headerBadge,
+  mainHeader,
+} from '../constants/header';
 
 import EmptyState from '../components/ui/EmptyState';
 import ScreenContainer from '../components/ui/ScreenContainer';
@@ -662,7 +667,7 @@ export default function HomeScreen() {
   }, []);
 
   return (
-    <ScreenContainer topPadding={12} bottomPadding={132}>
+    <ScreenContainer topPadding={mainHeader.topPadding} bottomPadding={132}>
       <View style={styles.header}>
         <View style={styles.headerTopRow}>
           <View style={styles.headerTextBlock}>
@@ -671,10 +676,7 @@ export default function HomeScreen() {
             </Text>
 
             <Text
-              style={[
-                styles.headerTitle,
-                { fontSize: compactWidth ? 33 : 36, lineHeight: compactWidth ? 36 : 39 },
-              ]}
+              style={styles.headerTitle}
             >
               FocusMate
             </Text>
@@ -688,7 +690,11 @@ export default function HomeScreen() {
               accessibilityRole="button"
               accessibilityLabel="Open reminders"
             >
-              <Ionicons name="notifications-outline" size={24} color={theme.colors.text} />
+              <Ionicons
+                name="notifications-outline"
+                size={headerActionButton.iconSize}
+                color={theme.colors.text}
+              />
               {homeInsights.reminderCount > 0 ? (
                 <View style={styles.badge}>
                   <Text style={styles.badgeText}>
@@ -705,7 +711,11 @@ export default function HomeScreen() {
               accessibilityRole="button"
               accessibilityLabel="Search planner items"
             >
-              <Ionicons name="search" size={21} color={theme.colors.text} />
+              <Ionicons
+                name="search"
+                size={headerActionButton.iconSize}
+                color={theme.colors.text}
+              />
             </TouchableOpacity>
           </View>
         </View>
@@ -925,24 +935,24 @@ export default function HomeScreen() {
 
 const styles = StyleSheet.create({
   header: {
-    marginBottom: 16,
+    marginBottom: mainHeader.marginBottom,
   },
   headerTopRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    minHeight: 62,
+    minHeight: mainHeader.minHeight,
   },
   headerTextBlock: {
     flex: 1,
     minWidth: 0,
-    paddingRight: 12,
+    paddingRight: mainHeader.textToActionsGap,
   },
   greeting: {
     color: theme.colors.text,
-    fontSize: 15,
-    lineHeight: 19,
-    fontWeight: '800',
+    fontSize: mainHeader.subtitleFontSize,
+    lineHeight: mainHeader.subtitleLineHeight,
+    fontWeight: mainHeader.greetingFontWeight,
   },
   greetingName: {
     color: theme.colors.primaryDark,
@@ -950,42 +960,46 @@ const styles = StyleSheet.create({
   headerTitle: {
     marginTop: 1,
     color: theme.colors.text,
-    fontWeight: '900',
+    fontSize: mainHeader.titleFontSize,
+    lineHeight: mainHeader.titleLineHeight,
+    fontWeight: mainHeader.titleFontWeight,
   },
   headerActions: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginLeft: 12,
+    marginLeft: mainHeader.textToActionsGap,
+    columnGap: mainHeader.actionGap,
   },
   iconButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
+    width: headerActionButton.size,
+    height: headerActionButton.size,
+    borderRadius: headerActionButton.radius,
     backgroundColor: theme.colors.surface,
-    borderWidth: 1,
+    borderWidth: headerActionButton.borderWidth,
+    borderBottomWidth: headerActionButton.bottomBorderWidth,
     borderColor: theme.colors.border,
     borderTopColor: '#FDF7E978',
+    borderBottomColor: 'rgba(46, 125, 75, 0.14)',
     alignItems: 'center',
     justifyContent: 'center',
-    marginLeft: 8,
     shadowColor: '#000',
     shadowOffset: {
       width: 0,
-      height: 10,
+      height: headerActionButton.shadowHeight,
     },
-    shadowOpacity: 0.11,
-    shadowRadius: 16,
-    elevation: 5,
+    shadowOpacity: headerActionButton.shadowOpacity,
+    shadowRadius: headerActionButton.shadowRadius,
+    elevation: headerActionButton.elevation,
   },
   lightSurfaceDepthSmall: {
     shadowColor: '#1F8A4C',
     shadowOffset: {
       width: 0,
-      height: 8,
+      height: headerActionButton.shadowHeight,
     },
-    shadowOpacity: 0.12,
-    shadowRadius: 14,
-    elevation: 4,
+    shadowOpacity: headerActionButton.shadowOpacity,
+    shadowRadius: headerActionButton.shadowRadius,
+    elevation: headerActionButton.elevation,
   },
   lightSurfaceDepthMedium: {
     shadowColor: '#1F8A4C',
@@ -1009,21 +1023,21 @@ const styles = StyleSheet.create({
   },
   badge: {
     position: 'absolute',
-    top: 2,
-    right: 2,
-    minWidth: 18,
-    height: 18,
-    borderRadius: 9,
-    paddingHorizontal: 4,
+    top: headerBadge.top,
+    right: headerBadge.right,
+    minWidth: headerBadge.minWidth,
+    height: headerBadge.height,
+    borderRadius: headerBadge.radius,
+    paddingHorizontal: headerBadge.paddingHorizontal,
     backgroundColor: theme.colors.danger,
-    borderWidth: 2,
+    borderWidth: headerBadge.borderWidth,
     borderColor: theme.colors.surface,
     alignItems: 'center',
     justifyContent: 'center',
   },
   badgeText: {
     color: theme.colors.white,
-    fontSize: 10,
+    fontSize: headerBadge.fontSize,
     fontWeight: '900',
   },
   heroCard: {

@@ -32,6 +32,11 @@ import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 
 import { theme } from '../theme';
 import { useFocusMateTheme } from '../theme/FocusMateThemeProvider';
+import {
+  headerActionButton,
+  headerBadge,
+  mainHeader,
+} from '../constants/header';
 import { useAuth } from '../lib/AuthContext';
 import { useTasks } from '../lib/TaskContext';
 import {
@@ -3000,7 +3005,7 @@ export default function CompanionScreen() {
 
   return (
     <ScreenContainer
-      topPadding={14}
+      topPadding={mainHeader.topPadding}
       bottomPadding={bottomContentPadding}
       style={styles.screen}
       contentStyle={styles.screenContent}
@@ -3048,7 +3053,7 @@ export default function CompanionScreen() {
           >
             <Ionicons
               name="notifications-outline"
-              size={21}
+              size={headerActionButton.iconSize}
               color={theme.colors.primaryDark}
             />
             <View style={styles.notificationBadge}>
@@ -3070,7 +3075,7 @@ export default function CompanionScreen() {
           >
             <Ionicons
               name="settings-outline"
-              size={21}
+              size={headerActionButton.iconSize}
               color={theme.colors.primaryDark}
             />
           </TouchableOpacity>
@@ -3767,83 +3772,96 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 18,
+    minHeight: mainHeader.minHeight,
+    marginBottom: mainHeader.marginBottom,
   },
   headerTextBlock: {
     flex: 1,
     minWidth: 0,
-    paddingRight: 12,
+    paddingRight: mainHeader.textToActionsGap,
   },
   headerTitle: {
     color: theme.colors.text,
-    fontSize: 40,
-    fontWeight: '900',
+    fontSize: mainHeader.titleFontSize,
+    lineHeight: mainHeader.titleLineHeight,
+    fontWeight: mainHeader.titleFontWeight,
     letterSpacing: 0,
   },
   headerTitleDark: {
     color: '#F4FFF7',
   },
   headerTitleCompact: {
-    fontSize: 34,
+    fontSize: mainHeader.titleFontSize,
+    lineHeight: mainHeader.titleLineHeight,
   },
   headerSubtitle: {
-    marginTop: 5,
+    marginTop: 2,
     color: theme.colors.mutedText,
-    fontSize: 15,
-    fontWeight: '700',
+    fontSize: mainHeader.subtitleFontSize,
+    fontWeight: mainHeader.subtitleFontWeight,
     flexShrink: 1,
-    lineHeight: 20,
+    lineHeight: mainHeader.subtitleLineHeight,
   },
   headerSubtitleDark: {
     color: '#B9D1C5',
   },
   headerSubtitleCompact: {
-    fontSize: 13,
-    lineHeight: 18,
+    fontSize: mainHeader.subtitleFontSize,
+    lineHeight: mainHeader.subtitleLineHeight,
   },
   headerActions: {
     flexDirection: 'row',
     alignItems: 'center',
     flexShrink: 0,
+    columnGap: mainHeader.actionGap,
   },
   headerIconButton: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
+    width: headerActionButton.size,
+    height: headerActionButton.size,
+    borderRadius: headerActionButton.radius,
     backgroundColor: theme.colors.card,
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 1,
+    borderWidth: headerActionButton.borderWidth,
+    borderBottomWidth: headerActionButton.bottomBorderWidth,
     borderColor: theme.colors.border,
-    marginLeft: 10,
-    ...theme.shadowSoft,
+    borderTopColor: '#FDF7E978',
+    borderBottomColor: 'rgba(46, 125, 75, 0.14)',
+    shadowColor: theme.colors.shadow,
+    shadowOffset: {
+      width: 0,
+      height: headerActionButton.shadowHeight,
+    },
+    shadowOpacity: headerActionButton.shadowOpacity,
+    shadowRadius: headerActionButton.shadowRadius,
+    elevation: headerActionButton.elevation,
   },
   headerIconButtonDark: {
     backgroundColor: '#182A26',
     borderColor: '#33574C',
   },
   headerIconButtonCompact: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    marginLeft: 8,
+    width: headerActionButton.size,
+    height: headerActionButton.size,
+    borderRadius: headerActionButton.radius,
   },
   notificationBadge: {
     position: 'absolute',
-    top: -2,
-    right: -2,
-    minWidth: 18,
-    height: 18,
-    borderRadius: 9,
+    top: headerBadge.top,
+    right: headerBadge.right,
+    minWidth: headerBadge.minWidth,
+    height: headerBadge.height,
+    borderRadius: headerBadge.radius,
     backgroundColor: '#EF4444',
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 2,
+    paddingHorizontal: headerBadge.paddingHorizontal,
+    borderWidth: headerBadge.borderWidth,
     borderColor: theme.colors.white,
   },
   notificationBadgeText: {
     color: theme.colors.white,
-    fontSize: 10,
+    fontSize: headerBadge.fontSize,
     fontWeight: '900',
   },
   roomCard: {

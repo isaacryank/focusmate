@@ -29,6 +29,11 @@ import { useTasks } from '../lib/TaskContext';
 import { theme } from '../theme';
 import { useFocusMateTheme } from '../theme/FocusMateThemeProvider';
 import { Task } from '../types/task';
+import {
+  headerActionButton,
+  headerBadge,
+  mainHeader,
+} from '../constants/header';
 
 import ScreenContainer from '../components/ui/ScreenContainer';
 
@@ -413,7 +418,11 @@ function HeaderButton({
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel}
     >
-      <Ionicons name={iconName} size={22} color={theme.colors.text} />
+      <Ionicons
+        name={iconName}
+        size={headerActionButton.iconSize}
+        color={theme.colors.text}
+      />
       {badgeCount && badgeCount > 0 ? (
         <View style={styles.badge}>
           <Text style={styles.badgeText}>{badgeCount > 9 ? '9+' : badgeCount}</Text>
@@ -857,7 +866,7 @@ export default function CalendarScreen() {
   }, [dateCardWidth, dateStrip, dateStripViewportWidth, selectedDate]);
 
   return (
-    <ScreenContainer topPadding={12} bottomPadding={176}>
+    <ScreenContainer topPadding={mainHeader.topPadding} bottomPadding={176}>
       <MonthCalendarModal
         visible={monthModalVisible}
         selectedDate={selectedDate}
@@ -869,7 +878,7 @@ export default function CalendarScreen() {
       />
 
       <View style={styles.header}>
-        <Text style={[styles.headerTitle, { fontSize: compactWidth ? 31 : 35 }]}>
+        <Text style={styles.headerTitle}>
           Calendar
         </Text>
 
@@ -1068,8 +1077,8 @@ export default function CalendarScreen() {
 
 const styles = StyleSheet.create({
   header: {
-    minHeight: 46,
-    marginBottom: 10,
+    minHeight: mainHeader.minHeight,
+    marginBottom: mainHeader.marginBottom,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -1077,51 +1086,54 @@ const styles = StyleSheet.create({
   headerTitle: {
     flex: 1,
     color: theme.colors.text,
-    fontWeight: '900',
-    lineHeight: 40,
+    fontSize: mainHeader.titleFontSize,
+    lineHeight: mainHeader.titleLineHeight,
+    fontWeight: mainHeader.titleFontWeight,
   },
   headerActions: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginLeft: 14,
+    marginLeft: mainHeader.textToActionsGap,
+    columnGap: mainHeader.actionGap,
   },
   iconButton: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
+    width: headerActionButton.size,
+    height: headerActionButton.size,
+    borderRadius: headerActionButton.radius,
     backgroundColor: theme.colors.surface,
-    borderWidth: 1,
+    borderWidth: headerActionButton.borderWidth,
+    borderBottomWidth: headerActionButton.bottomBorderWidth,
     borderColor: theme.colors.border,
     borderTopColor: '#FDF7E978',
+    borderBottomColor: 'rgba(46, 125, 75, 0.14)',
     alignItems: 'center',
     justifyContent: 'center',
-    marginLeft: 8,
     shadowColor: '#000',
     shadowOffset: {
       width: 0,
-      height: 10,
+      height: headerActionButton.shadowHeight,
     },
-    shadowOpacity: 0.11,
-    shadowRadius: 16,
-    elevation: 5,
+    shadowOpacity: headerActionButton.shadowOpacity,
+    shadowRadius: headerActionButton.shadowRadius,
+    elevation: headerActionButton.elevation,
   },
   badge: {
     position: 'absolute',
-    top: 1,
-    right: 1,
-    minWidth: 18,
-    height: 18,
-    borderRadius: 9,
-    paddingHorizontal: 4,
+    top: headerBadge.top,
+    right: headerBadge.right,
+    minWidth: headerBadge.minWidth,
+    height: headerBadge.height,
+    borderRadius: headerBadge.radius,
+    paddingHorizontal: headerBadge.paddingHorizontal,
     backgroundColor: theme.colors.danger,
-    borderWidth: 2,
+    borderWidth: headerBadge.borderWidth,
     borderColor: theme.colors.surface,
     alignItems: 'center',
     justifyContent: 'center',
   },
   badgeText: {
     color: theme.colors.white,
-    fontSize: 10,
+    fontSize: headerBadge.fontSize,
     fontWeight: '900',
   },
   heroCard: {

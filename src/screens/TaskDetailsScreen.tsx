@@ -15,6 +15,7 @@ import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { RootStackParamList } from '../types/navigation';
 import { theme } from '../theme';
 import { useFocusMateTheme } from '../theme/FocusMateThemeProvider';
+import { secondaryHeader } from '../constants/header';
 import { useTasks } from '../lib/TaskContext';
 import { openLocationInMaps } from '../lib/mapUtils';
 import {
@@ -266,7 +267,11 @@ function Header({
           accessibilityRole="button"
           accessibilityLabel="Go back"
         >
-          <Ionicons name="chevron-back" size={26} color={theme.colors.text} />
+          <Ionicons
+            name="chevron-back"
+            size={secondaryHeader.iconSize}
+            color={theme.colors.text}
+          />
         </TouchableOpacity>
 
         <View style={styles.headerCenter}>
@@ -282,7 +287,11 @@ function Header({
           accessibilityRole="button"
           accessibilityLabel="Open menu"
         >
-          <Ionicons name="ellipsis-horizontal" size={22} color={theme.colors.text} />
+          <Ionicons
+            name="ellipsis-horizontal"
+            size={secondaryHeader.iconSize}
+            color={theme.colors.text}
+          />
         </TouchableOpacity>
       </View>
     </View>
@@ -1607,14 +1616,14 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    minHeight: 56,
+    minHeight: secondaryHeader.minHeight,
     backgroundColor: 'transparent',
     overflow: 'visible',
   },
   headerButton: {
-    width: 50,
-    height: 50,
-    borderRadius: 18,
+    width: secondaryHeader.buttonSize,
+    height: secondaryHeader.buttonSize,
+    borderRadius: secondaryHeader.buttonRadius,
     backgroundColor: theme.colors.card,
     justifyContent: 'center',
     alignItems: 'center',
@@ -1635,13 +1644,14 @@ const styles = StyleSheet.create({
   headerCenter: {
     flex: 1,
     alignItems: 'center',
-    marginHorizontal: 12,
+    marginHorizontal: secondaryHeader.sideGap,
     minWidth: 0,
   },
   headerTitle: {
     color: theme.colors.text,
-    fontSize: 21,
-    fontWeight: '900',
+    fontSize: secondaryHeader.titleFontSize,
+    lineHeight: secondaryHeader.titleLineHeight,
+    fontWeight: secondaryHeader.titleFontWeight,
     textAlign: 'center',
     maxWidth: '100%',
   },

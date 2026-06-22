@@ -23,6 +23,7 @@ import {
 } from '../types/task';
 import { theme } from '../theme';
 import { useFocusMateTheme } from '../theme/FocusMateThemeProvider';
+import { secondaryHeader } from '../constants/header';
 import { useTasks } from '../lib/TaskContext';
 import { schedulePlannerReminder } from '../lib/notificationUtils';
 import { buildMiloSmartData } from '../lib/miloSmartPlan';
@@ -206,7 +207,11 @@ function Header({ onBack }: { onBack: () => void }) {
         accessibilityRole="button"
         accessibilityLabel="Go back"
       >
-        <Ionicons name="chevron-back" size={21} color={theme.colors.text} />
+        <Ionicons
+          name="chevron-back"
+          size={secondaryHeader.iconSize}
+          color={theme.colors.text}
+        />
       </TouchableOpacity>
 
       <Text style={styles.headerTitle}>FocusMate</Text>
@@ -2018,12 +2023,13 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    minHeight: secondaryHeader.minHeight,
     marginBottom: 8,
   },
   headerButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: secondaryHeader.buttonSize,
+    height: secondaryHeader.buttonSize,
+    borderRadius: secondaryHeader.buttonRadius,
     backgroundColor: '#FFFFFF',
     justifyContent: 'center',
     alignItems: 'center',
@@ -2043,8 +2049,10 @@ const styles = StyleSheet.create({
   },
   headerTitle: {
     color: theme.colors.text,
-    fontSize: 18,
-    fontWeight: '900',
+    fontSize: secondaryHeader.titleFontSize,
+    lineHeight: secondaryHeader.titleLineHeight,
+    fontWeight: secondaryHeader.titleFontWeight,
+    textAlign: 'center',
   },
   headerAvatar: {
     width: 36,
@@ -2056,8 +2064,8 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   headerSpacer: {
-    width: 36,
-    height: 36,
+    width: secondaryHeader.buttonSize,
+    height: secondaryHeader.buttonSize,
   },
   stepper: {
     flexDirection: 'row',
