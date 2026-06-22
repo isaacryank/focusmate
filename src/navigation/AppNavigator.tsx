@@ -11,6 +11,7 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 
 import { RootStackParamList, MainTabParamList } from '../types/navigation';
 import { theme } from '../theme';
@@ -42,6 +43,7 @@ const ONBOARDING_STORAGE_KEY = '@focusmate/onboarding_completed';
 
 const RootStack = createNativeStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator<MainTabParamList>();
+type MaterialIconName = React.ComponentProps<typeof MaterialCommunityIcons>['name'];
 
 function EmptyTabScreen() {
   return null;
@@ -49,7 +51,14 @@ function EmptyTabScreen() {
 
 function CenterAddButton() {
   const navigation = useNavigation<any>();
-  const { theme: appTheme } = useFocusMateTheme();
+  const { theme: appTheme, isDark } = useFocusMateTheme();
+  const centerButtonColors = isDark
+    ? (['#08B991', '#008069', '#005C4B'] as const)
+    : (['#48CE6F', '#2F9B4A', '#207638'] as const);
+  const centerButtonRimColor = isDark ? '#20362D' : '#DCEEDD';
+  const centerButtonShadowColor = isDark
+    ? 'rgba(0, 0, 0, 0.62)'
+    : 'rgba(46, 125, 75, 0.28)';
 
   const handlePress = () => {
     const parentNavigation = navigation.getParent?.();
@@ -66,11 +75,24 @@ function CenterAddButton() {
     <View style={styles.centerButtonSlot}>
       <TouchableOpacity
         activeOpacity={0.88}
-        style={styles.centerButton}
+        style={[
+          styles.centerButton,
+          {
+            borderColor: centerButtonRimColor,
+            shadowColor: centerButtonShadowColor,
+          },
+        ]}
         onPress={handlePress}
         accessibilityRole="button"
         accessibilityLabel="Create planner item"
       >
+        <LinearGradient
+          pointerEvents="none"
+          colors={centerButtonColors}
+          start={{ x: 0.25, y: 0 }}
+          end={{ x: 0.75, y: 1 }}
+          style={styles.centerButtonGradient}
+        />
         <MaterialCommunityIcons
           name="plus"
           size={32}
@@ -81,9 +103,43 @@ function CenterAddButton() {
   );
 }
 
+function TabBarIcon({
+  name,
+  color,
+  focused,
+  size = 24,
+}: {
+  name: MaterialIconName;
+  color: string;
+  focused: boolean;
+  size?: number;
+}) {
+  const { theme: appTheme, isDark } = useFocusMateTheme();
+
+  return (
+    <View
+      style={[
+        styles.tabIconWrap,
+        focused && {
+          backgroundColor: appTheme.colors.primarySoft,
+          borderColor: isDark ? '#2A584B' : '#CFE8D1',
+          shadowOpacity: isDark ? 0.2 : 0.12,
+          elevation: 2,
+        },
+      ]}
+    >
+      <MaterialCommunityIcons name={name} size={size} color={color} />
+    </View>
+  );
+}
+
 function MainTabs() {
   const insets = useSafeAreaInsets();
-  const { theme: appTheme } = useFocusMateTheme();
+  const { theme: appTheme, isDark } = useFocusMateTheme();
+  const tabBarHeight = 68 + insets.bottom;
+  const tabBarSurface = isDark ? appTheme.colors.surface : '#EEF8EE';
+  const tabBarTopBorder = isDark ? '#2B4237' : '#BFD8C0';
+  const tabBarCapColor = isDark ? '#243A31' : '#BFD8C0';
 
   return (
     <Tab.Navigator
@@ -97,19 +153,47 @@ function MainTabs() {
           marginTop: 1,
         },
         tabBarItemStyle: {
-          paddingTop: 8,
+          paddingTop: 9,
+        },
+        tabBarBackground: () => (
+          <View
+            pointerEvents="none"
+            style={[
+              styles.tabBarBackground,
+              { backgroundColor: tabBarSurface },
+            ]}
+          >
+            <View
+              style={[
+                styles.tabBarTopCap,
+                { backgroundColor: tabBarCapColor },
+              ]}
+            />
+          </View>
+        ),
+        sceneStyle: {
+          backgroundColor: appTheme.colors.background,
         },
         tabBarStyle: {
-          left: 18,
-          right: 18,
-          bottom: 8,
-          height: 74,
-          borderRadius: 90,
-          borderTopWidth: 0,
-          backgroundColor: appTheme.colors.surface,
-          paddingTop: 2,
-          paddingBottom: 2,
-          ...theme.shadow,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          height: tabBarHeight,
+          borderRadius: 0,
+          borderTopWidth: isDark ? 1 : 1.5,
+          borderColor: tabBarTopBorder,
+          borderTopColor: tabBarTopBorder,
+          backgroundColor: tabBarSurface,
+          paddingTop: 4,
+          paddingBottom: Math.max(insets.bottom, 6),
+          shadowColor: isDark ? '#000000' : '#24462A',
+          shadowOffset: {
+            width: 0,
+            height: -9,
+          },
+          shadowOpacity: isDark ? 0.34 : 0.16,
+          shadowRadius: 20,
+          elevation: 20,
         },
         headerStyle: {
           backgroundColor: appTheme.colors.background,
@@ -127,11 +211,11 @@ function MainTabs() {
         options={{
           title: 'Home',
           headerShown: false,
-          tabBarIcon: ({ color }) => (
-            <MaterialCommunityIcons
+          tabBarIcon: ({ color, focused }) => (
+            <TabBarIcon
               name="home-variant"
-              size={24}
               color={color}
+              focused={focused}
             />
           ),
         }}
@@ -143,11 +227,11 @@ function MainTabs() {
         options={{
           title: 'Calendar',
           headerShown: false,
-          tabBarIcon: ({ color }) => (
-            <MaterialCommunityIcons
+          tabBarIcon: ({ color, focused }) => (
+            <TabBarIcon
               name="calendar-month"
-              size={24}
               color={color}
+              focused={focused}
             />
           ),
         }}
@@ -169,8 +253,8 @@ function MainTabs() {
         options={{
           title: 'Milo',
           tabBarLabel: 'Companion',
-          tabBarIcon: ({ color }) => (
-            <MaterialCommunityIcons name="target" size={24} color={color} />
+          tabBarIcon: ({ color, focused }) => (
+            <TabBarIcon name="target" color={color} focused={focused} />
           ),
         }}
       />
@@ -182,11 +266,12 @@ function MainTabs() {
           title: 'Settings',
           headerShown: false,
           tabBarLabel: 'Profile',
-          tabBarIcon: ({ color }) => (
-            <MaterialCommunityIcons
+          tabBarIcon: ({ color, focused }) => (
+            <TabBarIcon
               name="account-circle"
-              size={25}
               color={color}
+              focused={focused}
+              size={25}
             />
           ),
         }}
@@ -386,21 +471,61 @@ export default function AppNavigator() {
 }
 
 const styles = StyleSheet.create({
+  tabBarBackground: {
+    ...StyleSheet.absoluteFillObject,
+    top: -2,
+  },
+  tabBarTopCap: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 2,
+  },
+  tabIconWrap: {
+    width: 36,
+    height: 30,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'transparent',
+    shadowColor: theme.colors.shadow,
+    shadowOffset: {
+      width: 0,
+      height: 4,
+    },
+    shadowOpacity: 0,
+    shadowRadius: 8,
+    elevation: 0,
+  },
   centerButtonSlot: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    top: -15,
+    top: -17,
   },
   centerButton: {
     width: 70,
     height: 70,
     borderRadius: 39,
     backgroundColor: theme.colors.primary,
-    borderWidth: 7,
+    borderWidth: 6,
     borderColor: theme.colors.surface,
     alignItems: 'center',
     justifyContent: 'center',
-    ...theme.shadow,
+    shadowColor: theme.colors.shadow,
+    shadowOffset: {
+      width: 0,
+      height: 10,
+    },
+    shadowOpacity: 0.22,
+    shadowRadius: 18,
+    elevation: 14,
+    overflow: 'hidden',
+  },
+  centerButtonGradient: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: 36,
   },
 });

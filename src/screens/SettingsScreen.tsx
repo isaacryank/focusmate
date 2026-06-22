@@ -15,6 +15,7 @@ import {
   View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -45,6 +46,7 @@ import {
 } from '../lib/miloAiSettings';
 
 type IoniconName = React.ComponentProps<typeof Ionicons>['name'];
+type TwoStopGradient = readonly [string, string];
 
 type SettingsModal =
   | 'account'
@@ -288,12 +290,30 @@ function SectionCard({
   title: string;
   children: React.ReactNode;
 }) {
+  const { isDark } = useFocusMateTheme();
+  const sheenColors = getSettingsSheenColors(isDark);
+
   return (
     <View style={styles.sectionWrap}>
       <Text style={styles.sectionTitle}>{title}</Text>
-      <View style={styles.sectionCard}>{children}</View>
+      <View style={styles.sectionCard}>
+        <LinearGradient
+          pointerEvents="none"
+          colors={sheenColors}
+          start={{ x: 0.1, y: 0 }}
+          end={{ x: 0.9, y: 1 }}
+          style={styles.settingsCardSheen}
+        />
+        {children}
+      </View>
     </View>
   );
+}
+
+function getSettingsSheenColors(isDark: boolean): TwoStopGradient {
+  return isDark
+    ? ['rgba(255, 255, 255, 0.07)', 'rgba(255, 255, 255, 0.01)']
+    : ['rgba(255, 255, 255, 0.32)', 'rgba(255, 255, 255, 0.04)'];
 }
 
 function CircleIcon({
@@ -681,6 +701,8 @@ export default function SettingsScreen() {
     resolvedTheme,
     setThemePreference,
   } = useFocusMateTheme();
+  const isDark = resolvedTheme === 'dark';
+  const profileSheenColors = getSettingsSheenColors(isDark);
 
   const navigation = useNavigation<any>();
   const { userName, user, signOut } = useAuth();
@@ -1135,6 +1157,13 @@ export default function SettingsScreen() {
         accessibilityRole="button"
         accessibilityLabel="Open Account and Security"
       >
+        <LinearGradient
+          pointerEvents="none"
+          colors={profileSheenColors}
+          start={{ x: 0.1, y: 0 }}
+          end={{ x: 0.9, y: 1 }}
+          style={styles.settingsCardSheen}
+        />
         <View style={styles.profileCopy}>
           <Text numberOfLines={1} style={styles.profileName}>
             {displayName}
@@ -2022,16 +2051,26 @@ const styles = StyleSheet.create({
   },
   profileCard: {
     minHeight: 72,
-    borderRadius: 18,
+    borderRadius: 20,
     backgroundColor: theme.colors.card,
     borderWidth: 1,
-    borderColor: theme.colors.primary,
+    borderColor: theme.colors.inputBorder,
+    borderTopColor: '#FDF7E978',
+    borderBottomColor: 'rgba(46, 125, 75, 0.08)',
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 14,
     paddingVertical: 10,
     marginBottom: 14,
-    ...theme.shadowSoft,
+    shadowColor: theme.colors.shadow,
+    shadowOffset: {
+      width: 0,
+      height: 10,
+    },
+    shadowOpacity: 0.13,
+    shadowRadius: 16,
+    elevation: 5,
+    overflow: 'hidden',
   },
   profileCopy: {
     flex: 1,
@@ -2056,9 +2095,18 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.primarySoft,
     borderWidth: 2,
     borderColor: '#9DF0A8',
+    borderTopColor: '#FDF7E978',
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 7,
+    shadowColor: theme.colors.shadow,
+    shadowOffset: {
+      width: 0,
+      height: 5,
+    },
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    elevation: 2,
   },
   avatarImage: {
     width: 42,
@@ -2077,21 +2125,34 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
   },
   sectionCard: {
-    borderRadius: 16,
+    borderRadius: 18,
     backgroundColor: theme.colors.card,
     borderWidth: 1,
-    borderColor: theme.colors.primarySoft,
+    borderColor: theme.colors.inputBorder,
+    borderTopColor: '#FDF7E978',
+    borderBottomColor: 'rgba(46, 125, 75, 0.08)',
     overflow: 'hidden',
-    ...theme.shadowSoft,
+    shadowColor: theme.colors.shadow,
+    shadowOffset: {
+      width: 0,
+      height: 8,
+    },
+    shadowOpacity: 0.12,
+    shadowRadius: 16,
+    elevation: 5,
+  },
+  settingsCardSheen: {
+    ...StyleSheet.absoluteFillObject,
   },
   settingsRow: {
     minHeight: 48,
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 10,
+    paddingHorizontal: 12,
     paddingVertical: 6,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#E8EDF2',
+    borderBottomColor: theme.colors.divider,
+    backgroundColor: 'transparent',
   },
   circleIcon: {
     width: 28,
@@ -2100,6 +2161,16 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 11,
+    borderWidth: 1,
+    borderColor: '#FDF7E978',
+    shadowColor: theme.colors.shadow,
+    shadowOffset: {
+      width: 0,
+      height: 3,
+    },
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
+    elevation: 2,
   },
   rowTextArea: {
     flex: 1,

@@ -1,3 +1,4 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import React, {
   useCallback,
   useEffect,
@@ -67,7 +68,13 @@ import MiloMoodImage from '../components/milo/MiloMoodImage';
 
 type IconName = React.ComponentProps<typeof Ionicons>['name'];
 
-type MiloVideoKey = 'idle' | 'greeting';
+type MiloVideoKey =
+  | 'greeting'
+  | 'idle'
+  | 'proud'
+  | 'sleepy'
+  | 'thinking'
+  | 'worried';
 type CompanionDetailModal =
   | 'analytics'
   | 'sessions'
@@ -82,16 +89,73 @@ const TREND_CHART_HEIGHT = 112;
 const TREND_DOT_SIZE = 10;
 const TREND_CHART_VERTICAL_PADDING = 12;
 const TREND_AXIS_LABEL_COUNT = 6;
+const LOCAL_PREFERENCES_STORAGE_KEY = '@focusmate/settings/preferences';
+const COMPANION_TAP_HINT_STORAGE_KEY_PREFIX =
+  '@focusmate/companion/tapHintSeen:';
 const miloIdleScene = require('../../assets/images/companion/milo_idle_scene.png');
-const miloIdleVideo = require('../../assets/videos/milo/milo_idle_final.mp4');
-const miloGreetingVideo = require('../../assets/videos/milo/milo_greeting_final.mp4');
+const miloVideos: Record<MiloVideoKey, number> = {
+  greeting: require('../../assets/videos/milo/milo_greeting_final.mp4'),
+  idle: require('../../assets/videos/milo/milo_idle_final.mp4'),
+  proud: require('../../assets/videos/milo/milo_proud_final.mp4'),
+  sleepy: require('../../assets/videos/milo/milo_sleepy_final.mp4'),
+  thinking: require('../../assets/videos/milo/milo_thinking_final.mp4'),
+  worried: require('../../assets/videos/milo/milo_worried_final.mp4'),
+};
+const MILO_VIDEO_KEYS: readonly MiloVideoKey[] = [
+  'greeting',
+  'idle',
+  'proud',
+  'sleepy',
+  'thinking',
+  'worried',
+];
+const MILO_TAP_VIDEO_KEYS: readonly MiloVideoKey[] = MILO_VIDEO_KEYS;
+const MILO_IDLE_AUTOPLAY_VIDEO_KEYS: readonly MiloVideoKey[] = [
+  'greeting',
+  'idle',
+  'thinking',
+];
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function getCompanionTapHintStorageKey(userId?: string | null) {
+  return `${COMPANION_TAP_HINT_STORAGE_KEY_PREFIX}${userId || 'anonymous'}`;
+}
+
+function getStoredReduceMotionPreference(value: unknown) {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  const reduceMotion = value.reduceMotion ?? value.reducedMotion;
+  return typeof reduceMotion === 'boolean' ? reduceMotion : false;
+}
+
+async function loadStoredReduceMotionPreference() {
+  try {
+    const storedPreferences = await AsyncStorage.getItem(
+      LOCAL_PREFERENCES_STORAGE_KEY
+    );
+    return getStoredReduceMotionPreference(
+      storedPreferences ? JSON.parse(storedPreferences) : null
+    );
+  } catch (error) {
+    console.log('Failed to load reduce motion preference:', error);
+    return false;
+  }
+}
+
+function pickRandomMiloVideo(videoKeys: readonly MiloVideoKey[]) {
+  return videoKeys[Math.floor(Math.random() * videoKeys.length)];
+}
 
 type MoodStatusItem = {
   label: string;
   value: string;
   icon: IconName;
   color: string;
-  backgroundColor: string;
 };
 
 type TaskWindow = {
@@ -1040,17 +1104,44 @@ function getTalkPreviewText(analytics: FocusAnalyticsSummary) {
   return 'You skipped the last block. Want to try a smaller focus step next?';
 }
 
-function MoodStatusCard({ item }: { item: MoodStatusItem }) {
+function HeroGlassLayers() {
   return (
-    <View style={styles.statusCard}>
-      <View
-        style={[
-          styles.statusIcon,
-          { backgroundColor: item.backgroundColor },
-        ]}
-      >
-        <Ionicons name={item.icon} size={13} color={item.color} />
-      </View>
+    <>
+      <LinearGradient
+        pointerEvents="none"
+        colors={['#FFFFFF9A', '#FFFFFF26', '#FFFFFF08']}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={styles.heroGlassSheen}
+      />
+      <LinearGradient
+        pointerEvents="none"
+        colors={['#FFFFFF45', '#FFFFFF00']}
+        start={{ x: 0.05, y: 0 }}
+        end={{ x: 0.6, y: 0.55 }}
+        style={styles.heroGlassInnerGlow}
+      />
+      <View pointerEvents="none" style={styles.heroGlassEdge} />
+    </>
+  );
+}
+
+function MoodStatusCard({
+  item,
+  glassStyle,
+}: {
+  item: MoodStatusItem;
+  glassStyle?: StyleProp<ViewStyle>;
+}) {
+  return (
+    <View style={[styles.statusCard, glassStyle]}>
+      <HeroGlassLayers />
+      <Ionicons
+        name={item.icon}
+        size={15}
+        color={item.color}
+        style={styles.statusIconGlyph}
+      />
       <View style={styles.statusCopy}>
         <Text numberOfLines={1} style={styles.statusLabel}>
           {item.label}
@@ -1069,11 +1160,15 @@ export default function CompanionScreen() {
   const navigation = useNavigation<any>();
   const route = useRoute<any>();
   const tabBarHeight = useBottomTabBarHeight();
-  const { userName } = useAuth();
+  const { userName, user } = useAuth();
   const { tasks } = useTasks();
   const { width, height } = useWindowDimensions();
 
   const displayName = userName?.trim() || 'Student';
+  const tapHintStorageKey = useMemo(
+    () => getCompanionTapHintStorageKey(user?.id),
+    [user?.id]
+  );
   const todayDate = getTodayDate();
   const compactWidth = width < 380;
   const narrowContent = width < 520;
@@ -1102,6 +1197,8 @@ export default function CompanionScreen() {
     null
   );
   const [isCompanionFocused, setIsCompanionFocused] = useState(false);
+  const [isReduceMotionEnabled, setIsReduceMotionEnabled] = useState(false);
+  const [tapHintSeen, setTapHintSeen] = useState<boolean | null>(null);
   const [videoFailed, setVideoFailed] = useState(false);
   const [activeDetailModal, setActiveDetailModal] =
     useState<CompanionDetailModal | null>(null);
@@ -1119,19 +1216,51 @@ export default function CompanionScreen() {
   const [resourceNote, setResourceNote] = useState('');
   const [resourceFinderMessage, setResourceFinderMessage] = useState('');
 
-  const idlePlayer = useVideoPlayer(miloIdleVideo, (player) => {
+  const greetingPlayer = useVideoPlayer(miloVideos.greeting, (player) => {
     player.loop = false;
     player.muted = true;
   });
-  const greetingPlayer = useVideoPlayer(miloGreetingVideo, (player) => {
+  const idlePlayer = useVideoPlayer(miloVideos.idle, (player) => {
     player.loop = false;
     player.muted = true;
   });
+  const proudPlayer = useVideoPlayer(miloVideos.proud, (player) => {
+    player.loop = false;
+    player.muted = true;
+  });
+  const sleepyPlayer = useVideoPlayer(miloVideos.sleepy, (player) => {
+    player.loop = false;
+    player.muted = true;
+  });
+  const thinkingPlayer = useVideoPlayer(miloVideos.thinking, (player) => {
+    player.loop = false;
+    player.muted = true;
+  });
+  const worriedPlayer = useVideoPlayer(miloVideos.worried, (player) => {
+    player.loop = false;
+    player.muted = true;
+  });
+  const miloPlayers = useMemo(
+    () => ({
+      greeting: greetingPlayer,
+      idle: idlePlayer,
+      proud: proudPlayer,
+      sleepy: sleepyPlayer,
+      thinking: thinkingPlayer,
+      worried: worriedPlayer,
+    }),
+    [
+      greetingPlayer,
+      idlePlayer,
+      proudPlayer,
+      sleepyPlayer,
+      thinkingPlayer,
+      worriedPlayer,
+    ]
+  );
   const getActivePlayer = useCallback(() => {
-    if (activeMiloVideo === 'greeting') return greetingPlayer;
-    if (activeMiloVideo === 'idle') return idlePlayer;
-    return null;
-  }, [activeMiloVideo, greetingPlayer, idlePlayer]);
+    return activeMiloVideo ? miloPlayers[activeMiloVideo] : null;
+  }, [activeMiloVideo, miloPlayers]);
 
   useLayoutEffect(() => {
     navigation.setOptions({
@@ -1171,6 +1300,55 @@ export default function CompanionScreen() {
       setSavedResources(nextResources);
     }
   }, []);
+
+  const refreshReduceMotionPreference = useCallback(async () => {
+    const nextReduceMotion = await loadStoredReduceMotionPreference();
+
+    if (mountedRef.current) {
+      setIsReduceMotionEnabled(nextReduceMotion);
+    }
+  }, []);
+
+  useEffect(() => {
+    let isActive = true;
+    setTapHintSeen(null);
+
+    const loadTapHintSeen = async () => {
+      try {
+        const storedTapHintSeen = await AsyncStorage.getItem(tapHintStorageKey);
+
+        if (isActive && mountedRef.current) {
+          setTapHintSeen(storedTapHintSeen === 'true');
+        }
+      } catch (error) {
+        console.log('Failed to load companion tap hint state:', error);
+
+        if (isActive && mountedRef.current) {
+          setTapHintSeen(false);
+        }
+      }
+    };
+
+    void loadTapHintSeen();
+
+    return () => {
+      isActive = false;
+    };
+  }, [tapHintStorageKey]);
+
+  const markTapHintSeen = useCallback(async () => {
+    if (tapHintSeen === true) {
+      return;
+    }
+
+    setTapHintSeen(true);
+
+    try {
+      await AsyncStorage.setItem(tapHintStorageKey, 'true');
+    } catch (error) {
+      console.log('Failed to save companion tap hint state:', error);
+    }
+  }, [tapHintSeen, tapHintStorageKey]);
 
   const openDetailModal = useCallback(
     async (modal: CompanionDetailModal) => {
@@ -1384,7 +1562,12 @@ export default function CompanionScreen() {
     miloMessage ||
     rotatingMessages[speechMessageIndex % Math.max(rotatingMessages.length, 1)] ||
     companionData.defaultMessage;
-  const moodPanelWidth = compactWidth ? 98 : 118;
+  const moodPanelWidth = compactWidth ? 98 : narrowContent ? 118 : 126;
+  const speechBubbleMaxWidth = compactWidth ? 196 : narrowContent ? 210 : 232;
+  const speechBubbleLeft = compactWidth ? 14 : 18;
+  const speechBubbleTop = compactWidth ? 16 : 18;
+  const moodPanelRight = compactWidth ? 10 : 12;
+  const tapMiloCardLeft = compactWidth ? 14 : 16;
   const roomCardHeight = shortScreen ? 414 : compactWidth ? 430 : 456;
   const bottomContentPadding = tabBarHeight + (shortScreen ? 54 : 66);
   const stressSignals =
@@ -1397,15 +1580,12 @@ export default function CompanionScreen() {
       value: companionData.completedTodayCount > 0 ? 'Bright' : 'Gentle',
       icon: 'battery-half',
       color: theme.colors.primaryDark,
-      backgroundColor: theme.colors.primarySoft,
     },
     {
       label: 'Stress',
       value: stressSignals > 0 ? 'Needs care' : 'Low',
       icon: 'heart',
       color: stressSignals > 0 ? theme.colors.danger : theme.colors.primaryDark,
-      backgroundColor:
-        stressSignals > 0 ? theme.colors.dangerSoft : theme.colors.primarySoft,
     },
     {
       label: 'Focus',
@@ -1415,14 +1595,12 @@ export default function CompanionScreen() {
           : 'Open',
       icon: 'sparkles',
       color: theme.colors.purple,
-      backgroundColor: theme.colors.purpleSoft,
     },
     {
       label: 'About Milo',
       value: 'Kind planner',
       icon: 'leaf',
       color: theme.colors.blue,
-      backgroundColor: theme.colors.blueSoft,
     },
   ];
   const latestChatPreview = getTalkPreviewText(focusAnalytics);
@@ -1447,24 +1625,74 @@ export default function CompanionScreen() {
       : createPlaceholderRecentSessions(todayDate);
   const focusScoreLabel =
     focusAnalytics.focusScore === null ? '--' : `${focusAnalytics.focusScore}%`;
+  const shouldShowTapHint = tapHintSeen === false;
+  const heroGlassCardStyle = useMemo<StyleProp<ViewStyle>>(
+    () => ({
+      backgroundColor: isDark
+        ? '#202C33BD'
+        : '#FFF4D966',
+      borderColor: isDark
+        ? '#FFFFFF29'
+        : '#FFF8E6AB',
+      ...(isDark
+        ? {
+            shadowColor: '#000000',
+            shadowOpacity: 0.34,
+          }
+        : {
+            shadowColor: '#734B16',
+            shadowOpacity: 0.16,
+          }),
+    }),
+    [isDark]
+  );
+  const heroGlassPillStyle = useMemo<StyleProp<ViewStyle>>(
+    () => ({
+      backgroundColor: isDark
+        ? '#202C33C7'
+        : '#FFF4D975',
+      borderColor: isDark
+        ? '#FFFFFF2E'
+        : '#FFF8E6B8',
+      ...(isDark
+        ? {
+            shadowColor: '#000000',
+            shadowOpacity: 0.32,
+          }
+        : {
+            shadowColor: '#734B16',
+            shadowOpacity: 0.16,
+          }),
+    }),
+    [isDark]
+  );
+  const heroGlassTailStyle = useMemo<StyleProp<ViewStyle>>(
+    () => ({
+      backgroundColor: isDark ? '#202C33BD' : '#FFF4D966',
+      borderColor: isDark ? '#FFFFFF29' : '#FFF8E6AB',
+    }),
+    [isDark]
+  );
 
-  const speechBubbleMotionStyle = {
-    opacity: speechBubbleMotion,
-    transform: [
-      {
-        scale: speechBubbleMotion.interpolate({
-          inputRange: [0, 1],
-          outputRange: [0.97, 1],
-        }),
-      },
-      {
-        translateY: speechBubbleMotion.interpolate({
-          inputRange: [0, 1],
-          outputRange: [8, 0],
-        }),
-      },
-    ],
-  };
+  const speechBubbleMotionStyle = isReduceMotionEnabled
+    ? undefined
+    : {
+        opacity: speechBubbleMotion,
+        transform: [
+          {
+            scale: speechBubbleMotion.interpolate({
+              inputRange: [0, 1],
+              outputRange: [0.97, 1],
+            }),
+          },
+          {
+            translateY: speechBubbleMotion.interpolate({
+              inputRange: [0, 1],
+              outputRange: [8, 0],
+            }),
+          },
+        ],
+      };
 
   const clearInactivityTimer = useCallback(() => {
     if (inactivityTimerRef.current) {
@@ -1475,20 +1703,28 @@ export default function CompanionScreen() {
 
   const stopMiloVideos = useCallback(() => {
     try {
-      greetingPlayer.pause();
-      idlePlayer.pause();
+      MILO_VIDEO_KEYS.forEach((videoKey) => {
+        const player = miloPlayers[videoKey];
+        player.pause();
+        player.currentTime = 0;
+      });
     } catch (error) {
       console.warn('Unable to pause Milo videos:', error);
     }
 
     isMiloVideoPlayingRef.current = false;
     setActiveMiloVideo(null);
-  }, [greetingPlayer, idlePlayer]);
+  }, [miloPlayers]);
 
   const resetInactivityTimer = useCallback(() => {
     clearInactivityTimer();
 
-    if (!isCompanionFocusedRef.current) {
+    if (
+      !isCompanionFocusedRef.current ||
+      isReduceMotionEnabled ||
+      videoFailed ||
+      isMiloVideoPlayingRef.current
+    ) {
       return;
     }
 
@@ -1502,7 +1738,7 @@ export default function CompanionScreen() {
 
       playIdleMiloVideoRef.current();
     }, MILO_INACTIVITY_AUTOPLAY_MS);
-  }, [clearInactivityTimer]);
+  }, [clearInactivityTimer, isReduceMotionEnabled, videoFailed]);
 
   const finishMiloVideo = useCallback(() => {
     if (!isMiloVideoPlayingRef.current) {
@@ -1534,6 +1770,11 @@ export default function CompanionScreen() {
         return;
       }
 
+      if (isReduceMotionEnabled) {
+        console.log('Skipped Milo video because reduce motion is enabled');
+        return;
+      }
+
       if (isMiloVideoPlayingRef.current) {
         return;
       }
@@ -1542,12 +1783,10 @@ export default function CompanionScreen() {
 
       clearInactivityTimer();
 
-      const player = videoKey === 'greeting' ? greetingPlayer : idlePlayer;
+      const player = miloPlayers[videoKey];
 
       try {
-        console.log(
-          videoKey === 'greeting' ? 'Playing greeting video' : 'Playing idle video'
-        );
+        console.log(`Playing ${videoKey} video`);
         isMiloVideoPlayingRef.current = true;
         setActiveMiloVideo(videoKey);
 
@@ -1565,15 +1804,15 @@ export default function CompanionScreen() {
     },
     [
       clearInactivityTimer,
-      greetingPlayer,
       handleMiloVideoError,
-      idlePlayer,
+      isReduceMotionEnabled,
+      miloPlayers,
       videoFailed,
     ]
   );
 
   const playIdleMiloVideo = useCallback(() => {
-    playMiloVideo('idle');
+    playMiloVideo(pickRandomMiloVideo(MILO_IDLE_AUTOPLAY_VIDEO_KEYS));
   }, [playMiloVideo]);
 
   const tapMessages = useMemo(
@@ -1618,6 +1857,31 @@ export default function CompanionScreen() {
 
   useFocusEffect(
     useCallback(() => {
+      void refreshReduceMotionPreference();
+      return undefined;
+    }, [refreshReduceMotionPreference])
+  );
+
+  useEffect(() => {
+    if (isReduceMotionEnabled) {
+      clearInactivityTimer();
+      stopMiloVideos();
+      return;
+    }
+
+    if (isCompanionFocused) {
+      resetInactivityTimer();
+    }
+  }, [
+    clearInactivityTimer,
+    isCompanionFocused,
+    isReduceMotionEnabled,
+    resetInactivityTimer,
+    stopMiloVideos,
+  ]);
+
+  useFocusEffect(
+    useCallback(() => {
       console.log('Companion focused');
       isCompanionFocusedRef.current = true;
       setIsCompanionFocused(true);
@@ -1642,37 +1906,28 @@ export default function CompanionScreen() {
   );
 
   useEffect(() => {
-    const idleEndSubscription = idlePlayer.addListener('playToEnd', finishMiloVideo);
-    const greetingEndSubscription = greetingPlayer.addListener(
-      'playToEnd',
-      finishMiloVideo
-    );
-    const idleStatusSubscription = idlePlayer.addListener(
-      'statusChange',
-      ({ status, error }) => {
-        if (status === 'error') {
-          handleMiloVideoError('idle', error);
-        }
-      }
-    );
-    const greetingStatusSubscription = greetingPlayer.addListener(
-      'statusChange',
-      ({ status, error }) => {
-        if (status === 'error') {
-          handleMiloVideoError('greeting', error);
-        }
-      }
-    );
+    const subscriptions = MILO_VIDEO_KEYS.flatMap((videoKey) => {
+      const player = miloPlayers[videoKey];
 
-    return () => {
-      idleEndSubscription.remove();
-      greetingEndSubscription.remove();
-      idleStatusSubscription.remove();
-      greetingStatusSubscription.remove();
-    };
-  }, [finishMiloVideo, greetingPlayer, handleMiloVideoError, idlePlayer]);
+      return [
+        player.addListener('playToEnd', finishMiloVideo),
+        player.addListener('statusChange', ({ status, error }) => {
+          if (status === 'error') {
+            handleMiloVideoError(videoKey, error);
+          }
+        }),
+      ];
+    });
+
+    return () => subscriptions.forEach((subscription) => subscription.remove());
+  }, [finishMiloVideo, handleMiloVideoError, miloPlayers]);
 
   useEffect(() => {
+    if (isReduceMotionEnabled) {
+      speechBubbleMotion.setValue(1);
+      return undefined;
+    }
+
     speechBubbleMotion.setValue(0);
 
     const animation = Animated.spring(speechBubbleMotion, {
@@ -1685,7 +1940,7 @@ export default function CompanionScreen() {
     animation.start();
 
     return () => animation.stop();
-  }, [activeMessage, speechBubbleMotion]);
+  }, [activeMessage, isReduceMotionEnabled, speechBubbleMotion]);
 
   const clearReactionTimeout = () => {
     if (reactionTimeoutRef.current) {
@@ -1746,8 +2001,9 @@ export default function CompanionScreen() {
     }
 
     resetInactivityTimer();
-    playMiloVideo('greeting');
+    playMiloVideo(pickRandomMiloVideo(MILO_TAP_VIDEO_KEYS));
     void handleMiloTap();
+    void markTapHintSeen();
   };
 
   const handleSpeak = async () => {
@@ -2615,6 +2871,13 @@ export default function CompanionScreen() {
   };
 
   const activePlayer = getActivePlayer();
+  const shouldRenderMiloVideo = Boolean(
+    isCompanionFocused &&
+      !isReduceMotionEnabled &&
+      activeMiloVideo &&
+      activePlayer &&
+      !videoFailed
+  );
 
   return (
     <ScreenContainer
@@ -2696,23 +2959,24 @@ export default function CompanionScreen() {
         >
           <Image
             source={miloIdleScene}
-            style={styles.miloStageMedia}
+            style={[styles.miloStageMedia, styles.miloStageMediaFraming]}
             resizeMode="cover"
           />
 
-          {isCompanionFocused &&
-            activeMiloVideo &&
-            activePlayer &&
-            !videoFailed && (
-              <VideoView
-                player={activePlayer}
-                style={[styles.miloStageMedia, styles.miloStageVideo]}
-                nativeControls={false}
-                contentFit="cover"
-                surfaceType="textureView"
-                useExoShutter={false}
-              />
-            )}
+          {shouldRenderMiloVideo && activePlayer ? (
+            <VideoView
+              player={activePlayer}
+              style={[
+                styles.miloStageMedia,
+                styles.miloStageMediaFraming,
+                styles.miloStageVideo,
+              ]}
+              nativeControls={false}
+              contentFit="cover"
+              surfaceType="textureView"
+              useExoShutter={false}
+            />
+          ) : null}
 
           <View pointerEvents="none" style={styles.miloStageSoftOverlay} />
           {isDark ? (
@@ -2721,11 +2985,18 @@ export default function CompanionScreen() {
         </TouchableOpacity>
 
         <Animated.View
-          style={[styles.speechBubble, speechBubbleMotionStyle]}
+          style={[
+            styles.speechBubble,
+            heroGlassCardStyle,
+            {
+              left: speechBubbleLeft,
+              top: speechBubbleTop,
+              maxWidth: speechBubbleMaxWidth,
+            },
+            speechBubbleMotionStyle,
+          ]}
         >
-          <View style={styles.speechCloudBumpLarge} />
-          <View style={styles.speechCloudBumpSmall} />
-          <View style={styles.speechCloudBumpTiny} />
+          <HeroGlassLayers />
           <Text numberOfLines={1} style={styles.speechGreeting}>
             Hi {displayName}! 👋
           </Text>
@@ -2737,11 +3008,17 @@ export default function CompanionScreen() {
           >
             {activeMessage}
           </Text>
-          <View style={styles.speechTail} />
+          <View style={[styles.speechTail, heroGlassTailStyle]} />
         </Animated.View>
 
-        <View style={[styles.moodPanel, { width: moodPanelWidth }]}>
-          <View style={styles.moodCard}>
+        <View
+          style={[
+            styles.moodPanel,
+            { right: moodPanelRight, width: moodPanelWidth },
+          ]}
+        >
+          <View style={[styles.moodCard, heroGlassCardStyle]}>
+            <HeroGlassLayers />
             <View style={styles.moodCardTopRow}>
               <Text style={styles.moodCardTitle}>Milo's Mood</Text>
               <MiloMoodImage
@@ -2759,14 +3036,29 @@ export default function CompanionScreen() {
           </View>
 
           {statusItems.map((item) => (
-            <MoodStatusCard key={item.label} item={item} />
+            <MoodStatusCard
+              key={item.label}
+              item={item}
+              glassStyle={heroGlassCardStyle}
+            />
           ))}
         </View>
 
-        <View style={styles.tapMiloCard}>
+        <View
+          style={[
+            styles.tapMiloCard,
+            { left: tapMiloCardLeft },
+            heroGlassPillStyle,
+            !shouldShowTapHint && styles.tapMiloCardIconOnly,
+          ]}
+        >
+          <HeroGlassLayers />
           <TouchableOpacity
             activeOpacity={0.82}
-            style={styles.tapSpeakerButton}
+            style={[
+              styles.tapSpeakerButton,
+              !shouldShowTapHint && styles.tapSpeakerButtonSolo,
+            ]}
             onPress={handleSpeak}
             accessibilityRole="button"
             accessibilityLabel="Hear Milo"
@@ -2777,14 +3069,16 @@ export default function CompanionScreen() {
               color={theme.colors.primaryDark}
             />
           </TouchableOpacity>
-          <TouchableOpacity
-            activeOpacity={0.86}
-            onPress={handleMiloPress}
-            accessibilityRole="button"
-            accessibilityLabel="Tap Milo to talk"
-          >
-            <Text style={styles.tapHint}>Tap Milo to talk!</Text>
-          </TouchableOpacity>
+          {shouldShowTapHint ? (
+            <TouchableOpacity
+              activeOpacity={0.86}
+              onPress={handleMiloPress}
+              accessibilityRole="button"
+              accessibilityLabel="Tap Milo"
+            >
+              <Text style={styles.tapHint}>Tap me!</Text>
+            </TouchableOpacity>
+          ) : null}
         </View>
 
       </View>
@@ -3424,15 +3718,17 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     borderWidth: 1,
     borderColor: theme.colors.border,
+    borderTopColor: '#FDF7E978',
+    borderBottomColor: 'rgba(46, 125, 75, 0.08)',
     marginBottom: 18,
     shadowColor: theme.colors.shadow,
     shadowOffset: {
       width: 0,
       height: 16,
     },
-    shadowOpacity: 0.1,
-    shadowRadius: 22,
-    elevation: 5,
+    shadowOpacity: 0.13,
+    shadowRadius: 18,
+    elevation: 6,
   },
   roomBackWall: {
     position: 'absolute',
@@ -3614,8 +3910,6 @@ const styles = StyleSheet.create({
   },
   speechBubble: {
     position: 'absolute',
-    top: 18,
-    left: 18,
     width: '52%',
     minWidth: 156,
     maxWidth: 210,
@@ -3625,54 +3919,37 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     borderWidth: 1,
     borderColor: theme.colors.border,
+    borderTopColor: '#FDF7E978',
+    borderBottomColor: 'rgba(46, 125, 75, 0.08)',
     zIndex: 10,
     shadowColor: theme.colors.shadow,
     shadowOffset: {
       width: 0,
       height: 10,
     },
-    shadowOpacity: 0.08,
+    shadowOpacity: 0.12,
     shadowRadius: 16,
-    elevation: 4,
+    elevation: 5,
   },
-  speechCloudBumpLarge: {
-    position: 'absolute',
-    left: 18,
-    top: -12,
-    width: 52,
-    height: 30,
+  heroGlassSheen: {
+    ...StyleSheet.absoluteFillObject,
     borderRadius: 26,
-    backgroundColor: theme.colors.card,
-    borderTopWidth: 1,
-    borderLeftWidth: 1,
-    borderRightWidth: 1,
-    borderColor: theme.colors.border,
+    opacity: 0.84,
+    zIndex: 0,
   },
-  speechCloudBumpSmall: {
-    position: 'absolute',
-    left: 61,
-    top: -9,
-    width: 38,
-    height: 23,
-    borderRadius: 19,
-    backgroundColor: theme.colors.card,
-    borderTopWidth: 1,
-    borderLeftWidth: 1,
-    borderRightWidth: 1,
-    borderColor: theme.colors.border,
+  heroGlassInnerGlow: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: 26,
+    opacity: 0.78,
+    zIndex: 0,
   },
-  speechCloudBumpTiny: {
-    position: 'absolute',
-    left: 98,
-    top: -5,
-    width: 26,
-    height: 17,
-    borderRadius: 13,
-    backgroundColor: theme.colors.card,
+  heroGlassEdge: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: 26,
     borderTopWidth: 1,
     borderLeftWidth: 1,
-    borderRightWidth: 1,
-    borderColor: theme.colors.border,
+    borderColor: '#FDF7E978',
+    zIndex: 1,
   },
   speechGreeting: {
     color: theme.colors.text,
@@ -3704,7 +3981,6 @@ const styles = StyleSheet.create({
   moodPanel: {
     position: 'absolute',
     top: 18,
-    right: 12,
     zIndex: 10,
   },
   moodCard: {
@@ -3714,19 +3990,22 @@ const styles = StyleSheet.create({
     padding: 10,
     borderWidth: 1,
     borderColor: theme.colors.border,
+    borderTopColor: '#FDF7E978',
     shadowColor: theme.colors.shadow,
     shadowOffset: {
       width: 0,
       height: 8,
     },
-    shadowOpacity: 0.07,
-    shadowRadius: 12,
-    elevation: 3,
+    shadowOpacity: 0.15,
+    shadowRadius: 18,
+    elevation: 6,
+    overflow: 'hidden',
   },
   moodCardTopRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    zIndex: 2,
   },
   moodCardTitle: {
     flex: 1,
@@ -3745,6 +4024,7 @@ const styles = StyleSheet.create({
     color: theme.colors.text,
     fontSize: 15,
     fontWeight: '900',
+    zIndex: 2,
   },
   moodSubtext: {
     marginTop: 4,
@@ -3752,6 +4032,7 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '700',
     lineHeight: 13,
+    zIndex: 2,
   },
   statusCard: {
     minHeight: 49,
@@ -3761,6 +4042,7 @@ const styles = StyleSheet.create({
     paddingVertical: 7,
     borderWidth: 1,
     borderColor: theme.colors.border,
+    borderTopColor: '#FDF7E978',
     flexDirection: 'row',
     alignItems: 'center',
     marginTop: 7,
@@ -3769,21 +4051,21 @@ const styles = StyleSheet.create({
       width: 0,
       height: 6,
     },
-    shadowOpacity: 0.055,
-    shadowRadius: 10,
-    elevation: 2,
+    shadowOpacity: 0.13,
+    shadowRadius: 15,
+    elevation: 5,
+    overflow: 'hidden',
   },
-  statusIcon: {
+  statusIconGlyph: {
     width: 25,
-    height: 25,
-    borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
     marginRight: 7,
+    textAlign: 'center',
+    zIndex: 2,
   },
   statusCopy: {
     flex: 1,
     minWidth: 0,
+    zIndex: 2,
   },
   statusLabel: {
     color: theme.colors.subtleText,
@@ -3965,7 +4247,6 @@ const styles = StyleSheet.create({
   },
   tapMiloCard: {
     position: 'absolute',
-    left: 16,
     bottom: 18,
     minHeight: 40,
     borderRadius: 999,
@@ -3978,14 +4259,19 @@ const styles = StyleSheet.create({
     zIndex: 10,
     borderWidth: 1,
     borderColor: theme.colors.border,
+    borderTopColor: '#FDF7E978',
     shadowColor: theme.colors.shadow,
     shadowOffset: {
       width: 0,
       height: 7,
     },
-    shadowOpacity: 0.07,
-    shadowRadius: 12,
-    elevation: 3,
+    shadowOpacity: 0.15,
+    shadowRadius: 17,
+    elevation: 6,
+    overflow: 'hidden',
+  },
+  tapMiloCardIconOnly: {
+    paddingRight: 7,
   },
   tapSpeakerButton: {
     width: 28,
@@ -3995,11 +4281,16 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 7,
+    zIndex: 2,
+  },
+  tapSpeakerButtonSolo: {
+    marginRight: 0,
   },
   tapHint: {
     color: theme.colors.primary,
     fontSize: 11,
     fontWeight: '900',
+    zIndex: 2,
   },
   miloStage: {
     width: '100%',
@@ -4014,34 +4305,39 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     borderRadius: 28,
     overflow: 'hidden',
-    zIndex: 0,
-    elevation: 0,
+    zIndex: 1,
+    elevation: 1,
   },
   miloStageMedia: {
     ...StyleSheet.absoluteFillObject,
     width: '100%',
     height: '100%',
-    zIndex: 1,
+    zIndex: 0,
+  },
+  miloStageMediaFraming: {
+    transform: [{ translateX: -14 }, { translateY: -2 }, { scale: 1.06 }],
   },
   miloStageVideo: {
-    zIndex: 2,
+    zIndex: 1,
     elevation: 2,
   },
   miloStageSoftOverlay: {
     ...StyleSheet.absoluteFillObject,
-    zIndex: 3,
+    zIndex: 2,
     backgroundColor: 'rgba(255, 255, 255, 0.08)',
   },
   miloStageDarkOverlay: {
     ...StyleSheet.absoluteFillObject,
-    zIndex: 4,
-    backgroundColor: 'rgba(0, 0, 0, 0.2)',
+    zIndex: 3,
+    backgroundColor: '#00000017',
   },
   talkCard: {
     backgroundColor: theme.colors.card,
     borderRadius: 28,
     borderWidth: 1,
     borderColor: theme.colors.border,
+    borderTopColor: '#FDF7E978',
+    borderBottomColor: 'rgba(46, 125, 75, 0.08)',
     padding: 16,
     marginBottom: 16,
     shadowColor: theme.colors.shadow,
@@ -4049,9 +4345,9 @@ const styles = StyleSheet.create({
       width: 0,
       height: 12,
     },
-    shadowOpacity: 0.07,
-    shadowRadius: 18,
-    elevation: 4,
+    shadowOpacity: 0.12,
+    shadowRadius: 16,
+    elevation: 5,
   },
   talkTitleRow: {
     flexDirection: 'row',
@@ -4065,6 +4361,9 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.primarySoft,
     alignItems: 'center',
     justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: theme.colors.inputBorder,
+    borderTopColor: '#FDF7E978',
   },
   talkTitle: {
     marginLeft: 10,
@@ -4097,6 +4396,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginRight: 10,
     overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: theme.colors.inputBorder,
+    borderTopColor: '#FDF7E978',
   },
   talkPreviewBubble: {
     flex: 1,
@@ -4107,6 +4409,7 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.input,
     borderWidth: 1,
     borderColor: theme.colors.inputBorder,
+    borderTopColor: '#FDF7E978',
     paddingHorizontal: 12,
     paddingVertical: 10,
   },
@@ -4162,14 +4465,18 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 14,
+    borderWidth: 1,
+    borderColor: '#4DBA62',
+    borderTopColor: '#7CE38D',
+    borderBottomColor: '#1E6C34',
     shadowColor: theme.colors.primaryDark,
     shadowOffset: {
       width: 0,
       height: 8,
     },
     shadowOpacity: 0.16,
-    shadowRadius: 14,
-    elevation: 4,
+    shadowRadius: 17,
+    elevation: 5,
   },
   continueChatText: {
     color: theme.colors.white,
@@ -4185,10 +4492,19 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.card,
     borderWidth: 1,
     borderColor: theme.colors.border,
+    borderTopColor: '#FDF7E978',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 12,
+    shadowColor: theme.colors.shadow,
+    shadowOffset: {
+      width: 0,
+      height: 5,
+    },
+    shadowOpacity: 0.09,
+    shadowRadius: 10,
+    elevation: 3,
   },
   oldMessagesButtonDisabled: {
     backgroundColor: theme.colors.input,
@@ -4212,6 +4528,8 @@ const styles = StyleSheet.create({
     borderRadius: 24,
     borderWidth: 1,
     borderColor: theme.colors.border,
+    borderTopColor: '#FDF7E978',
+    borderBottomColor: 'rgba(46, 125, 75, 0.08)',
     padding: 13,
     marginBottom: 16,
     flexDirection: 'row',
@@ -4221,9 +4539,9 @@ const styles = StyleSheet.create({
       width: 0,
       height: 10,
     },
-    shadowOpacity: 0.065,
+    shadowOpacity: 0.15,
     shadowRadius: 16,
-    elevation: 3,
+    elevation: 5,
   },
   focusGuardIconWrap: {
     width: 48,
@@ -4232,6 +4550,7 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.primarySoft,
     borderWidth: 1,
     borderColor: theme.colors.inputBorder,
+    borderTopColor: '#FDF7E978',
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 11,
@@ -4262,6 +4581,7 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.primarySoft,
     borderWidth: 1,
     borderColor: theme.colors.inputBorder,
+    borderTopColor: '#FDF7E978',
     paddingHorizontal: 8,
     alignItems: 'center',
     justifyContent: 'center',
@@ -4286,6 +4606,18 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingHorizontal: 13,
     flexShrink: 0,
+    borderWidth: 1,
+    borderColor: '#4DBA62',
+    borderTopColor: '#7CE38D',
+    borderBottomColor: '#1E6C34',
+    shadowColor: theme.colors.primaryDark,
+    shadowOffset: {
+      width: 0,
+      height: 5,
+    },
+    shadowOpacity: 0.12,
+    shadowRadius: 10,
+    elevation: 3,
   },
   focusGuardButtonText: {
     color: theme.colors.white,
