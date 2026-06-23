@@ -1,0 +1,5 @@
+assets/generated/milo.zip
+supabase/.temp/
+node_modules/
+.expo/
+.git/
