@@ -276,8 +276,8 @@ export default function TodayPlanScreen() {
       return;
     }
 
-    if (routeNames.includes('CalendarScreen')) {
-      navigation.navigate('CalendarScreen');
+    if (routeNames.includes('MainTabs')) {
+      navigation.navigate('MainTabs', { screen: 'Calendar' });
     }
   };
 

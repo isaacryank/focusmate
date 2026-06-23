@@ -204,29 +204,39 @@ export async function schedulePlannerReminder(
 
   const typeLabel = getPlannerTypeLabel(input.plannerType);
 
-  const notificationId = await Notifications.scheduleNotificationAsync({
-    content: {
-      title: `Milo reminder: ${input.title}`,
-      body: `You have a ${typeLabel}${
-        input.location ? ` at ${input.location}` : ''
-      }. Open FocusMate and get ready.`,
-      data: {
-        taskId: input.taskId,
-        plannerType: input.plannerType,
+  try {
+    const notificationId = await Notifications.scheduleNotificationAsync({
+      content: {
+        title: `Milo reminder: ${input.title}`,
+        body: `You have a ${typeLabel}${
+          input.location ? ` at ${input.location}` : ''
+        }. Open FocusMate and get ready.`,
+        data: {
+          taskId: input.taskId,
+          plannerType: input.plannerType,
+        },
       },
-    },
-    trigger: {
-      type: Notifications.SchedulableTriggerInputTypes.DATE,
-      date: scheduledDate,
-      channelId: CHANNEL_ID,
-    },
-  });
+      trigger: {
+        type: Notifications.SchedulableTriggerInputTypes.DATE,
+        date: scheduledDate,
+        channelId: CHANNEL_ID,
+      },
+    });
 
-  return {
-    ok: true,
-    notificationId,
-    scheduledFor: scheduledDate.toISOString(),
-  };
+    return {
+      ok: true,
+      notificationId,
+      scheduledFor: scheduledDate.toISOString(),
+    };
+  } catch (error) {
+    console.log('Failed to schedule planner reminder:', error);
+
+    return {
+      ok: false,
+      reason:
+        'Milo could not schedule this reminder. Please check notification settings and try again.',
+    };
+  }
 }
 
 export async function scheduleTestNotification() {
