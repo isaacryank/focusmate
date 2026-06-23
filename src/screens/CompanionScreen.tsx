@@ -24,7 +24,6 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Haptics from 'expo-haptics';
 import * as Speech from 'expo-speech';
-import { LinearGradient } from 'expo-linear-gradient';
 import { VideoView, useVideoPlayer } from 'expo-video';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect, useNavigation, useRoute } from '@react-navigation/native';
@@ -64,12 +63,31 @@ import {
 import {
   buildGoogleSearchUrl,
   buildResourceSearchQuery,
+  generateSmartResourceSuggestions,
   generateResourceKeywords,
+  type SmartResourceSuggestion,
 } from '../lib/resourceFinderUtils';
+import { askMiloAi } from '../lib/miloAiClient';
+import {
+  incrementMiloAiCallsToday,
+  loadMiloAiSettings,
+} from '../lib/miloAiSettings';
+import {
+  filterTasksByPlannerType,
+  getTaskSortTime,
+  getTaskTimingBucket,
+  plannerTimingSorts,
+  plannerTypeFilters,
+  sortTasksByTiming,
+  type PlannerTimingSort,
+  type PlannerTypeFilter,
+} from '../lib/plannerFilters';
 import { Task } from '../types/task';
 
 import ScreenContainer from '../components/ui/ScreenContainer';
 import MiloMoodImage from '../components/milo/MiloMoodImage';
+import FocusMateConfirmModal from '../components/ui/FocusMateConfirmModal';
+import PlannerFilterSortModal from '../components/ui/PlannerFilterSortModal';
 
 type IconName = React.ComponentProps<typeof Ionicons>['name'];
 
@@ -87,6 +105,8 @@ type CompanionDetailModal =
   | 'reaction'
   | 'resources';
 type ResourceFinderMode = 'finder' | 'save' | 'saved';
+type FocusAnalyticsRange = 'day' | 'week' | 'month';
+type FocusAnalyticsType = 'task' | 'meeting' | 'date' | 'focus_without_task';
 
 const TEMPORARY_MILO_REACTION_MS = 6500;
 const MILO_INACTIVITY_AUTOPLAY_MS = 30000;
@@ -158,15 +178,28 @@ type WeeklyFocusTrendItem = {
   dateKey: string;
   label: string;
   minutes: number;
+  byType: Record<FocusAnalyticsType, number>;
 };
 
 type FocusAnalyticsSummary = {
+  range: FocusAnalyticsRange;
+  rangeLabel: string;
+  rangeFocusMinutes: number;
+  rangeCompletedSessions: number;
+  averageSessionMinutes: number;
   todayFocusMinutes: number;
   weekFocusMinutes: number;
   cleanSessions: number;
   distractedSessions: number;
   mostFocusedTask: string;
   weeklyTrend: WeeklyFocusTrendItem[];
+  typeBreakdown: { type: FocusAnalyticsType; minutes: number; sessions: number }[];
+  itemBreakdown: {
+    title: string;
+    type: FocusAnalyticsType;
+    minutes: number;
+    sessions: number;
+  }[];
   recentSessions: FocusSessionHistoryItem[];
   latestSession: FocusSessionHistoryItem | null;
   latestCompletedSession: FocusSessionHistoryItem | null;
@@ -189,6 +222,36 @@ const overlapTypes = [
   'accepted_overlap',
 ];
 
+const focusTypeOrder: FocusAnalyticsType[] = [
+  'task',
+  'meeting',
+  'date',
+  'focus_without_task',
+];
+
+const focusTypeLabels: Record<FocusAnalyticsType, string> = {
+  task: 'Task',
+  meeting: 'Meeting',
+  date: 'Date',
+  focus_without_task: 'Focus without task',
+};
+
+const focusTypeColors: Record<FocusAnalyticsType, string> = {
+  task: theme.colors.primary,
+  meeting: theme.colors.purple,
+  date: '#D88916',
+  focus_without_task: theme.colors.blue,
+};
+
+function createEmptyFocusTypeTotals(): Record<FocusAnalyticsType, number> {
+  return {
+    task: 0,
+    meeting: 0,
+    date: 0,
+    focus_without_task: 0,
+  };
+}
+
 function isPendingTask(task: Task) {
   return task.status !== 'completed';
 }
@@ -199,6 +262,14 @@ function getTaskTitle(task?: Task) {
   if (title.length <= 34) return title;
 
   return `${title.slice(0, 31).trimEnd()}...`;
+}
+
+function getResourceTaskDateLabel(task: Task) {
+  if (!task.dueDate) {
+    return 'No date yet';
+  }
+
+  return task.dueTime ? `${task.dueDate} ${task.dueTime}` : `${task.dueDate} all day`;
 }
 
 function parsePlannerDateTime(dueDate?: string, dueTime?: string) {
@@ -307,6 +378,10 @@ function pickRandomItem<T>(items: readonly T[]) {
 
 function getTapHintStorageKey(userId?: string | null) {
   return `@focusmate/companion/tapHintSeen:${userId || 'anonymous'}`;
+}
+
+function getRecentSessionsClearedStorageKey(userId?: string | null) {
+  return `@focusmate/recent-sessions/cleared-at:${userId || 'anonymous'}`;
 }
 
 async function loadCompanionTapHintSeen(storageKey: string) {
@@ -489,6 +564,10 @@ function getSessionDateKey(session: FocusSessionHistoryItem) {
 }
 
 function getSessionTitle(session: FocusSessionHistoryItem) {
+  if (session.taskTypeSnapshot === 'focus_without_task') {
+    return 'Focus without task';
+  }
+
   return (
     session.taskTitle?.trim() ||
     session.selectedTaskTitle?.trim() ||
@@ -598,6 +677,204 @@ function getNiceTrendMax(minutes: number[]) {
   return Math.ceil(maxMinutes / 15) * 15;
 }
 
+async function loadRecentSessionsClearedAt(storageKey: string) {
+  try {
+    const stored = await AsyncStorage.getItem(storageKey);
+    return stored && !Number.isNaN(new Date(stored).getTime()) ? stored : null;
+  } catch (error) {
+    console.log('Failed to load recent sessions clear state:', error);
+    return null;
+  }
+}
+
+async function saveRecentSessionsClearedAt(storageKey: string, value: string) {
+  try {
+    await AsyncStorage.setItem(storageKey, value);
+  } catch (error) {
+    console.log('Failed to save recent sessions clear state:', error);
+  }
+}
+
+function getAnalyticsRangeLabel(range: FocusAnalyticsRange) {
+  if (range === 'day') return 'Today';
+  if (range === 'month') return 'This month';
+  return 'This week';
+}
+
+function getDateKeysForRange(todayDate: string, range: FocusAnalyticsRange) {
+  const today = getDateFromKey(todayDate);
+  const days = range === 'day' ? 1 : range === 'month' ? 30 : 7;
+
+  return Array.from({ length: days }, (_, index) => {
+    const date = new Date(today);
+    date.setDate(today.getDate() - (days - 1 - index));
+    return getLocalDateKey(date);
+  });
+}
+
+function buildTrendForRange(
+  rangeSessions: FocusSessionHistoryItem[],
+  todayDate: string,
+  range: FocusAnalyticsRange,
+  tasks: Task[]
+): WeeklyFocusTrendItem[] {
+  const dateKeys = getDateKeysForRange(todayDate, range);
+
+  if (range !== 'month') {
+    return dateKeys.map((dateKey) => {
+      const date = getDateFromKey(dateKey);
+      const label =
+        range === 'day'
+          ? 'Today'
+          : date.toLocaleDateString('en-US', { weekday: 'short' }).slice(0, 3);
+      const minutes = rangeSessions
+        .filter((session) => getSessionDateKey(session) === dateKey)
+        .reduce((total, session) => total + session.durationMinutes, 0);
+      const byType = createEmptyFocusTypeTotals();
+
+      rangeSessions
+        .filter((session) => getSessionDateKey(session) === dateKey)
+        .forEach((session) => {
+          const type = getSessionTaskType(session, tasks);
+          byType[type] += session.durationMinutes;
+        });
+
+      return {
+        dateKey,
+        label,
+        minutes,
+        byType,
+      };
+    });
+  }
+
+  const bucketSize = 5;
+  const buckets: WeeklyFocusTrendItem[] = [];
+
+  for (let index = 0; index < dateKeys.length; index += bucketSize) {
+    const bucketKeys = dateKeys.slice(index, index + bucketSize);
+    const firstDate = getDateFromKey(bucketKeys[0]);
+    const lastDate = getDateFromKey(bucketKeys[bucketKeys.length - 1]);
+    const minutes = rangeSessions
+      .filter((session) => bucketKeys.includes(getSessionDateKey(session)))
+      .reduce((total, session) => total + session.durationMinutes, 0);
+    const byType = createEmptyFocusTypeTotals();
+
+    rangeSessions
+      .filter((session) => bucketKeys.includes(getSessionDateKey(session)))
+      .forEach((session) => {
+        const type = getSessionTaskType(session, tasks);
+        byType[type] += session.durationMinutes;
+      });
+
+    buckets.push({
+      dateKey: bucketKeys.join(':'),
+      label: `${firstDate.getDate()}-${lastDate.getDate()}`,
+      minutes,
+      byType,
+    });
+  }
+
+  return buckets;
+}
+
+function getSessionTaskType(
+  session: FocusSessionHistoryItem,
+  tasks: Task[]
+): FocusAnalyticsType {
+  if (
+    session.taskTypeSnapshot === 'task' ||
+    session.taskTypeSnapshot === 'meeting' ||
+    session.taskTypeSnapshot === 'date' ||
+    session.taskTypeSnapshot === 'focus_without_task'
+  ) {
+    return session.taskTypeSnapshot;
+  }
+
+  const linkedTaskId =
+    session.taskId || session.selectedTaskId || session.localTaskId || null;
+  const linkedTask = linkedTaskId
+    ? tasks.find((task) => task.id === linkedTaskId)
+    : undefined;
+
+  return linkedTask?.plannerType || 'focus_without_task';
+}
+
+function getLinkedTaskForHistorySession(
+  session: FocusSessionHistoryItem,
+  tasks: Task[]
+) {
+  const linkedTaskId =
+    session.taskId || session.selectedTaskId || session.localTaskId || null;
+
+  return linkedTaskId ? tasks.find((task) => task.id === linkedTaskId) : undefined;
+}
+
+function getSessionSortTime(session: FocusSessionHistoryItem, tasks: Task[]) {
+  const linkedTask = getLinkedTaskForHistorySession(session, tasks);
+
+  return linkedTask
+    ? getTaskSortTime(linkedTask)
+    : new Date(session.endedAt || session.date).getTime();
+}
+
+function getSessionTimingBucket(
+  session: FocusSessionHistoryItem,
+  tasks: Task[],
+  now = new Date()
+) {
+  const linkedTask = getLinkedTaskForHistorySession(session, tasks);
+
+  if (linkedTask) {
+    return getTaskTimingBucket(linkedTask, now);
+  }
+
+  const sessionDateKey = getLocalDateKey(new Date(session.endedAt || session.date));
+  const todayKey = getLocalDateKey(now);
+
+  if (sessionDateKey < todayKey) return 'overdue';
+  if (sessionDateKey === todayKey) return 'today';
+  return 'upcoming';
+}
+
+function filterAndSortSessions(
+  sessions: FocusSessionHistoryItem[],
+  tasks: Task[],
+  typeFilter: PlannerTypeFilter,
+  sortMode: PlannerTimingSort,
+  now = new Date()
+) {
+  const filteredSessions =
+    typeFilter === 'all'
+      ? sessions
+      : sessions.filter(
+          (session) => getSessionTaskType(session, tasks) === typeFilter
+        );
+
+  return [...filteredSessions].sort((first, second) => {
+    if (sortMode === 'newest' || sortMode === 'oldest') {
+      const firstTime = new Date(first.endedAt || first.date).getTime();
+      const secondTime = new Date(second.endedAt || second.date).getTime();
+      return sortMode === 'newest' ? secondTime - firstTime : firstTime - secondTime;
+    }
+
+    const rank = {
+      overdue: sortMode === 'overdue' ? 0 : sortMode === 'today' ? 2 : 2,
+      today: sortMode === 'today' ? 0 : sortMode === 'overdue' ? 1 : 1,
+      upcoming: sortMode === 'upcoming' ? 0 : 2,
+      unscheduled: 3,
+    };
+    const firstBucket = getSessionTimingBucket(first, tasks, now);
+    const secondBucket = getSessionTimingBucket(second, tasks, now);
+
+    if (rank[firstBucket] !== rank[secondBucket]) {
+      return rank[firstBucket] - rank[secondBucket];
+    }
+
+    return getSessionSortTime(first, tasks) - getSessionSortTime(second, tasks);
+  });
+}
+
 function getTrendAxisLabels(maxMinutes: number) {
   return Array.from({ length: TREND_AXIS_LABEL_COUNT }, (_, index) => {
     const ratio = index / (TREND_AXIS_LABEL_COUNT - 1);
@@ -668,82 +945,11 @@ function getSmoothTrendPoints(points: TrendPlotPoint[]) {
   return smoothPoints;
 }
 
-function createPlaceholderRecentSessions(todayDate: string): FocusSessionHistoryItem[] {
-  const today = getDateFromKey(todayDate);
-  const makeDate = (daysAgo: number, hour: number, minute: number) => {
-    const date = new Date(today);
-    date.setDate(today.getDate() - daysAgo);
-    date.setHours(hour, minute, 0, 0);
-
-    return date.toISOString();
-  };
-  const createPlaceholderSession = (
-    id: string,
-    endedAt: string,
-    durationMinutes: number,
-    taskTitle: string,
-    focusQuality: FocusSessionHistoryItem['focusQuality'],
-    presetName: string,
-    status: FocusSessionHistoryItem['status'],
-    focusScore: number
-  ): FocusSessionHistoryItem => {
-    const startedAt = new Date(
-      new Date(endedAt).getTime() - durationMinutes * 60 * 1000
-    ).toISOString();
-
-    return {
-      id,
-      date: endedAt,
-      startedAt,
-      endedAt,
-      createdAt: endedAt,
-      durationMinutes,
-      taskTitle,
-      selectedTaskTitle: taskTitle,
-      focusQuality,
-      presetName,
-      status,
-      focusScore,
-    };
-  };
-
-  return [
-    createPlaceholderSession(
-      'placeholder-focus-1',
-      makeDate(0, 10, 42),
-      25,
-      'Overdue Assignment',
-      'clean',
-      'Classic Pomodoro',
-      'completed',
-      96
-    ),
-    createPlaceholderSession(
-      'placeholder-focus-2',
-      makeDate(1, 15, 10),
-      15,
-      'Review notes',
-      'distracted',
-      'Quick Focus',
-      'completed',
-      78
-    ),
-    createPlaceholderSession(
-      'placeholder-focus-3',
-      makeDate(2, 9, 25),
-      8,
-      'Plan tiny steps',
-      'clean',
-      'Custom Rhythm',
-      'stopped',
-      55
-    ),
-  ];
-}
-
 function createFocusAnalytics(
   history: FocusSessionHistoryItem[],
-  todayDate: string
+  todayDate: string,
+  tasks: Task[],
+  range: FocusAnalyticsRange
 ): FocusAnalyticsSummary {
   const sortedHistory = history.filter(isRealFocusSession).sort(
     (first, second) =>
@@ -756,22 +962,42 @@ function createFocusAnalytics(
   const todayFocusSessions = sortedHistory.filter(
     (session) => getSessionDateKey(session) === todayDate
   );
-  const today = getDateFromKey(todayDate);
-  const weekDateKeys = Array.from({ length: 7 }, (_, index) => {
-    const date = new Date(today);
-    date.setDate(today.getDate() - (6 - index));
-
-    return getLocalDateKey(date);
-  });
+  const weekDateKeys = getDateKeysForRange(todayDate, 'week');
   const weekDateKeySet = new Set(weekDateKeys);
   const sessionsThisWeek = sortedHistory.filter((session) =>
     weekDateKeySet.has(getSessionDateKey(session))
   );
+  const rangeDateKeys = getDateKeysForRange(todayDate, range);
+  const rangeDateKeySet = new Set(rangeDateKeys);
+  const rangeSessions = sortedHistory.filter((session) =>
+    rangeDateKeySet.has(getSessionDateKey(session))
+  );
+  const completedRangeSessions = rangeSessions.filter(
+    (session) => session.status === 'completed'
+  );
   const taskTotals = new Map<string, number>();
+  const itemTotals = new Map<
+    string,
+    { title: string; type: FocusAnalyticsType; minutes: number; sessions: number }
+  >();
+  const typeTotals = createEmptyFocusTypeTotals();
+  const typeSessionCounts = createEmptyFocusTypeTotals();
 
-  sortedHistory.forEach((session) => {
+  rangeSessions.forEach((session) => {
     const title = getSessionTitle(session);
+    const type = getSessionTaskType(session, tasks);
+    const itemKey = `${type}:${title}`;
+    const currentItem = itemTotals.get(itemKey);
+
     taskTotals.set(title, (taskTotals.get(title) ?? 0) + session.durationMinutes);
+    typeTotals[type] += session.durationMinutes;
+    typeSessionCounts[type] += 1;
+    itemTotals.set(itemKey, {
+      title,
+      type,
+      minutes: (currentItem?.minutes ?? 0) + session.durationMinutes,
+      sessions: (currentItem?.sessions ?? 0) + 1,
+    });
   });
 
   let mostFocusedTask = 'No focus yet';
@@ -783,21 +1009,8 @@ function createFocusAnalytics(
     }
   });
 
-  const weeklyTrend = weekDateKeys.map((dateKey) => {
-    const date = getDateFromKey(dateKey);
-    const label = date.toLocaleDateString('en-US', { weekday: 'short' }).slice(0, 3);
-    const minutes = sessionsThisWeek
-      .filter((session) => getSessionDateKey(session) === dateKey)
-      .reduce((total, session) => total + session.durationMinutes, 0);
-
-    return {
-      dateKey,
-      label,
-      minutes,
-    };
-  });
-  const scoredSessions =
-    sessionsThisWeek.length > 0 ? sessionsThisWeek : sortedHistory;
+  const weeklyTrend = buildTrendForRange(rangeSessions, todayDate, range, tasks);
+  const scoredSessions = rangeSessions.length > 0 ? rangeSessions : sortedHistory;
   const focusScore =
     scoredSessions.length > 0
       ? Math.round(
@@ -811,22 +1024,43 @@ function createFocusAnalytics(
     (total, session) => total + session.durationMinutes,
     0
   );
+  const rangeFocusMinutes = rangeSessions.reduce(
+    (total, session) => total + session.durationMinutes,
+    0
+  );
+  const averageSessionMinutes =
+    rangeSessions.length > 0
+      ? Math.round(rangeFocusMinutes / rangeSessions.length)
+      : 0;
 
   return {
+    range,
+    rangeLabel: getAnalyticsRangeLabel(range),
+    rangeFocusMinutes,
+    rangeCompletedSessions: completedRangeSessions.length,
+    averageSessionMinutes,
     todayFocusMinutes: todayFocusSessions.reduce(
       (total, session) => total + session.durationMinutes,
       0
     ),
     weekFocusMinutes,
-    cleanSessions: sortedHistory.filter(
+    cleanSessions: rangeSessions.filter(
       (session) => session.focusQuality === 'clean'
     ).length,
-    distractedSessions: sortedHistory.filter(
+    distractedSessions: rangeSessions.filter(
       (session) => session.focusQuality === 'distracted'
     ).length,
     mostFocusedTask,
     weeklyTrend,
-    recentSessions: sortedHistory.slice(0, 3),
+    typeBreakdown: focusTypeOrder.map((type) => ({
+      type,
+      minutes: typeTotals[type],
+      sessions: typeSessionCounts[type],
+    })),
+    itemBreakdown: Array.from(itemTotals.values()).sort(
+      (first, second) => second.minutes - first.minutes
+    ),
+    recentSessions: sortedHistory.slice(0, 4),
     latestSession: sortedHistory[0] ?? null,
     latestCompletedSession: completedSessions[0] ?? null,
     completedSessionCount: sortedHistory.length,
@@ -850,31 +1084,28 @@ function WeeklyFocusChart({
   const plotTop = TREND_CHART_VERTICAL_PADDING;
   const plotBottom = TREND_CHART_HEIGHT - TREND_CHART_VERTICAL_PADDING;
   const plotRange = plotBottom - plotTop;
-  const stepX =
-    plotWidth > 0 && data.length > 1 ? plotWidth / (data.length - 1) : 0;
-  const points = data.map((item, index) => {
-    const ratio = Math.min(1, Math.max(0, item.minutes / chartMaxMinutes));
-
-    return {
-      ...item,
-      x: stepX * index,
-      y: plotTop + (1 - ratio) * plotRange,
-    };
-  });
-  const smoothPoints =
-    plotWidth > 0
-      ? getSmoothTrendPoints(points).map((point) => ({
-          x: Math.min(plotWidth, Math.max(0, point.x)),
-          y: Math.min(plotBottom, Math.max(plotTop, point.y)),
-        }))
-      : [];
-  const areaBarWidth =
-    smoothPoints.length > 1
-      ? Math.max(6, plotWidth / (smoothPoints.length - 1) + 2)
-      : 18;
+  const slotWidth = plotWidth > 0 ? plotWidth / Math.max(1, data.length) : 0;
+  const columnWidth =
+    slotWidth > 0 ? Math.max(12, Math.min(34, slotWidth * 0.56)) : 16;
 
   return (
     <View pointerEvents="none" style={[styles.trendCard, style]}>
+      <View style={styles.trendLegend}>
+        {focusTypeOrder.map((type) => (
+          <View key={type} style={styles.trendLegendItem}>
+            <View
+              style={[
+                styles.trendLegendDot,
+                { backgroundColor: focusTypeColors[type] },
+              ]}
+            />
+            <Text numberOfLines={1} style={styles.trendLegendText}>
+              {focusTypeLabels[type]}
+            </Text>
+          </View>
+        ))}
+      </View>
+
       <View style={styles.trendChartBody}>
         <View style={styles.trendYAxis}>
           {axisLabels.map((label, index) => {
@@ -917,76 +1148,46 @@ function WeeklyFocusChart({
               );
             })}
 
-            {smoothPoints.length > 0
-              ? smoothPoints.map((point, index) => {
-                  const areaHeight = Math.max(0, plotBottom - point.y);
-
-                  if (areaHeight <= 0) return null;
-
-                  return (
-                    <LinearGradient
-                      key={`area-${index}`}
-                      pointerEvents="none"
-                      start={{ x: 0, y: 0 }}
-                      end={{ x: 0, y: 1 }}
-                      colors={[
-                        'rgba(45, 181, 105, 0.18)',
-                        'rgba(45, 181, 105, 0.025)',
-                      ]}
-                      style={[
-                        styles.trendAreaColumn,
-                        {
-                          left: point.x - areaBarWidth / 2,
-                          top: point.y,
-                          width: areaBarWidth,
-                          height: areaHeight,
-                        },
-                      ]}
-                    />
-                  );
-                })
-              : null}
-
-            {smoothPoints.length > 0
-              ? smoothPoints.slice(0, -1).map((point, index) => {
-                  const nextPoint = smoothPoints[index + 1];
-                  const deltaX = nextPoint.x - point.x;
-                  const deltaY = nextPoint.y - point.y;
-                  const segmentLength = Math.sqrt(deltaX ** 2 + deltaY ** 2);
-                  const angle = (Math.atan2(deltaY, deltaX) * 180) / Math.PI;
-
-                  return (
-                    <View
-                      key={`segment-${index}`}
-                      pointerEvents="none"
-                      style={[
-                        styles.trendSegment,
-                        {
-                          left: point.x + deltaX / 2 - segmentLength / 2,
-                          top: point.y + deltaY / 2 - 1.5,
-                          width: segmentLength,
-                          transform: [{ rotate: `${angle}deg` }],
-                        },
-                      ]}
-                    />
-                  );
-                })
-              : null}
-
             {plotWidth > 0
-              ? points.map((point) => (
+              ? data.map((item, index) => (
                   <View
-                    key={`${point.dateKey}-dot`}
+                    key={`${item.dateKey}-stack`}
                     pointerEvents="none"
                     style={[
-                      styles.trendDot,
+                      styles.trendTypeColumn,
                       {
-                        left: point.x - TREND_DOT_SIZE / 2,
-                        top: point.y - TREND_DOT_SIZE / 2,
+                        left: slotWidth * index + slotWidth / 2 - columnWidth / 2,
+                        top: plotTop,
+                        width: columnWidth,
+                        height: plotRange,
                       },
                     ]}
                   >
-                    <View style={styles.trendDotCore} />
+                    {focusTypeOrder.map((type) => {
+                      const minutes = item.byType[type];
+                      const height =
+                        chartMaxMinutes > 0
+                          ? Math.max(
+                              minutes > 0 ? 3 : 0,
+                              (minutes / chartMaxMinutes) * plotRange
+                            )
+                          : 0;
+
+                      if (height <= 0) return null;
+
+                      return (
+                        <View
+                          key={`${item.dateKey}-${type}`}
+                          style={[
+                            styles.trendTypeBar,
+                            {
+                              height,
+                              backgroundColor: focusTypeColors[type],
+                            },
+                          ]}
+                        />
+                      );
+                    })}
                   </View>
                 ))
               : null}
@@ -1241,9 +1442,41 @@ export default function CompanionScreen() {
   const [resourceUrl, setResourceUrl] = useState('');
   const [resourceNote, setResourceNote] = useState('');
   const [resourceFinderMessage, setResourceFinderMessage] = useState('');
+  const [resourceTypeFilter, setResourceTypeFilter] =
+    useState<PlannerTypeFilter>('all');
+  const [resourceSortMode, setResourceSortMode] =
+    useState<PlannerTimingSort>('overdue');
+  const [isResourceFilterVisible, setIsResourceFilterVisible] = useState(false);
+  const [resourceSuggestions, setResourceSuggestions] = useState<
+    SmartResourceSuggestion[]
+  >([]);
+  const [isGeneratingResources, setIsGeneratingResources] = useState(false);
+  const [analyticsRange, setAnalyticsRange] =
+    useState<FocusAnalyticsRange>('week');
+  const [sessionTypeFilter, setSessionTypeFilter] =
+    useState<PlannerTypeFilter>('all');
+  const [sessionSortMode, setSessionSortMode] =
+    useState<PlannerTimingSort>('newest');
+  const [isSessionFilterVisible, setIsSessionFilterVisible] = useState(false);
+  const [recentSessionsClearedAt, setRecentSessionsClearedAt] =
+    useState<string | null>(null);
+  const [showClearRecentConfirm, setShowClearRecentConfirm] = useState(false);
+  const [externalLinkPrompt, setExternalLinkPrompt] = useState<{
+    title: string;
+    message: string;
+    url: string;
+  } | null>(null);
+  const [externalLinkError, setExternalLinkError] = useState<{
+    title: string;
+    message: string;
+  } | null>(null);
 
   const tapHintStorageKey = useMemo(
     () => getTapHintStorageKey(companionUserId),
+    [companionUserId]
+  );
+  const recentSessionsClearedStorageKey = useMemo(
+    () => getRecentSessionsClearedStorageKey(companionUserId),
     [companionUserId]
   );
   const greetingPlayer = useVideoPlayer(miloGreetingVideo, (player) => {
@@ -1326,6 +1559,22 @@ export default function CompanionScreen() {
     };
   }, [tapHintStorageKey]);
 
+  useEffect(() => {
+    let isActive = true;
+
+    void loadRecentSessionsClearedAt(recentSessionsClearedStorageKey).then(
+      (clearedAt) => {
+        if (isActive && mountedRef.current) {
+          setRecentSessionsClearedAt(clearedAt);
+        }
+      }
+    );
+
+    return () => {
+      isActive = false;
+    };
+  }, [recentSessionsClearedStorageKey]);
+
   const refreshReduceMotionPreference = useCallback(async () => {
     const nextReduceMotion = await loadReduceMotionPreference();
 
@@ -1343,12 +1592,12 @@ export default function CompanionScreen() {
   }, [focusHistoryUserId]);
 
   const refreshSavedResources = useCallback(async () => {
-    const nextResources = await loadSavedResources();
+    const nextResources = await loadSavedResources(focusHistoryUserId);
 
     if (mountedRef.current) {
       setSavedResources(nextResources);
     }
-  }, []);
+  }, [focusHistoryUserId]);
 
   const openDetailModal = useCallback(
     async (modal: CompanionDetailModal) => {
@@ -1414,6 +1663,14 @@ export default function CompanionScreen() {
     },
     [getLinkedTaskForSession, loadFocusHistory, navigation]
   );
+
+  const handleClearRecentSessionsView = async () => {
+    const clearedAt = new Date().toISOString();
+
+    setRecentSessionsClearedAt(clearedAt);
+    setShowClearRecentConfirm(false);
+    await saveRecentSessionsClearedAt(recentSessionsClearedStorageKey, clearedAt);
+  };
 
   useEffect(() => {
     if (activeDetailModal === 'resources') {
@@ -1493,15 +1750,33 @@ export default function CompanionScreen() {
   }, [displayName, tasks, todayDate]);
 
   const resourceFinderTasks = useMemo(
-    () =>
-      [...tasks].sort((first, second) => {
-        if (first.status !== second.status) {
+    () => {
+      const filteredTasks = filterTasksByPlannerType(tasks, resourceTypeFilter);
+      const now = new Date();
+      const sortedByTiming = sortTasksByTiming(
+        filteredTasks,
+        resourceSortMode,
+        now
+      );
+      const timingPositionByTaskId = new Map(
+        sortedByTiming.map((task, index) => [task.id, index])
+      );
+
+      return [...sortedByTiming].sort((first, second) => {
+        const firstBucket = getTaskTimingBucket(first, now);
+        const secondBucket = getTaskTimingBucket(second, now);
+
+        if (firstBucket === secondBucket && first.status !== second.status) {
           return first.status === 'pending' ? -1 : 1;
         }
 
-        return first.title.localeCompare(second.title);
-      }),
-    [tasks]
+        return (
+          (timingPositionByTaskId.get(first.id) ?? 0) -
+          (timingPositionByTaskId.get(second.id) ?? 0)
+        );
+      });
+    },
+    [resourceSortMode, resourceTypeFilter, tasks]
   );
   const selectedResourceTask = useMemo(
     () =>
@@ -1540,6 +1815,14 @@ export default function CompanionScreen() {
   useEffect(() => {
     setSelectedResourceKeywords(resourceKeywords);
   }, [resourceKeywords]);
+
+  useEffect(() => {
+    setResourceSuggestions(
+      selectedResourceTask
+        ? generateSmartResourceSuggestions(selectedResourceTask)
+        : []
+    );
+  }, [selectedResourceTask]);
 
   useFocusEffect(
     useCallback(() => {
@@ -1587,8 +1870,8 @@ export default function CompanionScreen() {
   );
 
   const focusAnalytics = useMemo(
-    () => createFocusAnalytics(focusHistory, todayDate),
-    [focusHistory, todayDate]
+    () => createFocusAnalytics(focusHistory, todayDate, tasks, analyticsRange),
+    [analyticsRange, focusHistory, tasks, todayDate]
   );
   const rotatingMessages = useMemo(
     () => getRotatingMiloMessages(displayName, companionData, focusAnalytics),
@@ -1656,7 +1939,30 @@ export default function CompanionScreen() {
     latestReactionSession?.focusQuality === 'distracted'
       ? 'Distracted'
       : 'Clean';
-  const recentSessionRows = focusAnalytics.recentSessions;
+  const visibleRecentSessions = useMemo(() => {
+    const clearedAtTime = recentSessionsClearedAt
+      ? new Date(recentSessionsClearedAt).getTime()
+      : 0;
+
+    return focusAnalytics.recentSessions
+      .filter((session) => {
+        if (!clearedAtTime) return true;
+
+        return new Date(session.endedAt || session.date).getTime() > clearedAtTime;
+      })
+      .slice(0, 4);
+  }, [focusAnalytics.recentSessions, recentSessionsClearedAt]);
+  const filteredSessionRows = useMemo(
+    () =>
+      filterAndSortSessions(
+        focusHistory.filter(isRealFocusSession),
+        tasks,
+        sessionTypeFilter,
+        sessionSortMode
+      ),
+    [focusHistory, sessionSortMode, sessionTypeFilter, tasks]
+  );
+  const recentSessionRows = visibleRecentSessions;
   const focusScoreLabel =
     focusAnalytics.focusScore === null ? '--' : `${focusAnalytics.focusScore}%`;
 
@@ -2095,6 +2401,119 @@ export default function CompanionScreen() {
     );
   };
 
+  const handleGenerateSmartResources = async () => {
+    if (!selectedResourceTask || isGeneratingResources) {
+      return;
+    }
+
+    const localSuggestions = generateSmartResourceSuggestions(selectedResourceTask);
+    setResourceSuggestions(localSuggestions);
+    setIsGeneratingResources(true);
+    setResourceFinderMessage('Milo is preparing smart resources...');
+
+    try {
+      const aiSettings = await loadMiloAiSettings();
+
+      if (aiSettings.aiMode !== 'online') {
+        setResourceFinderMessage(
+          'Local Only is on, so Milo prepared safe local resource cards.'
+        );
+        return;
+      }
+
+      await incrementMiloAiCallsToday();
+      const aiReply = await askMiloAi({
+        message: `Find useful resource suggestions for this ${selectedResourceTask.plannerType}: ${selectedResourceTask.title}. Include search ideas, preparation links, docs or scholar hints only when relevant.`,
+        tasks: [selectedResourceTask],
+        recentMessages: [],
+      });
+      const aiText = aiReply.text?.trim();
+
+      if (aiText) {
+        setResourceSuggestions([
+          {
+            id: `${selectedResourceTask.id}-ai-briefing`,
+            taskId: selectedResourceTask.id,
+            taskTitle: selectedResourceTask.title,
+            taskTypeSnapshot: selectedResourceTask.plannerType,
+            title: 'AI Smart Milo briefing',
+            description: aiText,
+            category:
+              selectedResourceTask.plannerType === 'meeting'
+                ? 'Preparation'
+                : selectedResourceTask.plannerType === 'date'
+                ? 'Plan Checklist'
+                : 'Productivity',
+            reason:
+              'Milo used the secure Supabase AI path to turn your item into resource directions.',
+            url: buildGoogleSearchUrl(buildResourceSearchQuery(selectedResourceTask)),
+            sourceType: 'Search',
+          },
+          ...localSuggestions,
+        ]);
+        setResourceFinderMessage('AI Smart Milo added a resource briefing.');
+      } else {
+        setResourceFinderMessage('Milo kept the local resource cards ready.');
+      }
+    } catch (error) {
+      console.warn('Failed to generate AI resource suggestions:', error);
+      setResourceFinderMessage(
+        'AI was not available, so Milo kept the local resource cards ready.'
+      );
+    } finally {
+      setIsGeneratingResources(false);
+    }
+  };
+
+  const requestOpenExternalLink = ({
+    title,
+    url,
+  }: {
+    title: string;
+    url: string;
+  }) => {
+    const openableUrl = getOpenableResourceUrl(url);
+
+    setExternalLinkPrompt({
+      title: 'Open resource?',
+      message: `Milo will open "${title}" outside FocusMate. You can come back anytime.`,
+      url: openableUrl,
+    });
+  };
+
+  const handleConfirmOpenExternalLink = async () => {
+    const url = externalLinkPrompt?.url;
+    setExternalLinkPrompt(null);
+
+    if (!url) {
+      setExternalLinkError({
+        title: 'Resource not ready',
+        message: 'Milo does not see a valid link for this resource yet.',
+      });
+      return;
+    }
+
+    try {
+      const canOpen = await Linking.canOpenURL(url);
+
+      if (!canOpen) {
+        setExternalLinkError({
+          title: 'Could not open resource',
+          message: 'This device cannot open that link right now.',
+        });
+        return;
+      }
+
+      await Linking.openURL(url);
+    } catch (error) {
+      console.warn('Failed to open external resource:', error);
+      setExternalLinkError({
+        title: 'Could not open resource',
+        message: 'Milo could not open that resource right now.',
+      });
+    }
+  };
+
   const handleSearchResourceWeb = async () => {
     if (!selectedResourceTask) {
       setResourceFinderMessage('Choose a task first so Milo knows what to find.');
@@ -2108,13 +2527,10 @@ export default function CompanionScreen() {
 
     const query = buildResourceSearchQuery(activeResourceKeywords);
 
-    try {
-      await Linking.openURL(buildGoogleSearchUrl(query));
-      setResourceFinderMessage('Milo opened a Google search for this task.');
-    } catch (error) {
-      console.warn('Failed to open resource search:', error);
-      setResourceFinderMessage('Milo could not open the web search right now.');
-    }
+    requestOpenExternalLink({
+      title: 'Google search',
+      url: buildGoogleSearchUrl(query),
+    });
   };
 
   const handleShowSaveResource = () => {
@@ -2140,10 +2556,11 @@ export default function CompanionScreen() {
     const nextResources = await saveResource({
       taskId: selectedResourceTask?.id,
       taskTitle: selectedResourceTask?.title,
+      taskTypeSnapshot: selectedResourceTask?.plannerType ?? null,
       resourceTitle: trimmedTitle,
       resourceUrl: getOpenableResourceUrl(trimmedUrl),
       note: resourceNote.trim() || undefined,
-    });
+    }, focusHistoryUserId);
 
     if (!mountedRef.current) return;
 
@@ -2152,24 +2569,50 @@ export default function CompanionScreen() {
     setResourceUrl('');
     setResourceNote('');
     setResourceFinderMode('saved');
-    setResourceFinderMessage('Saved locally. Milo will remember this resource.');
+    setResourceFinderMessage(
+      focusHistoryUserId
+        ? 'Saved to Milo resources.'
+        : 'Saved locally. Milo will remember this resource on this device.'
+    );
   };
 
   const handleOpenResource = async (resource: SavedResource) => {
-    try {
-      await Linking.openURL(getOpenableResourceUrl(resource.resourceUrl));
-    } catch (error) {
-      console.warn('Failed to open saved resource:', error);
-      setResourceFinderMessage('Milo could not open that resource right now.');
-    }
+    requestOpenExternalLink({
+      title: resource.resourceTitle,
+      url: resource.resourceUrl,
+    });
   };
 
   const handleDeleteSavedResource = async (resourceId: string) => {
-    const nextResources = await deleteSavedResource(resourceId);
+    const nextResources = await deleteSavedResource(resourceId, focusHistoryUserId);
 
     if (mountedRef.current) {
       setSavedResources(nextResources);
       setResourceFinderMessage('Resource removed from Milo Resource Finder.');
+    }
+  };
+
+  const handleSaveSuggestedResource = async (resource: SmartResourceSuggestion) => {
+    const nextResources = await saveResource(
+      {
+        id: resource.id,
+        taskId: resource.taskId,
+        taskTitle: resource.taskTitle,
+        taskTypeSnapshot: resource.taskTypeSnapshot,
+        resourceTitle: resource.title,
+        resourceUrl: resource.url,
+        description: resource.description,
+        category: resource.category,
+        sourceType: resource.sourceType,
+        reason: resource.reason,
+        note: resource.reason,
+      },
+      focusHistoryUserId
+    );
+
+    if (mountedRef.current) {
+      setSavedResources(nextResources);
+      setResourceFinderMessage('Saved this resource card for later.');
     }
   };
 
@@ -2297,6 +2740,34 @@ export default function CompanionScreen() {
     </View>
   );
 
+  const renderAnalyticsRangeTabs = () => (
+    <View style={styles.analyticsRangeTabs}>
+      {(['day', 'week', 'month'] as FocusAnalyticsRange[]).map((range) => {
+        const active = analyticsRange === range;
+
+        return (
+          <TouchableOpacity
+            key={range}
+            activeOpacity={0.84}
+            style={[styles.analyticsRangeTab, active && styles.analyticsRangeTabActive]}
+            onPress={() => setAnalyticsRange(range)}
+            accessibilityRole="button"
+            accessibilityLabel={`Show ${range} focus analytics`}
+          >
+            <Text
+              style={[
+                styles.analyticsRangeTabText,
+                active && styles.analyticsRangeTabTextActive,
+              ]}
+            >
+              {range === 'day' ? 'Day' : range === 'week' ? 'Week' : 'Month'}
+            </Text>
+          </TouchableOpacity>
+        );
+      })}
+    </View>
+  );
+
   const renderAnalyticsModalContent = () => {
     if (focusAnalytics.completedSessionCount === 0) {
       return (
@@ -2317,13 +2788,13 @@ export default function CompanionScreen() {
       <>
         <View style={styles.modalMetricGrid}>
           {renderModalMetric(
-            'Focus minutes this week',
-            formatMinutesLabel(focusAnalytics.weekFocusMinutes),
+            `${focusAnalytics.rangeLabel} focus`,
+            formatMinutesLabel(focusAnalytics.rangeFocusMinutes),
             'time-outline'
           )}
           {renderModalMetric(
-            'Total sessions this week',
-            `${focusAnalytics.sessionsThisWeek}`,
+            'Completed sessions',
+            `${focusAnalytics.rangeCompletedSessions}`,
             'albums-outline',
             theme.colors.blue,
             theme.colors.blueSoft
@@ -2341,6 +2812,13 @@ export default function CompanionScreen() {
             'alert-circle',
             '#B7791F',
             theme.colors.yellowSoft
+          )}
+          {renderModalMetric(
+            'Average session',
+            formatMinutesLabel(focusAnalytics.averageSessionMinutes),
+            'timer-outline',
+            theme.colors.primaryDark,
+            theme.colors.primarySoft
           )}
           {renderModalMetric(
             'Day streak',
@@ -2366,12 +2844,71 @@ export default function CompanionScreen() {
         </View>
 
         <View style={styles.modalSection}>
-          <Text style={styles.modalSectionTitle}>Weekly focus trend</Text>
+          {renderAnalyticsRangeTabs()}
+          <Text style={styles.modalSectionTitle}>
+            {focusAnalytics.rangeLabel} focus trend
+          </Text>
           <WeeklyFocusChart
             data={focusAnalytics.weeklyTrend}
             style={styles.modalTrendCard}
           />
         </View>
+
+        <View style={styles.modalSection}>
+          <Text style={styles.modalSectionTitle}>Focus time by type</Text>
+          {focusAnalytics.typeBreakdown.map((item) => (
+            <View key={item.type} style={styles.breakdownRow}>
+              <Text style={styles.breakdownLabel}>
+                {focusTypeLabels[item.type]}
+              </Text>
+              <Text style={styles.breakdownValue}>
+                {formatMinutesLabel(item.minutes)} | {item.sessions} sessions
+              </Text>
+            </View>
+          ))}
+        </View>
+
+        {focusAnalytics.itemBreakdown.length > 0 ? (
+          <View style={styles.modalSection}>
+            <Text style={styles.modalSectionTitle}>Time spent by item</Text>
+            {focusAnalytics.itemBreakdown.slice(0, 6).map((item) => (
+              <View key={`${item.type}-${item.title}`} style={styles.breakdownRow}>
+                <View style={styles.breakdownItemCopy}>
+                  <Text numberOfLines={1} style={styles.breakdownLabel}>
+                    {item.title}
+                  </Text>
+                  <View
+                    style={[
+                      styles.breakdownTypePill,
+                      { backgroundColor: `${focusTypeColors[item.type]}22` },
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.breakdownTypeText,
+                        { color: focusTypeColors[item.type] },
+                      ]}
+                    >
+                      {focusTypeLabels[item.type]}
+                    </Text>
+                  </View>
+                </View>
+                <Text style={styles.breakdownValue}>
+                  {formatMinutesLabel(item.minutes)}
+                  {'\n'}
+                  {item.sessions} {item.sessions === 1 ? 'session' : 'sessions'}
+                </Text>
+              </View>
+            ))}
+          </View>
+        ) : (
+          <View style={styles.modalSection}>
+            <Text style={styles.modalSectionTitle}>Time spent by item</Text>
+            <Text style={styles.resourceFinderMessage}>
+              No focus data yet. Start a Pomodoro and Milo will track it here.
+            </Text>
+          </View>
+        )}
 
         <View style={styles.modalInsightCard}>
           <View style={styles.modalInsightIcon}>
@@ -2398,9 +2935,9 @@ export default function CompanionScreen() {
   };
 
   const renderRecentSessionsModalContent = () => {
-    const focusSessions = focusHistory.filter(isRealFocusSession);
+    const focusSessions = filteredSessionRows;
 
-    if (focusSessions.length === 0) {
+    if (focusHistory.filter(isRealFocusSession).length === 0) {
       return (
         <>
           {renderEmptyState(
@@ -2417,6 +2954,38 @@ export default function CompanionScreen() {
 
     return (
       <>
+        <View style={styles.sessionModalToolbar}>
+          <TouchableOpacity
+            activeOpacity={0.84}
+            style={styles.sessionToolbarButton}
+            onPress={() => setIsSessionFilterVisible(true)}
+            accessibilityRole="button"
+            accessibilityLabel="Filter and sort sessions"
+          >
+            <Ionicons name="options-outline" size={14} color={theme.colors.primaryDark} />
+            <Text style={styles.sessionToolbarButtonText}>Filter</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            activeOpacity={0.84}
+            style={styles.sessionToolbarButton}
+            onPress={() => setShowClearRecentConfirm(true)}
+            accessibilityRole="button"
+            accessibilityLabel="Clear recent sessions view"
+          >
+            <Ionicons name="trash-outline" size={14} color={theme.colors.danger} />
+            <Text style={[styles.sessionToolbarButtonText, { color: theme.colors.danger }]}>
+              Clear view
+            </Text>
+          </TouchableOpacity>
+        </View>
+
+        {focusSessions.length === 0 ? (
+          <Text style={styles.resourceFinderMessage}>
+            Milo found no sessions for this filter.
+          </Text>
+        ) : null}
+
         <View style={styles.modalSessionList}>
           {focusSessions.map((session) => {
             const statusMeta = focusSessionStatusMeta[session.status];
@@ -2684,10 +3253,97 @@ export default function CompanionScreen() {
     );
   };
 
+  const renderResourceFilterChips = () => (
+    <View style={styles.resourceFilterCard}>
+      <View style={styles.resourceFilterGroup}>
+        <Text style={styles.resourceFilterLabel}>Type</Text>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.resourceFilterChipRow}
+        >
+          {plannerTypeFilters.map((filter) => {
+            const active = resourceTypeFilter === filter.value;
+
+            return (
+              <TouchableOpacity
+                key={filter.value}
+                activeOpacity={0.82}
+                style={[
+                  styles.resourceFilterChip,
+                  active && styles.resourceFilterChipActive,
+                ]}
+                onPress={() => setResourceTypeFilter(filter.value)}
+                accessibilityRole="button"
+                accessibilityLabel={`Show ${filter.label} resources`}
+              >
+                <Text
+                  style={[
+                    styles.resourceFilterChipText,
+                    active && styles.resourceFilterChipTextActive,
+                  ]}
+                >
+                  {filter.label}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </ScrollView>
+      </View>
+
+      <View style={styles.resourceFilterGroup}>
+        <Text style={styles.resourceFilterLabel}>When</Text>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.resourceFilterChipRow}
+        >
+          {plannerTimingSorts.map((sort) => {
+            const active = resourceSortMode === sort.value;
+
+            return (
+              <TouchableOpacity
+                key={sort.value}
+                activeOpacity={0.82}
+                style={[
+                  styles.resourceFilterChip,
+                  active && styles.resourceFilterChipActive,
+                ]}
+                onPress={() => setResourceSortMode(sort.value)}
+                accessibilityRole="button"
+                accessibilityLabel={`Sort Resource Finder by ${sort.label}`}
+              >
+                <Text
+                  style={[
+                    styles.resourceFilterChipText,
+                    active && styles.resourceFilterChipTextActive,
+                  ]}
+                >
+                  {sort.label}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </ScrollView>
+      </View>
+    </View>
+  );
+
   const renderResourceTaskList = () => (
-    <View style={styles.resourceTaskList}>
+    <ScrollView
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      style={styles.resourceTaskScroller}
+      contentContainerStyle={styles.resourceTaskList}
+    >
       {resourceFinderTasks.map((task) => {
         const isSelected = task.id === selectedResourceTaskId;
+        const iconName =
+          task.plannerType === 'meeting'
+            ? 'videocam-outline'
+            : task.plannerType === 'date'
+            ? 'calendar-outline'
+            : 'checkmark-circle-outline';
 
         return (
           <TouchableOpacity
@@ -2701,8 +3357,31 @@ export default function CompanionScreen() {
             accessibilityRole="button"
             accessibilityLabel={`Choose ${task.title} for resource search`}
           >
+            <View style={styles.resourceTaskTopRow}>
+              <View
+                style={[
+                  styles.resourceTaskIcon,
+                  isSelected && styles.resourceTaskIconSelected,
+                ]}
+              >
+                <Ionicons
+                  name={iconName}
+                  size={15}
+                  color={isSelected ? theme.colors.primaryDark : theme.colors.primary}
+                />
+              </View>
+              <Text
+                numberOfLines={1}
+                style={[
+                  styles.resourceTaskType,
+                  isSelected && styles.resourceTaskMetaSelected,
+                ]}
+              >
+                {task.plannerType}
+              </Text>
+            </View>
             <Text
-              numberOfLines={1}
+              numberOfLines={2}
               style={[
                 styles.resourceTaskTitle,
                 isSelected && styles.resourceTaskTitleSelected,
@@ -2717,13 +3396,107 @@ export default function CompanionScreen() {
                 isSelected && styles.resourceTaskMetaSelected,
               ]}
             >
-              {task.plannerType} | {task.priority}
+              {task.priority} | {getResourceTaskDateLabel(task)}
             </Text>
           </TouchableOpacity>
         );
       })}
-    </View>
+    </ScrollView>
   );
+
+  const renderSmartResourceCards = () => {
+    if (!selectedResourceTask) {
+      return null;
+    }
+
+    return (
+      <View style={styles.modalSection}>
+        <View style={styles.resourceSectionHeader}>
+          <Text style={styles.modalSectionTitle}>Smart Milo suggestions</Text>
+          <TouchableOpacity
+            activeOpacity={0.84}
+            style={styles.resourceMiniButton}
+            onPress={() => void handleGenerateSmartResources()}
+            disabled={isGeneratingResources}
+            accessibilityRole="button"
+            accessibilityLabel="Generate AI Smart Milo resource suggestions"
+          >
+            <Ionicons
+              name="sparkles-outline"
+              size={13}
+              color={theme.colors.primaryDark}
+            />
+            <Text style={styles.resourceMiniButtonText}>
+              {isGeneratingResources ? 'Thinking' : 'AI Smart Milo'}
+            </Text>
+          </TouchableOpacity>
+        </View>
+
+        <View style={styles.resourceSuggestionList}>
+          {resourceSuggestions.map((resource) => (
+            <View key={resource.id} style={styles.resourceSuggestionCard}>
+              <View style={styles.resourceSavedHeader}>
+                <View style={styles.resourceSavedCopy}>
+                  <View style={styles.resourceSuggestionMetaRow}>
+                    <Text style={styles.resourceSourcePill}>
+                      {resource.sourceType}
+                    </Text>
+                    <Text style={styles.resourceCategoryPill}>
+                      {resource.category}
+                    </Text>
+                  </View>
+                  <Text numberOfLines={2} style={styles.resourceSavedTitle}>
+                    {resource.title}
+                  </Text>
+                </View>
+                <Ionicons
+                  name="sparkles"
+                  size={18}
+                  color={theme.colors.primaryDark}
+                />
+              </View>
+
+              <Text style={styles.resourceSavedNote}>{resource.description}</Text>
+              <Text style={styles.resourceReasonText}>{resource.reason}</Text>
+
+              <View style={styles.resourceSavedActions}>
+                <TouchableOpacity
+                  activeOpacity={0.84}
+                  style={[
+                    styles.resourceSavedActionButton,
+                    styles.resourceSavedOpenButton,
+                  ]}
+                  onPress={() =>
+                    requestOpenExternalLink({
+                      title: resource.title,
+                      url: resource.url,
+                    })
+                  }
+                  accessibilityRole="button"
+                  accessibilityLabel={`Open ${resource.title}`}
+                >
+                  <Text style={styles.resourceSavedOpenText}>Open</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  activeOpacity={0.84}
+                  style={[
+                    styles.resourceSavedActionButton,
+                    styles.resourceSecondaryButton,
+                  ]}
+                  onPress={() => void handleSaveSuggestedResource(resource)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Save ${resource.title}`}
+                >
+                  <Text style={styles.resourceSecondaryButtonText}>Save</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          ))}
+        </View>
+      </View>
+    );
+  };
 
   const renderResourceFinderActions = () => (
     <View style={styles.resourceActionGrid}>
@@ -2746,11 +3519,11 @@ export default function CompanionScreen() {
       <TouchableOpacity
         activeOpacity={0.84}
         style={[styles.resourceActionButton, styles.resourceSecondaryButton]}
-        onPress={handleShowSaveResource}
+        onPress={() => setIsResourceFilterVisible(true)}
         accessibilityRole="button"
-        accessibilityLabel="Save a resource"
+        accessibilityLabel="Filter Resource Finder"
       >
-        <Text style={styles.resourceSecondaryButtonText}>Save Resource</Text>
+        <Text style={styles.resourceSecondaryButtonText}>Filter</Text>
       </TouchableOpacity>
 
       <TouchableOpacity
@@ -2763,6 +3536,16 @@ export default function CompanionScreen() {
         <Text style={styles.resourceSecondaryButtonText}>
           Open Saved Resources
         </Text>
+      </TouchableOpacity>
+
+      <TouchableOpacity
+        activeOpacity={0.84}
+        style={[styles.resourceActionButton, styles.resourceSecondaryButton]}
+        onPress={handleShowSaveResource}
+        accessibilityRole="button"
+        accessibilityLabel="Save a resource"
+      >
+        <Text style={styles.resourceSecondaryButtonText}>Save Resource</Text>
       </TouchableOpacity>
     </View>
   );
@@ -2884,12 +3667,25 @@ export default function CompanionScreen() {
   );
 
   const renderResourceFinderModalContent = () => {
+    const hasPlannerItems = tasks.length > 0;
+
     if (resourceFinderTasks.length === 0) {
       return (
         <View>
+          <View style={styles.resourceFinderHintCard}>
+            <MiloMoodImage mood="waving" size={46} />
+            <Text style={styles.resourceFinderHintText}>
+              Milo can search the web, generate AI Smart Milo ideas, and save the best links for your planner items.
+            </Text>
+          </View>
+
+          {renderResourceFilterChips()}
+
           {renderEmptyState(
-            'Choose a task',
-            'Choose a task and Milo will suggest helpful links.'
+            hasPlannerItems ? 'No items for this filter' : 'Choose a task',
+            hasPlannerItems
+              ? 'Try another type or timing filter so Milo can find a matching planner item.'
+              : 'Create a task, meeting, or date and Milo will suggest helpful links.'
           )}
           {resourceFinderMode === 'save' ? renderResourceSaveForm() : null}
           {resourceFinderMode === 'saved' ? renderSavedResourceList() : null}
@@ -2900,14 +3696,14 @@ export default function CompanionScreen() {
 
     return (
       <View>
-        {!selectedResourceTask ? (
-          <View style={styles.resourceFinderHintCard}>
-            <MiloMoodImage mood="waving" size={46} />
-            <Text style={styles.resourceFinderHintText}>
-              Choose a task and Milo will suggest helpful links.
-            </Text>
-          </View>
-        ) : null}
+        <View style={styles.resourceFinderHintCard}>
+          <MiloMoodImage mood="waving" size={46} />
+          <Text style={styles.resourceFinderHintText}>
+            Choose a planner item, tune the filters, then let Milo suggest search keywords or AI-curated resources.
+          </Text>
+        </View>
+
+        {renderResourceFilterChips()}
 
         <View style={styles.modalSection}>
           <Text style={styles.modalSectionTitle}>Choose a task</Text>
@@ -2939,6 +3735,8 @@ export default function CompanionScreen() {
             </View>
           </View>
         ) : null}
+
+        {renderSmartResourceCards()}
 
         {resourceKeywords.length > 0 ? (
           <View style={styles.modalSection}>
@@ -3409,7 +4207,7 @@ export default function CompanionScreen() {
           <View style={styles.analyticsHeader}>
             <Text style={styles.dashboardCardTitle}>Focus Analytics</Text>
             <View style={styles.periodPill}>
-              <Text style={styles.periodPillText}>This week</Text>
+              <Text style={styles.periodPillText}>{focusAnalytics.rangeLabel}</Text>
               <Ionicons
                 name="chevron-down"
                 size={12}
@@ -3417,6 +4215,8 @@ export default function CompanionScreen() {
               />
             </View>
           </View>
+
+          {renderAnalyticsRangeTabs()}
 
           <View style={styles.analyticsStatGrid}>
             <View style={styles.analyticsStatItem}>
@@ -3433,7 +4233,7 @@ export default function CompanionScreen() {
                 minimumFontScale={0.78}
                 style={styles.analyticsStatValue}
               >
-                {formatMinutesLabel(focusAnalytics.weekFocusMinutes)}
+                {formatMinutesLabel(focusAnalytics.rangeFocusMinutes)}
               </Text>
               <Text numberOfLines={1} style={styles.analyticsStatLabel}>
                 Focus time
@@ -3445,7 +4245,7 @@ export default function CompanionScreen() {
                 <Ionicons name="albums-outline" size={18} color={theme.colors.blue} />
               </View>
               <Text numberOfLines={1} style={styles.analyticsStatValue}>
-                {focusAnalytics.sessionsThisWeek}
+                {focusAnalytics.rangeCompletedSessions}
               </Text>
               <Text numberOfLines={1} style={styles.analyticsStatLabel}>
                 Sessions
@@ -3492,14 +4292,26 @@ export default function CompanionScreen() {
         <View style={styles.recentSessionsCard}>
           <View style={styles.analyticsHeader}>
             <Text style={styles.dashboardCardTitle}>Recent Sessions</Text>
-            <TouchableOpacity
-              activeOpacity={0.78}
-              onPress={() => void openDetailModal('sessions')}
-              accessibilityRole="button"
-              accessibilityLabel="See all focus sessions"
-            >
-              <Text style={styles.seeAllText}>See all &gt;</Text>
-            </TouchableOpacity>
+            <View style={styles.recentHeaderActions}>
+              {recentSessionRows.length > 0 ? (
+                <TouchableOpacity
+                  activeOpacity={0.78}
+                  onPress={() => setShowClearRecentConfirm(true)}
+                  accessibilityRole="button"
+                  accessibilityLabel="Clear recent sessions view"
+                >
+                  <Text style={styles.clearRecentText}>Clear</Text>
+                </TouchableOpacity>
+              ) : null}
+              <TouchableOpacity
+                activeOpacity={0.78}
+                onPress={() => void openDetailModal('sessions')}
+                accessibilityRole="button"
+                accessibilityLabel="See all focus sessions"
+              >
+                <Text style={styles.seeAllText}>See all &gt;</Text>
+              </TouchableOpacity>
+            </View>
           </View>
 
           {recentSessionRows.length > 0 ? (
@@ -3754,6 +4566,68 @@ export default function CompanionScreen() {
           </View>
         </View>
       </Modal>
+
+      <PlannerFilterSortModal
+        visible={isResourceFilterVisible}
+        title="Resource Finder filters"
+        typeFilter={resourceTypeFilter}
+        sortMode={resourceSortMode}
+        onTypeFilterChange={setResourceTypeFilter}
+        onSortModeChange={setResourceSortMode}
+        onClose={() => setIsResourceFilterVisible(false)}
+      />
+
+      <PlannerFilterSortModal
+        visible={isSessionFilterVisible}
+        title="Session filters"
+        typeFilter={sessionTypeFilter}
+        sortMode={sessionSortMode}
+        allowSessionSorts
+        onTypeFilterChange={setSessionTypeFilter}
+        onSortModeChange={setSessionSortMode}
+        onClose={() => setIsSessionFilterVisible(false)}
+      />
+
+      <FocusMateConfirmModal
+        visible={showClearRecentConfirm}
+        title="Clear recent sessions?"
+        message="This only cleans the Recent Sessions view. Milo will still keep your focus history for analytics."
+        primaryLabel="Clear view"
+        secondaryLabel="Cancel"
+        icon="trash-outline"
+        tone="warning"
+        onClose={() => setShowClearRecentConfirm(false)}
+        onPrimary={() => void handleClearRecentSessionsView()}
+      />
+
+      <FocusMateConfirmModal
+        visible={Boolean(externalLinkPrompt)}
+        title={externalLinkPrompt?.title || 'Open resource?'}
+        message={
+          externalLinkPrompt?.message ||
+          'Milo will open this resource outside FocusMate.'
+        }
+        primaryLabel="Open"
+        secondaryLabel="Cancel"
+        icon="open-outline"
+        onClose={() => setExternalLinkPrompt(null)}
+        onPrimary={() => void handleConfirmOpenExternalLink()}
+      />
+
+      <FocusMateConfirmModal
+        visible={Boolean(externalLinkError)}
+        title={externalLinkError?.title || 'Could not open'}
+        message={
+          externalLinkError?.message ||
+          'Milo could not open that resource right now.'
+        }
+        primaryLabel="OK"
+        secondaryLabel="Close"
+        icon="alert-circle-outline"
+        tone="warning"
+        onClose={() => setExternalLinkError(null)}
+        onPrimary={() => setExternalLinkError(null)}
+      />
     </ScreenContainer>
   );
 }
@@ -4816,6 +5690,33 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     marginRight: 4,
   },
+  analyticsRangeTabs: {
+    flexDirection: 'row',
+    backgroundColor: theme.colors.input,
+    borderRadius: 999,
+    padding: 4,
+    borderWidth: 1,
+    borderColor: theme.colors.inputBorder,
+    marginBottom: 12,
+  },
+  analyticsRangeTab: {
+    flex: 1,
+    minHeight: 30,
+    borderRadius: 999,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  analyticsRangeTabActive: {
+    backgroundColor: theme.colors.primary,
+  },
+  analyticsRangeTabText: {
+    color: theme.colors.textSoft,
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  analyticsRangeTabTextActive: {
+    color: '#FFFFFF',
+  },
   analyticsStatGrid: {
     flexDirection: 'row',
     alignItems: 'stretch',
@@ -4882,6 +5783,33 @@ const styles = StyleSheet.create({
     paddingBottom: 11,
     overflow: 'hidden',
   },
+  trendLegend: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 7,
+    marginBottom: 9,
+  },
+  trendLegendItem: {
+    minHeight: 22,
+    borderRadius: 999,
+    backgroundColor: theme.colors.card,
+    borderWidth: 1,
+    borderColor: theme.colors.inputBorder,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+  },
+  trendLegendDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    marginRight: 5,
+  },
+  trendLegendText: {
+    color: theme.colors.textSoft,
+    fontSize: 9,
+    fontWeight: '900',
+  },
   trendChartBody: {
     flexDirection: 'row',
     alignItems: 'flex-start',
@@ -4916,6 +5844,17 @@ const styles = StyleSheet.create({
     right: 0,
     height: 1,
     backgroundColor: theme.colors.divider,
+  },
+  trendTypeColumn: {
+    position: 'absolute',
+    justifyContent: 'flex-end',
+    alignItems: 'stretch',
+    borderRadius: 999,
+    overflow: 'hidden',
+  },
+  trendTypeBar: {
+    width: '100%',
+    minHeight: 3,
   },
   trendAreaColumn: {
     position: 'absolute',
@@ -5387,6 +6326,72 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     lineHeight: 19,
   },
+  breakdownRow: {
+    minHeight: 36,
+    borderRadius: 14,
+    backgroundColor: theme.colors.input,
+    borderWidth: 1,
+    borderColor: theme.colors.inputBorder,
+    paddingHorizontal: 12,
+    marginBottom: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  breakdownItemCopy: {
+    flex: 1,
+    minWidth: 0,
+    marginRight: 10,
+  },
+  breakdownLabel: {
+    flex: 1,
+    color: theme.colors.text,
+    fontSize: 12,
+    fontWeight: '900',
+    marginRight: 10,
+  },
+  breakdownValue: {
+    color: theme.colors.primaryDark,
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  breakdownTypePill: {
+    alignSelf: 'flex-start',
+    overflow: 'hidden',
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    marginTop: 4,
+  },
+  breakdownTypeText: {
+    fontSize: 9,
+    fontWeight: '900',
+  },
+  sessionModalToolbar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+    marginBottom: 12,
+  },
+  sessionToolbarButton: {
+    flex: 1,
+    minHeight: 38,
+    borderRadius: 18,
+    backgroundColor: theme.colors.input,
+    borderWidth: 1,
+    borderColor: theme.colors.inputBorder,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 10,
+  },
+  sessionToolbarButtonText: {
+    color: theme.colors.primaryDark,
+    fontSize: 12,
+    fontWeight: '900',
+    marginLeft: 5,
+  },
   modalSessionList: {
     gap: 10,
   },
@@ -5510,32 +6515,101 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     lineHeight: 18,
   },
+  resourceFilterCard: {
+    marginTop: 14,
+    borderRadius: 22,
+    backgroundColor: theme.colors.card,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    padding: 12,
+    gap: 10,
+  },
+  resourceFilterGroup: {
+    gap: 7,
+  },
+  resourceFilterLabel: {
+    color: theme.colors.text,
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  resourceFilterChipRow: {
+    gap: 8,
+    paddingRight: 4,
+  },
+  resourceFilterChip: {
+    minHeight: 31,
+    borderRadius: 16,
+    backgroundColor: theme.colors.input,
+    borderWidth: 1,
+    borderColor: theme.colors.inputBorder,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 11,
+  },
+  resourceFilterChipActive: {
+    backgroundColor: theme.colors.primaryDark,
+    borderColor: theme.colors.primaryDark,
+  },
+  resourceFilterChipText: {
+    color: theme.colors.textSoft,
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  resourceFilterChipTextActive: {
+    color: theme.colors.white,
+  },
+  resourceTaskScroller: {
+    marginHorizontal: -2,
+  },
   resourceTaskList: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 9,
+    gap: 10,
+    paddingHorizontal: 2,
+    paddingRight: 6,
   },
   resourceTaskChip: {
-    flexGrow: 1,
-    flexBasis: '47%',
-    minWidth: 132,
-    minHeight: 58,
+    width: 178,
+    minHeight: 98,
     borderRadius: 18,
     backgroundColor: theme.colors.card,
     borderWidth: 1,
     borderColor: theme.colors.border,
-    paddingHorizontal: 11,
-    paddingVertical: 9,
-    justifyContent: 'center',
+    padding: 11,
   },
   resourceTaskChipSelected: {
     backgroundColor: theme.colors.primaryDark,
     borderColor: theme.colors.primaryDark,
   },
+  resourceTaskTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    marginBottom: 8,
+  },
+  resourceTaskIcon: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: theme.colors.primarySoft,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  resourceTaskIconSelected: {
+    backgroundColor: theme.colors.white,
+  },
+  resourceTaskType: {
+    flex: 1,
+    minWidth: 0,
+    color: theme.colors.primaryDark,
+    fontSize: 10,
+    fontWeight: '900',
+    textTransform: 'capitalize',
+  },
   resourceTaskTitle: {
     color: theme.colors.text,
     fontSize: 12,
     fontWeight: '900',
+    lineHeight: 16,
   },
   resourceTaskTitleSelected: {
     color: theme.colors.white,
@@ -5629,6 +6703,76 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '800',
     lineHeight: 17,
+  },
+  resourceSectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+    marginBottom: 10,
+  },
+  resourceMiniButton: {
+    minHeight: 32,
+    borderRadius: 16,
+    backgroundColor: theme.colors.primarySoft,
+    borderWidth: 1,
+    borderColor: theme.colors.inputBorder,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+  },
+  resourceMiniButtonText: {
+    color: theme.colors.primaryDark,
+    fontSize: 11,
+    fontWeight: '900',
+    marginLeft: 5,
+  },
+  resourceSuggestionList: {
+    gap: 10,
+  },
+  resourceSuggestionCard: {
+    borderRadius: 20,
+    backgroundColor: theme.colors.card,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    padding: 12,
+  },
+  resourceSuggestionMetaRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginBottom: 7,
+  },
+  resourceSourcePill: {
+    overflow: 'hidden',
+    borderRadius: 999,
+    backgroundColor: theme.colors.primarySoft,
+    borderWidth: 1,
+    borderColor: theme.colors.inputBorder,
+    color: theme.colors.primaryDark,
+    fontSize: 10,
+    fontWeight: '900',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  resourceCategoryPill: {
+    overflow: 'hidden',
+    borderRadius: 999,
+    backgroundColor: theme.colors.input,
+    borderWidth: 1,
+    borderColor: theme.colors.inputBorder,
+    color: theme.colors.textSoft,
+    fontSize: 10,
+    fontWeight: '900',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  resourceReasonText: {
+    marginTop: 7,
+    color: theme.colors.primaryDark,
+    fontSize: 11,
+    fontWeight: '800',
+    lineHeight: 16,
   },
   resourceActionGrid: {
     marginTop: 16,
@@ -5814,6 +6958,16 @@ const styles = StyleSheet.create({
     color: theme.colors.primaryDark,
     fontSize: 13,
     fontWeight: '900',
+  },
+  recentHeaderActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  clearRecentText: {
+    color: theme.colors.danger,
+    fontSize: 12,
+    fontWeight: '800',
   },
   seeAllText: {
     color: theme.colors.primary,

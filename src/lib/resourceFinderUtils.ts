@@ -1,9 +1,23 @@
 import { Task } from '../types/task';
+import { ResourceSourceType } from './resourceFinderStorage';
 
 type ResourceFinderTask = Pick<
   Task,
-  'title' | 'description'
+  'id' | 'title' | 'description' | 'plannerType' | 'location'
 >;
+
+export type SmartResourceSuggestion = {
+  id: string;
+  title: string;
+  description: string;
+  category: string;
+  reason: string;
+  url: string;
+  sourceType: ResourceSourceType;
+  taskId: string;
+  taskTitle: string;
+  taskTypeSnapshot: Task['plannerType'];
+};
 
 const STOP_WORDS = new Set([
   'a',
@@ -180,4 +194,171 @@ export function buildResourceSearchQuery(
 
 export function buildGoogleSearchUrl(query: string): string {
   return `https://www.google.com/search?q=${encodeURIComponent(query)}`;
+}
+
+export function buildYouTubeSearchUrl(query: string): string {
+  return `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`;
+}
+
+export function buildGoogleScholarUrl(query: string): string {
+  return `https://scholar.google.com/scholar?q=${encodeURIComponent(query)}`;
+}
+
+export function buildGoogleMapsUrl(query: string): string {
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`;
+}
+
+function includesKeyword(text: string, keywords: string[]) {
+  return keywords.some((keyword) => text.includes(keyword));
+}
+
+function isProgrammingRelated(text: string) {
+  return includesKeyword(text, [
+    'api',
+    'app',
+    'bug',
+    'code',
+    'coding',
+    'database',
+    'expo',
+    'github',
+    'javascript',
+    'program',
+    'react',
+    'software',
+    'typescript',
+  ]);
+}
+
+function isStudyRelated(text: string) {
+  return includesKeyword(text, [
+    'assignment',
+    'exam',
+    'homework',
+    'lab',
+    'lecture',
+    'paper',
+    'proposal',
+    'research',
+    'revision',
+    'study',
+  ]);
+}
+
+function getCategory(task: ResourceFinderTask, text: string) {
+  if (task.plannerType === 'meeting') return 'Preparation';
+  if (task.plannerType === 'date') return 'Plan Checklist';
+  if (isProgrammingRelated(text)) return 'Coding';
+  if (isStudyRelated(text)) return 'Study';
+  return 'Productivity';
+}
+
+function makeSuggestion(
+  task: ResourceFinderTask,
+  suffix: string,
+  input: Omit<SmartResourceSuggestion, 'id' | 'taskId' | 'taskTitle' | 'taskTypeSnapshot'>
+): SmartResourceSuggestion {
+  return {
+    id: `${task.id}-${suffix}`,
+    taskId: task.id,
+    taskTitle: task.title,
+    taskTypeSnapshot: task.plannerType,
+    ...input,
+  };
+}
+
+export function generateSmartResourceSuggestions(
+  task: ResourceFinderTask
+): SmartResourceSuggestion[] {
+  const query = buildResourceSearchQuery(task) || task.title;
+  const normalizedText = `${task.title} ${task.description || ''} ${
+    task.location || ''
+  }`.toLowerCase();
+  const category = getCategory(task, normalizedText);
+  const suggestions: SmartResourceSuggestion[] = [
+    makeSuggestion(task, 'search', {
+      title: `${task.title} search pack`,
+      description: `Search the web for guides, examples, and references related to "${task.title}".`,
+      category,
+      reason: 'Milo starts broad so you can quickly spot the most useful source.',
+      url: buildGoogleSearchUrl(query),
+      sourceType: 'Search',
+    }),
+    makeSuggestion(task, 'youtube', {
+      title: 'YouTube walkthroughs',
+      description: 'Find visual explanations or quick tutorials for this planner item.',
+      category: task.plannerType === 'meeting' ? 'Preparation' : category,
+      reason: 'Videos can turn a fuzzy next step into something easier to start.',
+      url: buildYouTubeSearchUrl(query),
+      sourceType: 'YouTube',
+    }),
+    makeSuggestion(task, 'checklist', {
+      title:
+        task.plannerType === 'meeting'
+          ? 'Meeting prep checklist'
+          : task.plannerType === 'date'
+          ? 'Date plan checklist'
+          : 'Task prep checklist',
+      description:
+        task.plannerType === 'meeting'
+          ? 'Agenda, notes, questions, link, and follow-up reminders.'
+          : task.plannerType === 'date'
+          ? 'Place, travel time, booking, gift or items, and final reminder.'
+          : 'Break the work into materials, first step, focus block, review, and finish.',
+      category:
+        task.plannerType === 'meeting'
+          ? 'Agenda'
+          : task.plannerType === 'date'
+          ? 'Plan Checklist'
+          : 'Checklist',
+      reason: 'Milo likes checklists because they lower the starting friction.',
+      url: buildGoogleSearchUrl(`${query} checklist template`),
+      sourceType: 'Checklist',
+    }),
+  ];
+
+  if (isStudyRelated(normalizedText)) {
+    suggestions.push(
+      makeSuggestion(task, 'scholar', {
+        title: 'Google Scholar references',
+        description: 'Look for papers, citations, and academic background.',
+        category: 'Research',
+        reason: 'This looks study-related, so scholarly references may help.',
+        url: buildGoogleScholarUrl(query),
+        sourceType: 'Scholar',
+      })
+    );
+  }
+
+  if (isProgrammingRelated(normalizedText)) {
+    suggestions.push(
+      makeSuggestion(task, 'docs', {
+        title: 'Official docs search',
+        description: 'Search official docs and examples before using random snippets.',
+        category: 'Coding',
+        reason: 'This looks technical, so Milo puts documentation near the top.',
+        url: buildGoogleSearchUrl(`${query} official documentation`),
+        sourceType: 'Docs',
+      })
+    );
+  }
+
+  if (task.plannerType === 'meeting' || task.plannerType === 'date') {
+    const placeQuery = task.location?.trim() || task.title;
+
+    suggestions.push(
+      makeSuggestion(task, 'maps', {
+        title: task.location ? 'Maps and route prep' : 'Venue ideas and maps',
+        description: task.location
+          ? `Open map search for ${task.location}.`
+          : 'Search map results for a suitable place or venue.',
+        category: task.plannerType === 'date' ? 'Travel/Maps' : 'Location',
+        reason: 'For meetings and dates, travel context matters as much as the reminder.',
+        url: buildGoogleMapsUrl(placeQuery),
+        sourceType: 'Map',
+      })
+    );
+  }
+
+  return suggestions.slice(0, 5);
 }

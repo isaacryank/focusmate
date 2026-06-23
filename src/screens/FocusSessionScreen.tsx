@@ -1500,6 +1500,11 @@ export default function FocusSessionScreen() {
       const roundedDurationMinutes = Math.max(1, Math.round(durationMinutes));
       const sessionEndedAt = Date.now();
       const selectedTaskId = selectedFocusTaskIdRef.current;
+      const selectedTask = selectedTaskId
+        ? tasks.find((task) => task.id === selectedTaskId)
+        : null;
+      const taskTypeSnapshot =
+        selectedTask?.plannerType ?? 'focus_without_task';
       const historyKey = `focus-${sessionStartedAt}-${
         selectedTaskId || 'no-task'
       }-${status}`;
@@ -1509,7 +1514,7 @@ export default function FocusSessionScreen() {
       recordedFocusHistoryKeysRef.current.add(historyKey);
 
       const selectedTaskTitle =
-        selectedFocusTaskTitleRef.current?.trim() || 'Focus session';
+        selectedFocusTaskTitleRef.current?.trim() || 'Focus without task';
       const presetName = getPresetDisplayName(
         selectedPresetRef.current,
         savedPresets
@@ -1530,6 +1535,7 @@ export default function FocusSessionScreen() {
         selectedTaskTitle,
         ...(selectedTaskId ? { selectedTaskId, taskId: selectedTaskId } : {}),
         taskTitle: selectedTaskTitle,
+        taskTypeSnapshot,
         focusQuality: sessionWasDistracted ? 'distracted' : 'clean',
         presetName,
         status,
@@ -1540,6 +1546,7 @@ export default function FocusSessionScreen() {
         id: session.id,
         taskId: selectedTaskId,
         taskTitle: selectedTaskTitle,
+        taskTypeSnapshot,
         startedAt: session.startedAt,
         endedAt: session.endedAt,
         durationMinutes: session.durationMinutes,
@@ -1550,7 +1557,7 @@ export default function FocusSessionScreen() {
         createdAt: session.createdAt,
       });
     },
-    [addFocusSession, savedPresets]
+    [addFocusSession, savedPresets, tasks]
   );
 
   const appendSessionBlockSummary = useCallback(

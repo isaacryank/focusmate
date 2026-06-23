@@ -87,6 +87,7 @@ import type { RootStackParamList } from '../types/navigation';
 import type { Task } from '../types/task';
 
 import MiloMoodImage from '../components/milo/MiloMoodImage';
+import FocusMateConfirmModal from '../components/ui/FocusMateConfirmModal';
 
 type IconName = React.ComponentProps<typeof Ionicons>['name'];
 type MiloTalkRole = 'user' | 'milo';
@@ -1505,6 +1506,13 @@ export default function MiloChatScreen() {
   const [chatMessages, setChatMessages] = useState<MiloTalkMessage[]>(() =>
     createInitialMiloTalkMessages()
   );
+  const [mapsPrompt, setMapsPrompt] = useState<{ location: string } | null>(
+    null
+  );
+  const [mapsError, setMapsError] = useState<{
+    title: string;
+    message: string;
+  } | null>(null);
   const miloAiFocusStats = useMemo(
     () => buildTodayMiloAiFocusStats(focusSessions),
     [focusSessions]
@@ -2050,7 +2058,12 @@ export default function MiloChatScreen() {
       const location = action.location || actionTask?.location?.trim();
 
       if (location) {
-        await openLocationInMaps(location);
+        setMapsPrompt({ location });
+      } else {
+        setMapsError({
+          title: 'Location not ready',
+          message: 'Milo does not see a saved place for this item yet.',
+        });
       }
 
       return;
@@ -2065,6 +2078,28 @@ export default function MiloChatScreen() {
       if (meetingUrl) {
         await openMeetingLink(meetingUrl);
       }
+    }
+  };
+
+  const handleConfirmOpenMaps = async () => {
+    const location = mapsPrompt?.location;
+    setMapsPrompt(null);
+
+    if (!location) {
+      setMapsError({
+        title: 'Location not ready',
+        message: 'Milo does not see a saved place for this item yet.',
+      });
+      return;
+    }
+
+    const result = await openLocationInMaps(location);
+
+    if (!result.ok) {
+      setMapsError({
+        title: 'Maps could not open',
+        message: result.reason,
+      });
     }
   };
 
@@ -3830,6 +3865,29 @@ export default function MiloChatScreen() {
           </View>
         </View>
       </Modal>
+
+      <FocusMateConfirmModal
+        visible={Boolean(mapsPrompt)}
+        title="Open location?"
+        message="Milo will open this place in Maps. You can come back to FocusMate anytime."
+        primaryLabel="Open Maps"
+        secondaryLabel="Cancel"
+        icon="navigate-outline"
+        onClose={() => setMapsPrompt(null)}
+        onPrimary={() => void handleConfirmOpenMaps()}
+      />
+
+      <FocusMateConfirmModal
+        visible={Boolean(mapsError)}
+        title={mapsError?.title || 'Maps not ready'}
+        message={mapsError?.message || 'Milo could not open that location right now.'}
+        primaryLabel="OK"
+        secondaryLabel="Close"
+        icon="location-outline"
+        tone="warning"
+        onClose={() => setMapsError(null)}
+        onPrimary={() => setMapsError(null)}
+      />
     </KeyboardAvoidingView>
   );
 }

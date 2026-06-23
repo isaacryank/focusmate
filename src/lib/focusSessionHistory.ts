@@ -1,7 +1,13 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { getSupabaseClient, isSupabaseConfigured } from './supabase';
 
 export type FocusSessionStatus = 'completed' | 'stopped' | 'skipped';
 export type FocusSessionQuality = 'clean' | 'distracted';
+export type FocusSessionTaskType =
+  | 'task'
+  | 'meeting'
+  | 'date'
+  | 'focus_without_task';
 
 export type FocusSessionHistoryItem = {
   id: string;
@@ -15,6 +21,7 @@ export type FocusSessionHistoryItem = {
   localTaskId?: string | null;
   taskTitle: string | null;
   taskId?: string;
+  taskTypeSnapshot?: FocusSessionTaskType | null;
   focusQuality: FocusSessionQuality;
   presetName: string;
   status: FocusSessionStatus;
@@ -22,6 +29,27 @@ export type FocusSessionHistoryItem = {
 };
 
 export type FocusSessionRecord = FocusSessionHistoryItem;
+
+type SupabaseFocusSessionRow = {
+  id: string;
+  user_id: string;
+  local_id: string | null;
+  task_id: string | null;
+  task_local_id: string | null;
+  task_title_snapshot: string | null;
+  task_type_snapshot: string | null;
+  started_at: string | null;
+  ended_at: string | null;
+  duration_minutes: number | null;
+  focus_minutes: number | null;
+  break_minutes: number | null;
+  preset: string | null;
+  status: string | null;
+  quality: string | null;
+  score: number | null;
+  created_at: string | null;
+  updated_at: string | null;
+};
 
 export const FOCUS_SESSION_HISTORY_KEY = '@focusmate/focusSessionHistory/v1';
 const MAX_FOCUS_SESSION_HISTORY_RECORDS = 100;
@@ -55,6 +83,15 @@ function isFocusSessionStatus(value: unknown): value is FocusSessionStatus {
 
 function isFocusSessionQuality(value: unknown): value is FocusSessionQuality {
   return value === 'clean' || value === 'distracted';
+}
+
+function isFocusSessionTaskType(value: unknown): value is FocusSessionTaskType {
+  return (
+    value === 'task' ||
+    value === 'meeting' ||
+    value === 'date' ||
+    value === 'focus_without_task'
+  );
 }
 
 function getCleanString(value: unknown) {
@@ -118,6 +155,9 @@ function normalizeFocusSessionHistoryItem(
     getNumber(value.focusScore) !== undefined
       ? Math.round(Math.min(100, Math.max(0, getNumber(value.focusScore)!)))
       : undefined;
+  const taskTypeSnapshot = isFocusSessionTaskType(value.taskTypeSnapshot)
+    ? value.taskTypeSnapshot
+    : null;
   const id =
     getCleanString(value.id) ||
     `${startedAt || date}:${status}:${durationMinutes}:${selectedTaskId}`;
@@ -133,11 +173,140 @@ function normalizeFocusSessionHistoryItem(
     ...(selectedTaskId ? { selectedTaskId, taskId: selectedTaskId } : {}),
     ...(localTaskId ? { localTaskId } : {}),
     taskTitle: selectedTaskTitle,
+    taskTypeSnapshot,
     focusQuality,
     presetName,
     status,
     ...(focusScore !== undefined ? { focusScore } : {}),
   };
+}
+
+function focusSessionToSupabaseRow(
+  session: FocusSessionHistoryItem,
+  userId: string
+) {
+  const taskLocalId =
+    session.taskId || session.selectedTaskId || session.localTaskId || null;
+  const taskTypeSnapshot =
+    session.taskTypeSnapshot || (taskLocalId ? null : 'focus_without_task');
+
+  return {
+    user_id: userId,
+    local_id: session.id,
+    task_id: null,
+    task_local_id: taskLocalId,
+    task_title_snapshot:
+      session.taskTitle ||
+      session.selectedTaskTitle ||
+      (taskTypeSnapshot === 'focus_without_task'
+        ? 'Focus without task'
+        : 'Focus session'),
+    task_type_snapshot: taskTypeSnapshot,
+    started_at: session.startedAt,
+    ended_at: session.endedAt || session.date,
+    duration_minutes: session.durationMinutes,
+    focus_minutes: session.durationMinutes,
+    break_minutes: null,
+    preset: session.presetName,
+    status: session.status,
+    quality: session.focusQuality,
+    score:
+      typeof session.focusScore === 'number' && Number.isFinite(session.focusScore)
+        ? session.focusScore
+        : null,
+  };
+}
+
+function supabaseRowToFocusSession(
+  row: SupabaseFocusSessionRow
+): FocusSessionHistoryItem | null {
+  const endedAt = getDateText(row.ended_at) || getDateText(row.created_at);
+  const startedAt = getDateText(row.started_at) || endedAt;
+  const durationMinutes = Math.round(row.duration_minutes || row.focus_minutes || 0);
+
+  if (!endedAt || durationMinutes <= 0) {
+    return null;
+  }
+
+  const status = isFocusSessionStatus(row.status) ? row.status : 'completed';
+  const focusQuality = isFocusSessionQuality(row.quality) ? row.quality : 'clean';
+  const taskTypeSnapshot = isFocusSessionTaskType(row.task_type_snapshot)
+    ? row.task_type_snapshot
+    : null;
+  const taskTitle = row.task_title_snapshot?.trim() || null;
+  const taskId = row.task_local_id?.trim() || row.task_id?.trim() || undefined;
+  const focusScore =
+    typeof row.score === 'number' && Number.isFinite(row.score)
+      ? Math.round(Math.min(100, Math.max(0, row.score)))
+      : undefined;
+
+  return {
+    id: row.local_id || row.id,
+    date: endedAt,
+    startedAt: startedAt || endedAt,
+    endedAt,
+    createdAt: row.created_at || endedAt,
+    durationMinutes,
+    selectedTaskTitle: taskTitle,
+    ...(taskId ? { selectedTaskId: taskId, taskId } : {}),
+    taskTitle,
+    taskTypeSnapshot,
+    focusQuality,
+    presetName: row.preset?.trim() || 'Focus',
+    status,
+    ...(focusScore !== undefined ? { focusScore } : {}),
+  };
+}
+
+async function loadSupabaseFocusSessions(userId?: string | null) {
+  if (!userId || !isSupabaseConfigured) {
+    return [];
+  }
+
+  try {
+    const supabase = getSupabaseClient();
+    const { data, error } = await supabase
+      .from('focus_sessions')
+      .select('*')
+      .eq('user_id', userId)
+      .order('ended_at', { ascending: false })
+      .limit(500);
+
+    if (error) {
+      console.warn('Failed to fetch Supabase focus sessions:', error);
+      return [];
+    }
+
+    return (data ?? [])
+      .map((row) => supabaseRowToFocusSession(row as SupabaseFocusSessionRow))
+      .filter((session): session is FocusSessionHistoryItem => Boolean(session));
+  } catch (error) {
+    console.warn('Failed to fetch Supabase focus sessions:', error);
+    return [];
+  }
+}
+
+async function syncFocusSessionsToSupabase(
+  sessions: FocusSessionHistoryItem[],
+  userId?: string | null
+) {
+  if (!userId || !isSupabaseConfigured || sessions.length === 0) {
+    return;
+  }
+
+  try {
+    const supabase = getSupabaseClient();
+    const rows = sessions.map((session) => focusSessionToSupabaseRow(session, userId));
+    const { error } = await supabase
+      .from('focus_sessions')
+      .upsert(rows, { onConflict: 'user_id,local_id' });
+
+    if (error) {
+      console.warn('Failed to upsert Supabase focus sessions:', error);
+    }
+  } catch (error) {
+    console.warn('Failed to upsert Supabase focus sessions:', error);
+  }
 }
 
 function parseStoredSessions(value: string | null) {
@@ -274,7 +443,9 @@ export async function getFocusSessionHistory(userId?: string | null) {
     const [primarySessions, ...migrationSources] = await Promise.all(
       keys.map(loadSessionsForKey)
     );
+    const remoteSessions = await loadSupabaseFocusSessions(userId);
     const mergedSessions = mergeFocusSessionHistory([
+      ...remoteSessions,
       ...primarySessions,
       ...migrationSources.flat(),
     ]);
@@ -284,6 +455,11 @@ export async function getFocusSessionHistory(userId?: string | null) {
       console.log(
         'Migrated focus session count:',
         mergedSessions.length - primarySessions.length
+      );
+    } else if (remoteSessions.length > 0) {
+      await AsyncStorage.setItem(
+        getFocusSessionHistoryStorageKey(userId),
+        JSON.stringify(mergedSessions.slice(0, MAX_FOCUS_SESSION_HISTORY_RECORDS))
       );
     }
 
@@ -308,6 +484,8 @@ export async function saveFocusSessionHistory(
     getFocusSessionHistoryStorageKey(userId),
     JSON.stringify(nextSessions)
   );
+
+  await syncFocusSessionsToSupabase(nextSessions, userId);
 
   console.log('Stored focus session count:', nextSessions.length);
   return nextSessions;

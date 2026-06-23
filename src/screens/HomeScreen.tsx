@@ -32,6 +32,12 @@ import {
   MiloTaskSituation,
   parseMiloTaskDateTime,
 } from '../lib/miloSituationIntelligence';
+import {
+  filterTasksByPlannerType,
+  sortTasksByTiming,
+  type PlannerTimingSort,
+  type PlannerTypeFilter,
+} from '../lib/plannerFilters';
 import { getTaskUrgency, TaskUrgency } from '../lib/taskUrgency';
 import { useAuth } from '../lib/AuthContext';
 import { useTasks } from '../lib/TaskContext';
@@ -45,6 +51,8 @@ import {
 } from '../constants/header';
 
 import EmptyState from '../components/ui/EmptyState';
+import FocusMateConfirmModal from '../components/ui/FocusMateConfirmModal';
+import PlannerFilterSortModal from '../components/ui/PlannerFilterSortModal';
 import ScreenContainer from '../components/ui/ScreenContainer';
 
 type HomeItem = {
@@ -539,6 +547,18 @@ export default function HomeScreen() {
   const [meetingLinksByTaskId, setMeetingLinksByTaskId] = useState<
     Record<string, OnlineMeetingLink>
   >({});
+  const [isMiloFilterVisible, setIsMiloFilterVisible] = useState(false);
+  const [miloTypeFilter, setMiloTypeFilter] =
+    useState<PlannerTypeFilter>('all');
+  const [miloSortMode, setMiloSortMode] =
+    useState<PlannerTimingSort>('overdue');
+  const [mapsPrompt, setMapsPrompt] = useState<{ location: string } | null>(
+    null
+  );
+  const [mapsError, setMapsError] = useState<{
+    title: string;
+    message: string;
+  } | null>(null);
   const compactWidth = width < 380;
 
   useFocusEffect(
@@ -579,7 +599,6 @@ export default function HomeScreen() {
     const now = new Date();
     const summary = getHomeMiloSummary(tasks, now);
     const attentionItems = getMiloRecommendedTasks(tasks, now)
-      .slice(0, 4)
       .map((task) => {
         const urgency = getTaskUrgency(task, now);
         const situation = getMiloSituationForTask(task, now);
@@ -597,6 +616,26 @@ export default function HomeScreen() {
       attentionItems,
     };
   }, [tasks]);
+
+  const visibleAttentionItems = useMemo(() => {
+    const itemsByTaskId = new Map(
+      homeInsights.attentionItems.map((item) => [item.task.id, item])
+    );
+    const filteredTasks = filterTasksByPlannerType(
+      homeInsights.attentionItems.map((item) => item.task),
+      miloTypeFilter
+    );
+    const sortedTasks = sortTasksByTiming(
+      filteredTasks,
+      miloSortMode,
+      new Date()
+    );
+
+    return sortedTasks
+      .slice(0, 4)
+      .map((task) => itemsByTaskId.get(task.id))
+      .filter((item): item is HomeItem => Boolean(item));
+  }, [homeInsights.attentionItems, miloSortMode, miloTypeFilter]);
 
   const displayName = userName?.trim() || 'Isaac';
   const heroMiloSize = Math.min(compactWidth ? 170 : 196, width * 0.5);
@@ -647,24 +686,37 @@ export default function HomeScreen() {
     const trimmedLocation = location?.trim();
 
     if (!trimmedLocation) {
+      setMapsError({
+        title: 'Location not ready',
+        message: 'Milo does not see a saved place for this item yet.',
+      });
       return;
     }
 
-    Alert.alert(
-      'Open in Google Maps?',
-      'FocusMate will open this location outside the app.',
-      [
-        {
-          text: 'Cancel',
-          style: 'cancel',
-        },
-        {
-          text: 'Open Maps',
-          onPress: () => void openLocationInMaps(trimmedLocation),
-        },
-      ]
-    );
+    setMapsPrompt({ location: trimmedLocation });
   }, []);
+
+  const handleConfirmOpenMaps = useCallback(async () => {
+    const location = mapsPrompt?.location;
+    setMapsPrompt(null);
+
+    if (!location) {
+      setMapsError({
+        title: 'Location not ready',
+        message: 'Milo does not see a saved place for this item yet.',
+      });
+      return;
+    }
+
+    const result = await openLocationInMaps(location);
+
+    if (!result.ok) {
+      setMapsError({
+        title: 'Maps could not open',
+        message: result.reason,
+      });
+    }
+  }, [mapsPrompt?.location]);
 
   return (
     <ScreenContainer topPadding={mainHeader.topPadding} bottomPadding={132}>
@@ -894,21 +946,38 @@ export default function HomeScreen() {
             </View>
           </View>
           {homeInsights.attentionItems.length > 0 ? (
-            <TouchableOpacity
-              activeOpacity={0.75}
-              onPress={() => navigation.navigate('Tasks')}
-              accessibilityRole="button"
-              accessibilityLabel="View all planner items"
-              style={styles.viewAllPill}
-            >
-              <Text style={styles.viewAllText}>View All</Text>
-            </TouchableOpacity>
+            <View style={styles.actionHeaderButtons}>
+              <TouchableOpacity
+                activeOpacity={0.75}
+                onPress={() => setIsMiloFilterVisible(true)}
+                accessibilityRole="button"
+                accessibilityLabel="Filter Milo recommendations"
+                style={styles.filterPill}
+              >
+                <Ionicons
+                  name="options-outline"
+                  size={13}
+                  color={theme.colors.primaryDark}
+                />
+                <Text style={styles.viewAllText}>Filter</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                activeOpacity={0.75}
+                onPress={() => navigation.navigate('Tasks')}
+                accessibilityRole="button"
+                accessibilityLabel="View all planner items"
+                style={styles.viewAllPill}
+              >
+                <Text style={styles.viewAllText}>View All</Text>
+              </TouchableOpacity>
+            </View>
           ) : null}
         </View>
 
-        {homeInsights.attentionItems.length > 0 ? (
+        {visibleAttentionItems.length > 0 ? (
           <View style={styles.itemList}>
-            {homeInsights.attentionItems.map((item) => (
+            {visibleAttentionItems.map((item) => (
               <MiloTaskRow
                 key={item.task.id}
                 item={item}
@@ -919,6 +988,17 @@ export default function HomeScreen() {
               />
             ))}
           </View>
+        ) : homeInsights.attentionItems.length > 0 ? (
+          <EmptyState
+            imageSource={miloReactions.thinking}
+            title="Milo found nothing"
+            message="Milo found nothing for this filter."
+            actionLabel="Reset filter"
+            onActionPress={() => {
+              setMiloTypeFilter('all');
+              setMiloSortMode('overdue');
+            }}
+          />
         ) : (
           <EmptyState
             imageSource={miloReactions.happy}
@@ -929,6 +1009,39 @@ export default function HomeScreen() {
           />
         )}
       </View>
+
+      <PlannerFilterSortModal
+        visible={isMiloFilterVisible}
+        title="Milo list filters"
+        typeFilter={miloTypeFilter}
+        sortMode={miloSortMode}
+        onTypeFilterChange={setMiloTypeFilter}
+        onSortModeChange={setMiloSortMode}
+        onClose={() => setIsMiloFilterVisible(false)}
+      />
+
+      <FocusMateConfirmModal
+        visible={Boolean(mapsPrompt)}
+        title="Open location?"
+        message="Milo will open this place in Maps. You can come back to FocusMate anytime."
+        primaryLabel="Open Maps"
+        secondaryLabel="Cancel"
+        icon="navigate-outline"
+        onClose={() => setMapsPrompt(null)}
+        onPrimary={() => void handleConfirmOpenMaps()}
+      />
+
+      <FocusMateConfirmModal
+        visible={Boolean(mapsError)}
+        title={mapsError?.title || 'Maps not ready'}
+        message={mapsError?.message || 'Milo could not open that location right now.'}
+        primaryLabel="OK"
+        secondaryLabel="Close"
+        icon="location-outline"
+        tone="warning"
+        onClose={() => setMapsError(null)}
+        onPrimary={() => setMapsError(null)}
+      />
     </ScreenContainer>
   );
 }
@@ -1387,6 +1500,32 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 7,
     marginLeft: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    shadowColor: theme.colors.shadow,
+    shadowOffset: {
+      width: 0,
+      height: 4,
+    },
+    shadowOpacity: 0.09,
+    shadowRadius: 9,
+    elevation: 3,
+  },
+  actionHeaderButtons: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginLeft: 8,
+  },
+  filterPill: {
+    minHeight: 32,
+    borderRadius: theme.radius.pill,
+    backgroundColor: theme.colors.card,
+    borderWidth: 1,
+    borderColor: theme.colors.inputBorder,
+    borderTopColor: '#FDF7E978',
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    marginRight: 7,
     flexDirection: 'row',
     alignItems: 'center',
     shadowColor: theme.colors.shadow,

@@ -66,6 +66,13 @@ function createHistoryItem(
   );
   const taskId = sessionInput.taskId?.trim() || undefined;
   const taskTitle = sessionInput.taskTitle?.trim() || null;
+  const taskTypeSnapshot =
+    sessionInput.taskTypeSnapshot === 'task' ||
+    sessionInput.taskTypeSnapshot === 'meeting' ||
+    sessionInput.taskTypeSnapshot === 'date' ||
+    sessionInput.taskTypeSnapshot === 'focus_without_task'
+      ? sessionInput.taskTypeSnapshot
+      : null;
   const id =
     sessionInput.id ||
     `${startedAt}:${status}:${durationMinutes}:${taskId || 'no-task'}`;
@@ -80,6 +87,7 @@ function createHistoryItem(
     selectedTaskTitle: taskTitle,
     ...(taskId ? { selectedTaskId: taskId, taskId } : {}),
     taskTitle,
+    taskTypeSnapshot,
     focusQuality: sessionInput.focusQuality ?? 'clean',
     presetName: sessionInput.preset?.trim() || 'Focus',
     status,

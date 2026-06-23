@@ -28,6 +28,7 @@ import {
 } from '../lib/meetingLinkStorage';
 import type { OnlineMeetingLink } from '../lib/meetingLinkStorage';
 import { openMeetingLink } from '../lib/meetingLinkUtils';
+import FocusMateConfirmModal from '../components/ui/FocusMateConfirmModal';
 
 const miloFocusedImage = require('../../assets/mascot/milo_focused.png');
 const miloWavingImage = require('../../assets/mascot/milo_waving.png');
@@ -535,6 +536,13 @@ export default function TasksScreen() {
   const [meetingLinksByTaskId, setMeetingLinksByTaskId] = useState<
     Record<string, OnlineMeetingLink>
   >({});
+  const [mapsPrompt, setMapsPrompt] = useState<{ location: string } | null>(
+    null
+  );
+  const [mapsError, setMapsError] = useState<{
+    title: string;
+    message: string;
+  } | null>(null);
 
   const todayDate = getTodayDate();
 
@@ -677,23 +685,36 @@ export default function TasksScreen() {
     const trimmedLocation = location?.trim();
 
     if (!trimmedLocation) {
+      setMapsError({
+        title: 'Location not ready',
+        message: 'Milo does not see a saved place for this item yet.',
+      });
       return;
     }
 
-    Alert.alert(
-      'Open in Google Maps?',
-      'FocusMate will open this location outside the app.',
-      [
-        {
-          text: 'Cancel',
-          style: 'cancel',
-        },
-        {
-          text: 'Open Maps',
-          onPress: () => void openLocationInMaps(trimmedLocation),
-        },
-      ]
-    );
+    setMapsPrompt({ location: trimmedLocation });
+  };
+
+  const handleConfirmOpenMaps = async () => {
+    const location = mapsPrompt?.location;
+    setMapsPrompt(null);
+
+    if (!location) {
+      setMapsError({
+        title: 'Location not ready',
+        message: 'Milo does not see a saved place for this item yet.',
+      });
+      return;
+    }
+
+    const result = await openLocationInMaps(location);
+
+    if (!result.ok) {
+      setMapsError({
+        title: 'Maps could not open',
+        message: result.reason,
+      });
+    }
   };
 
   const hasActiveFilters = filter !== 'all' || Boolean(searchText.trim());
@@ -872,6 +893,28 @@ export default function TasksScreen() {
             </TouchableOpacity>
           </View>
         }
+      />
+      <FocusMateConfirmModal
+        visible={Boolean(mapsPrompt)}
+        title="Open location?"
+        message="Milo will open this place in Maps. You can come back to FocusMate anytime."
+        primaryLabel="Open Maps"
+        secondaryLabel="Cancel"
+        icon="navigate-outline"
+        onClose={() => setMapsPrompt(null)}
+        onPrimary={() => void handleConfirmOpenMaps()}
+      />
+
+      <FocusMateConfirmModal
+        visible={Boolean(mapsError)}
+        title={mapsError?.title || 'Maps not ready'}
+        message={mapsError?.message || 'Milo could not open that location right now.'}
+        primaryLabel="OK"
+        secondaryLabel="Close"
+        icon="location-outline"
+        tone="warning"
+        onClose={() => setMapsError(null)}
+        onPrimary={() => setMapsError(null)}
       />
     </View>
   );

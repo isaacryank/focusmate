@@ -45,6 +45,7 @@ import { isPhysicalLocationLikeValue } from '../lib/locationPickerUtils';
 
 import ScreenContainer from '../components/ui/ScreenContainer';
 import NoticeCard from '../components/ui/NoticeCard';
+import FocusMateConfirmModal from '../components/ui/FocusMateConfirmModal';
 import SmartLocationPickerModal from '../components/SmartLocationPickerModal';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'AddTask'>;
@@ -52,6 +53,13 @@ type Props = NativeStackScreenProps<RootStackParamList, 'AddTask'>;
 type PickerMode = 'date' | 'time' | null;
 type ScheduleSheet = 'duration' | 'location' | 'onlineMeeting' | 'reminder' | null;
 type ReminderUnit = 'minutes' | 'hours' | 'days';
+type SchedulePrompt =
+  | 'timeOnly'
+  | 'past'
+  | 'unscheduled'
+  | 'missingOptional'
+  | 'reminderDate'
+  | null;
 
 const MAX_RECENT_LOCATION_CHIPS = 3;
 
@@ -195,6 +203,38 @@ function formatScheduleDate(value: string) {
     year: 'numeric',
     weekday: 'short',
   });
+}
+
+function buildScheduledDateTime(dueDate: string, dueTime: string) {
+  if (!dueDate || !dueTime) {
+    return null;
+  }
+
+  const date = dateFromStorage(dueDate);
+  const time = timeFromStorage(dueTime);
+
+  date.setHours(time.getHours(), time.getMinutes(), 0, 0);
+  return date;
+}
+
+function getLocalDateKey(date: Date) {
+  const year = date.getFullYear();
+  const month = `${date.getMonth() + 1}`.padStart(2, '0');
+  const day = `${date.getDate()}`.padStart(2, '0');
+
+  return `${year}-${month}-${day}`;
+}
+
+function getDateOnlyScheduleState(dueDate: string, now = new Date()) {
+  if (!dueDate) {
+    return 'none';
+  }
+
+  const todayKey = getLocalDateKey(now);
+
+  if (dueDate < todayKey) return 'past';
+  if (dueDate === todayKey) return 'today';
+  return 'future';
 }
 
 function Header({ onBack }: { onBack: () => void }) {
@@ -648,12 +688,13 @@ export default function AddTaskScreen({ navigation }: Props) {
   const [reminder, setReminder] = useState<ReminderOption>('none');
   const [estimatedDurationMinutes, setEstimatedDurationMinutes] = useState<
     number | undefined
-  >(60);
+  >(undefined);
   const [overlapAccepted, setOverlapAccepted] = useState(false);
   const [acceptedConflictSignature, setAcceptedConflictSignature] = useState<
     string | null
   >(null);
   const [showOverlapConfirm, setShowOverlapConfirm] = useState(false);
+  const [schedulePrompt, setSchedulePrompt] = useState<SchedulePrompt>(null);
 
   const [pickerMode, setPickerMode] = useState<PickerMode>(null);
   const [scheduleSheet, setScheduleSheet] = useState<ScheduleSheet>(null);
@@ -873,6 +914,52 @@ export default function AddTaskScreen({ navigation }: Props) {
     });
   };
 
+  const hasNoScheduleDetails = () =>
+    !dueDate &&
+    !dueTime &&
+    estimatedDurationMinutes === undefined &&
+    !location.trim() &&
+    !onlineMeetingLink.trim() &&
+    reminder === 'none';
+
+  const hasMissingOptionalScheduleDetails = () =>
+    Boolean(dueDate) &&
+    !dueTime &&
+    (estimatedDurationMinutes === undefined ||
+      !location.trim() ||
+      !onlineMeetingLink.trim() ||
+      reminder === 'none');
+
+  const getBlockingSchedulePrompt = (): Exclude<
+    SchedulePrompt,
+    'unscheduled' | 'missingOptional' | null
+  > | null => {
+    if (dueTime && !dueDate) {
+      return 'timeOnly';
+    }
+
+    if (dueDate && !dueTime && getDateOnlyScheduleState(dueDate) === 'past') {
+      return 'past';
+    }
+
+    const scheduledDateTime = buildScheduledDateTime(dueDate, dueTime);
+
+    if (scheduledDateTime && scheduledDateTime.getTime() < Date.now()) {
+      return 'past';
+    }
+
+    if (reminder !== 'none' && (!dueDate || !dueTime)) {
+      return 'reminderDate';
+    }
+
+    return null;
+  };
+
+  const showSchedulePrompt = (prompt: Exclude<SchedulePrompt, null>) => {
+    setNotice(null);
+    setSchedulePrompt(prompt);
+  };
+
   const validateStepOne = () => {
     if (!title.trim()) {
       setNotice(null);
@@ -937,6 +1024,23 @@ export default function AddTaskScreen({ navigation }: Props) {
   };
 
   const handleScheduleCtaPress = () => {
+    const blockingPrompt = getBlockingSchedulePrompt();
+
+    if (blockingPrompt) {
+      showSchedulePrompt(blockingPrompt);
+      return;
+    }
+
+    if (hasNoScheduleDetails()) {
+      showSchedulePrompt('unscheduled');
+      return;
+    }
+
+    if (hasMissingOptionalScheduleDetails()) {
+      showSchedulePrompt('missingOptional');
+      return;
+    }
+
     if (!hasScheduleConflict || currentConflictAccepted) {
       handleNext();
       return;
@@ -1009,19 +1113,35 @@ export default function AddTaskScreen({ navigation }: Props) {
     }
   };
 
-  const handleSave = async () => {
+  const handleSave = async (allowSimpleSchedule = false) => {
     if (!validateStepOne()) {
       setStep(1);
       return;
     }
 
-    if (reminder !== 'none' && !dueDate) {
-      showNotice(
-        'warning',
-        'Date needed',
-        'Please choose a date before setting a reminder.'
-      );
+    const blockingPrompt = getBlockingSchedulePrompt();
+
+    if (blockingPrompt) {
       setStep(2);
+      showSchedulePrompt(blockingPrompt);
+      return;
+    }
+
+    if (!allowSimpleSchedule && hasNoScheduleDetails()) {
+      setStep(2);
+      showSchedulePrompt('unscheduled');
+      return;
+    }
+
+    if (!allowSimpleSchedule && hasMissingOptionalScheduleDetails()) {
+      setStep(2);
+      showSchedulePrompt('missingOptional');
+      return;
+    }
+
+    if (reminder !== 'none' && !dueDate) {
+      setStep(2);
+      showSchedulePrompt('reminderDate');
       return;
     }
 
@@ -1032,12 +1152,19 @@ export default function AddTaskScreen({ navigation }: Props) {
     let notificationId: string | undefined;
 
     if (reminder !== 'none') {
+      if (!dueTime) {
+        setIsSaving(false);
+        setStep(2);
+        showSchedulePrompt('reminderDate');
+        return;
+      }
+
       const reminderResult = await schedulePlannerReminder({
         taskId,
         title: title.trim(),
         plannerType,
         dueDate,
-        dueTime: dueTime || '9:00 AM',
+        dueTime,
         location,
         reminder,
         manualReminderMinutes,
@@ -1131,6 +1258,66 @@ export default function AddTaskScreen({ navigation }: Props) {
       : step === 2
       ? 'Choose when, where, and how you want to prepare.'
       : 'Check the details before saving your plan.';
+  const schedulePromptCopy = (() => {
+    if (schedulePrompt === 'timeOnly') {
+      return {
+        title: 'Date needed',
+        message:
+          'Milo needs a date for this time. Pick the day first, then the time will make sense.',
+        primaryLabel: 'OK',
+        secondaryLabel: 'Close',
+        icon: 'calendar-outline' as const,
+        tone: 'warning' as const,
+      };
+    }
+
+    if (schedulePrompt === 'past') {
+      return {
+        title: dueTime ? 'Time already passed' : 'Date already passed',
+        message:
+          'Milo cannot save a plan in the past. Choose today, a future date, or a future time.',
+        primaryLabel: 'OK',
+        secondaryLabel: 'Close',
+        icon: 'time-outline' as const,
+        tone: 'warning' as const,
+      };
+    }
+
+    if (schedulePrompt === 'reminderDate') {
+      return {
+        title: dueDate ? 'Time needed' : 'Date needed',
+        message: dueDate
+          ? 'Milo needs an exact time before setting a final reminder. Leave the reminder off for all-day plans, or choose a time.'
+          : 'Milo needs a date before setting a reminder. Pick the day first, then reminders will work properly.',
+        primaryLabel: 'OK',
+        secondaryLabel: 'Close',
+        icon: 'notifications-outline' as const,
+        tone: 'warning' as const,
+      };
+    }
+
+    if (schedulePrompt === 'missingOptional') {
+      return {
+        title: 'Use this simple schedule?',
+        message:
+          'This is valid as an all-day plan. Milo noticed optional details like duration, location, meeting link, or final reminder are still empty.',
+        primaryLabel: 'Continue',
+        secondaryLabel: 'Go back',
+        icon: 'calendar-outline' as const,
+        tone: 'primary' as const,
+      };
+    }
+
+    return {
+      title: 'Save as simple reminder?',
+      message:
+        'You have not added schedule details like date, time, duration, location, meeting link, or final reminder. Milo can still save this as a simple to-do reminder.',
+      primaryLabel: 'Save anyway',
+      secondaryLabel: 'Go back',
+      icon: 'sparkles-outline' as const,
+      tone: 'primary' as const,
+    };
+  })();
 
   return (
     <ScreenContainer
@@ -1366,7 +1553,11 @@ export default function AddTaskScreen({ navigation }: Props) {
               <ReviewSummaryRow
                 icon="calendar-outline"
                 label="Due"
-                value={[dueDate, dueTime].filter(Boolean).join(' ') || 'Not set'}
+                value={
+                  dueDate
+                    ? `${dueDate} ${dueTime || 'All day'}`
+                    : dueTime || 'Not set'
+                }
               />
               <ReviewSummaryRow icon="hourglass-outline" label="Duration" value={durationLabel} />
               <ReviewSummaryRow
@@ -1438,7 +1629,7 @@ export default function AddTaskScreen({ navigation }: Props) {
             <View style={styles.footerPrimary}>
               <PrimaryButton
                 title="Save with Milo"
-                onPress={handleSave}
+                onPress={() => void handleSave()}
                 loading={isSaving}
                 iconSide="left"
                 icon={
@@ -1464,6 +1655,38 @@ export default function AddTaskScreen({ navigation }: Props) {
           onChange={handlePickerChange}
         />
       ) : null}
+
+      <FocusMateConfirmModal
+        visible={Boolean(schedulePrompt)}
+        title={schedulePromptCopy.title}
+        message={schedulePromptCopy.message}
+        primaryLabel={schedulePromptCopy.primaryLabel}
+        secondaryLabel={schedulePromptCopy.secondaryLabel}
+        icon={schedulePromptCopy.icon}
+        tone={schedulePromptCopy.tone}
+        onClose={() => setSchedulePrompt(null)}
+        onPrimary={() => {
+          if (schedulePrompt === 'unscheduled') {
+            setSchedulePrompt(null);
+            void handleSave(true);
+            return;
+          }
+
+          if (schedulePrompt === 'missingOptional') {
+            setSchedulePrompt(null);
+            if (step === 3) {
+              void handleSave(true);
+              return;
+            }
+
+            handleNext();
+            return;
+          }
+
+          setSchedulePrompt(null);
+        }}
+        onSecondary={() => setSchedulePrompt(null)}
+      />
 
       <Modal
         visible={showOverlapConfirm}
