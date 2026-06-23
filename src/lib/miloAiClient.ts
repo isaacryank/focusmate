@@ -1,4 +1,8 @@
-import { supabase } from './supabase';
+import {
+  getSupabaseClient,
+  getSupabaseUnavailableMessage,
+  isSupabaseConfigured,
+} from './supabase';
 import { buildResourceSearchQuery } from './resourceFinderUtils';
 import type { OnlineMeetingLink } from './meetingLinkStorage';
 import type { Task } from '../types/task';
@@ -749,6 +753,13 @@ export async function askMiloAi({
   if (!prompt) {
     throw new Error('Milo AI message cannot be empty.');
   }
+
+  if (!isSupabaseConfigured) {
+    console.warn('Milo AI skipped:', getSupabaseUnavailableMessage());
+    throw new Error(getSupabaseUnavailableMessage());
+  }
+
+  const supabase = getSupabaseClient();
 
   // The mobile app calls Supabase only; OpenAI is reached securely by the Edge Function.
   const { data, error } = await supabase.functions.invoke<MiloAiResponse>(

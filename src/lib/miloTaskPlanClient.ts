@@ -1,4 +1,8 @@
-import { supabase } from './supabase';
+import {
+  getSupabaseClient,
+  getSupabaseUnavailableMessage,
+  isSupabaseConfigured,
+} from './supabase';
 import type { MiloAiSettings } from './miloAiSettings';
 import { incrementMiloAiCallsToday } from './miloAiSettings';
 import {
@@ -266,6 +270,11 @@ export async function generateMiloTaskSmartPlan({
   }
 
   try {
+    if (!isSupabaseConfigured) {
+      throw new Error(getSupabaseUnavailableMessage());
+    }
+
+    const supabase = getSupabaseClient();
     const compactTasks = [
       buildCompactTaskContext(task, hasMeetingLink),
       ...relatedTasks

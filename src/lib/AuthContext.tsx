@@ -9,7 +9,11 @@ import React, {
   useState,
 } from 'react';
 
-import { supabase } from './supabase';
+import {
+  getSupabaseClient,
+  getSupabaseUnavailableMessage,
+  isSupabaseConfigured,
+} from './supabase';
 
 const AUTH_STORAGE_KEY = '@focusmate/auth';
 
@@ -101,6 +105,11 @@ function getFallbackUserName(user: User) {
 }
 
 async function loadProfileDisplayName(user: User) {
+  if (!isSupabaseConfigured) {
+    return null;
+  }
+
+  const supabase = getSupabaseClient();
   const { data, error } = await supabase
     .from('profiles')
     .select('display_name')
@@ -136,6 +145,11 @@ function isMissingSessionError(error: unknown) {
 }
 
 async function upsertProfile(userId: string, name: string, email: string) {
+  if (!isSupabaseConfigured) {
+    return getSupabaseUnavailableMessage();
+  }
+
+  const supabase = getSupabaseClient();
   const displayName = normalizeDisplayName(name);
   const cleanEmail = email.trim().toLowerCase();
 
@@ -258,6 +272,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     const initializeAuth = async () => {
       try {
+        if (!isSupabaseConfigured) {
+          console.warn('[FocusMate] Supabase auth skipped: backend unavailable.');
+          await loadLegacyAuthFallback();
+          return;
+        }
+
+        const supabase = getSupabaseClient();
         const { data, error } = await supabase.auth.getSession();
 
         if (error) {
@@ -286,28 +307,36 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     };
 
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((event, nextSession) => {
-      if (!isSubscribed) {
-        return;
-      }
+    let subscription: { unsubscribe: () => void } | null = null;
 
-      if (nextSession) {
-        applySupabaseSession(nextSession);
-        return;
-      }
+    if (isSupabaseConfigured) {
+      const supabase = getSupabaseClient();
 
-      if (event === 'SIGNED_OUT') {
-        clearAuthState();
-      }
-    });
+      const {
+        data: { subscription: authSubscription },
+      } = supabase.auth.onAuthStateChange((event, nextSession) => {
+        if (!isSubscribed) {
+          return;
+        }
+
+        if (nextSession) {
+          applySupabaseSession(nextSession);
+          return;
+        }
+
+        if (event === 'SIGNED_OUT') {
+          clearAuthState();
+        }
+      });
+
+      subscription = authSubscription;
+    }
 
     initializeAuth();
 
     return () => {
       isSubscribed = false;
-      subscription.unsubscribe();
+      subscription?.unsubscribe();
     };
   }, [applySupabaseSession, clearAuthState, loadLegacyAuthFallback]);
 
@@ -332,6 +361,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     email: string,
     password: string
   ): Promise<AuthActionResult> => {
+    if (!isSupabaseConfigured) {
+      return {
+        success: false,
+        error: getSupabaseUnavailableMessage(),
+      };
+    }
+
     const cleanEmail = email.trim().toLowerCase();
 
     if (!cleanEmail || !password) {
@@ -341,6 +377,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       };
     }
 
+    const supabase = getSupabaseClient();
     const { data, error } = await supabase.auth.signInWithPassword({
       email: cleanEmail,
       password,
@@ -370,6 +407,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     email: string,
     password: string
   ): Promise<AuthActionResult> => {
+    if (!isSupabaseConfigured) {
+      return {
+        success: false,
+        error: getSupabaseUnavailableMessage(),
+      };
+    }
+
     const displayName = normalizeDisplayName(name);
     const cleanEmail = email.trim().toLowerCase();
 
@@ -380,6 +424,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       };
     }
 
+    const supabase = getSupabaseClient();
     const { data, error } = await supabase.auth.signUp({
       email: cleanEmail,
       password,
@@ -420,6 +465,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const signOut = async () => {
+    if (!isSupabaseConfigured) {
+      await clearAuthState();
+      return;
+    }
+
+    const supabase = getSupabaseClient();
     const { error } = await supabase.auth.signOut();
 
     if (error && !isMissingSessionError(error)) {

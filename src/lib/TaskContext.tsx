@@ -13,7 +13,7 @@ import {
 } from '../types/task';
 import { cancelPlannerReminder } from './notificationUtils';
 import { useAuth } from './AuthContext';
-import { supabase } from './supabase';
+import { getSupabaseClient, isSupabaseConfigured } from './supabase';
 
 const ANONYMOUS_TASKS_STORAGE_KEY = '@focusmate/tasks/anonymous';
 const TASK_CONTEXT_LOG_PREFIX = '[TaskContext]';
@@ -466,8 +466,9 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
         localTaskCount = 0;
       }
 
-      if (taskScope.userId) {
+      if (taskScope.userId && isSupabaseConfigured) {
         try {
+          const supabase = getSupabaseClient();
           const { data, error } = await supabase
             .from('tasks')
             .select('*')
@@ -539,11 +540,12 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
     task: StoredTask,
     scopedUserId: string | null
   ) => {
-    if (!scopedUserId || task.localOnly) {
+    if (!scopedUserId || task.localOnly || !isSupabaseConfigured) {
       return;
     }
 
     try {
+      const supabase = getSupabaseClient();
       const row = taskToSupabaseRow(task, scopedUserId);
       const { error } = await supabase
         .from('tasks')
@@ -561,11 +563,12 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
     localTaskId: string,
     scopedUserId: string | null
   ) => {
-    if (!scopedUserId) {
+    if (!scopedUserId || !isSupabaseConfigured) {
       return;
     }
 
     try {
+      const supabase = getSupabaseClient();
       const { error } = await supabase
         .from('tasks')
         .delete()

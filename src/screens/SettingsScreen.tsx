@@ -27,7 +27,11 @@ import { mainHeader } from '../constants/header';
 import { useAuth } from '../lib/AuthContext';
 import { useFocus } from '../lib/FocusContext';
 import { useTasks } from '../lib/TaskContext';
-import { supabase } from '../lib/supabase';
+import {
+  getSupabaseClient,
+  getSupabaseUnavailableMessage,
+  isSupabaseConfigured,
+} from '../lib/supabase';
 import {
   clearCurrentMiloChat,
   clearMiloChatSessions,
@@ -1086,6 +1090,18 @@ export default function SettingsScreen() {
       primaryLabel: 'Send',
       secondaryLabel: 'Cancel',
       onPrimaryPress: async () => {
+        if (!isSupabaseConfigured) {
+          showDialog({
+            title: 'Backend not configured',
+            message: getSupabaseUnavailableMessage(),
+            icon: 'alert-circle',
+            tone: 'info',
+            primaryLabel: 'Got it',
+          });
+          return;
+        }
+
+        const supabase = getSupabaseClient();
         const { error } = await supabase.auth.resetPasswordForEmail(accountEmail);
 
         if (error) {

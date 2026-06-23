@@ -21,7 +21,8 @@
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "package": "com.isaacr27.focusmate"
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -31,6 +32,11 @@
       "expo-font",
       "expo-video",
       "expo-asset"
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "ac5554d1-0b71-481c-af6b-7a031e7045dc"
+      }
+    }
   }
 }
